@@ -1,0 +1,169 @@
+# Implementation Plan: Minimal Verser2 Host and Node Guest Core
+
+## Phase 0: Track Setup and Baseline Review
+
+- [ ] Task: Create implementation branch and pull request
+    - [ ] Create a dedicated branch for `minimal_verser2_core_20260606`.
+    - [ ] Create a GitHub pull request with `gh` for review and phase checkpoints.
+- [ ] Task: Review project instructions and current scaffolds
+    - [ ] Review `AGENTS.md`, `conductor/index.md`, `conductor/workflow.md`, `conductor/product.md`, `conductor/tech-stack.md`, and `conductor/product-guidelines.md`.
+    - [ ] Review existing package entrypoints in `packages/verser-common`, `packages/verser2-host`, and `packages/verser2-guest-node`.
+    - [ ] Record that current exports are scaffold constants only and that implementation should expand entrypoints incrementally.
+- [ ] Task: Establish baseline validation
+    - [ ] Run `npm run build` to confirm the TypeScript baseline.
+    - [ ] Run `npm test` to confirm existing root smoke tests.
+    - [ ] Run `npm run lint` to confirm Biome baseline.
+- [ ] Task: Establish coverage measurement path
+    - [ ] Check whether the repo already has a coverage command or Node test coverage configuration.
+    - [ ] If coverage is missing, add the minimal npm-based coverage check needed to measure changed behavior without disrupting existing build/test/lint scripts.
+    - [ ] Document the selected coverage command in the active phase notes and use it in later validation tasks.
+- [ ] Task: Conductor - User Manual Verification 'Phase 0: Track Setup and Baseline Review' (Protocol in workflow.md)
+
+## Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations
+
+- [ ] Task: Review common-library reuse before implementation
+    - [ ] Inspect `@signicode/verser-common` for reusable exports and record that the phase starts from scaffold-only common code.
+    - [ ] Decide which protocol-neutral shapes belong in `@signicode/verser-common` before writing package-local implementations.
+- [ ] Task: Write failing tests for shared protocol foundations
+    - [ ] Add tests for guest/peer identifiers, routed domain registration metadata, request/response envelope shapes, lifecycle event names, and contextual error helpers.
+    - [ ] Add tests for self-signed certificate generation/setup helpers and minimal certificate verification behavior.
+    - [ ] Confirm the new tests fail for missing exports or behavior.
+- [ ] Task: Implement shared protocol foundations
+    - [ ] Add protocol-neutral request, response, routing, registration, lifecycle, timeout, stream, and error types in `@signicode/verser-common`.
+    - [ ] Add constants/helpers for HTTP/2 pseudo-header mapping where they are protocol-neutral enough to share.
+    - [ ] Add certificate setup and verification helpers that support the MVP self-signed development path and are extensible toward future CA validation.
+    - [ ] Export all shared foundations from `packages/verser-common/src/index.ts` without removing existing package-name exports.
+- [ ] Task: Validate Phase 1 narrowly
+    - [ ] Run `npm run build`.
+    - [ ] Run the focused test command covering shared foundations.
+    - [ ] Run `npm run lint` if shared code or tests changed formatting-sensitive areas.
+    - [ ] Record coverage status or why coverage cannot be measured precisely with the current Node test setup.
+    - [ ] Perform a phase-end deduplication check and record that reusable foundations live in `@signicode/verser-common`.
+- [ ] Task: Conductor - User Manual Verification 'Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations' (Protocol in workflow.md)
+
+## Phase 2: TLS HTTP/2 Host and Connection Registration
+
+- [ ] Task: Review common foundations before Host implementation
+    - [ ] Confirm Host uses shared identifiers, registration, lifecycle, certificate, and error helpers from `@signicode/verser-common`.
+    - [ ] Record any Host-specific behavior intentionally kept package-local.
+- [ ] Task: Write failing Host tests
+    - [ ] Add focused tests for starting and stopping a TLS HTTP/2 Host.
+    - [ ] Add tests for accepting Broker/Guest sessions over TLS HTTP/2.
+    - [ ] Add tests for registering connected peers/guests by explicit id and routed domain names.
+    - [ ] Add tests for advertising routed domain maps to connected client Brokers.
+    - [ ] Add tests for lifecycle events and duplicate/malformed registration errors.
+    - [ ] Confirm the tests fail for missing Host behavior.
+- [ ] Task: Implement minimal Host API
+    - [ ] Implement Host creation/start/close APIs in `@signicode/verser2-host`.
+    - [ ] Accept TLS HTTP/2 connections using Node platform APIs and the shared certificate setup/check behavior.
+    - [ ] Maintain a registry of connected peers/guests, target ids, and routed guest domains.
+    - [ ] Advertise routed domain map changes to connected client Brokers.
+    - [ ] Emit or expose lifecycle and error information with contextual ids, protocol details, and close reasons where available.
+    - [ ] Export the Host API from `packages/verser2-host/src/index.ts` while preserving existing exports.
+- [ ] Task: Validate Phase 2 narrowly
+    - [ ] Run `npm run build`.
+    - [ ] Run the focused Host tests.
+    - [ ] Run `npm run lint` if Host code or tests changed formatting-sensitive areas.
+    - [ ] Record coverage status and any limitations.
+    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [ ] Task: Conductor - User Manual Verification 'Phase 2: TLS HTTP/2 Host and Connection Registration' (Protocol in workflow.md)
+
+## Phase 3: Node Guest Server Attachment and Request Dispatch
+
+- [ ] Task: Review common foundations before Guest implementation
+    - [ ] Confirm Guest uses shared protocol, lifecycle, certificate, stream, and error helpers.
+    - [ ] Record Guest-specific Node HTTP adapter behavior that should remain in `@signicode/verser2-guest-node`.
+- [ ] Task: Write failing Node Guest tests
+    - [ ] Add tests for connecting outbound to the Host over TLS HTTP/2.
+    - [ ] Add tests for attaching a normal `node:http` server or request listener without calling `listen()`.
+    - [ ] Add tests for dispatching routed requests into the local HTTP/1 handler.
+    - [ ] Add tests preserving method, path, headers, request body, status code, response headers, and response body.
+    - [ ] Add tests for lifecycle events and local handler failure mapping.
+    - [ ] Confirm the tests fail for missing Guest behavior.
+- [ ] Task: Implement minimal Node Guest API
+    - [ ] Implement Guest connection, registration, and close APIs in `@signicode/verser2-guest-node`.
+    - [ ] Bridge inbound routed HTTP/2 streams from the Host to the attached local Node HTTP/1 handler/server.
+    - [ ] Preserve request and response HTTP semantics for the MVP path.
+    - [ ] Surface lifecycle and error information for connect, disconnect, request handling failures, and close.
+    - [ ] Export the Guest API from `packages/verser2-guest-node/src/index.ts` while preserving existing exports.
+- [ ] Task: Validate Phase 3 narrowly
+    - [ ] Run `npm run build`.
+    - [ ] Run focused Guest tests.
+    - [ ] Run `npm run lint` if Guest code or tests changed formatting-sensitive areas.
+    - [ ] Record coverage status and any limitations.
+    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [ ] Task: Conductor - User Manual Verification 'Phase 3: Node Guest Server Attachment and Request Dispatch' (Protocol in workflow.md)
+
+## Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency
+
+- [ ] Task: Review common foundations before Broker implementation
+    - [ ] Confirm Broker uses shared protocol envelopes, routed-domain metadata, lifecycle, stream, timeout, and error helpers.
+    - [ ] Record any Broker-specific behavior intentionally kept in `@signicode/verser2-guest-node`.
+- [ ] Task: Write failing Broker and routing tests
+    - [ ] Add tests for Broker connection and registration with the Host.
+    - [ ] Add tests for forwarding requests through the Host to a selected target guest.
+    - [ ] Add tests for receiving and applying Host-advertised routed domain maps.
+    - [ ] Add tests for missing guest, disconnected target, timeout, stream failure, protocol error, and local handler failure behavior.
+    - [ ] Add tests for streaming and flow-control behavior, including no buffering of entire request/response bodies, respecting backpressure, and proper stream closure.
+    - [ ] Add tests proving a single Broker HTTP/2 session uses separate HTTP/2 streams for multiple routed requests.
+    - [ ] Add tests for concurrent requests over one connection.
+    - [ ] Confirm the tests fail for missing Broker/routing behavior.
+- [ ] Task: Implement Broker request forwarding
+    - [ ] Implement a minimal Broker API in `@signicode/verser2-guest-node` for connecting to a Host and issuing requests to registered guests.
+    - [ ] Use one TLS HTTP/2 session per Broker connection and one HTTP/2 stream per routed request.
+    - [ ] Implement Host-side request forwarding from caller stream to target guest stream and response forwarding back to the caller.
+    - [ ] Apply Host-advertised routed domain maps in the Broker.
+    - [ ] Preserve flow control and streaming by forwarding body streams with Node `.pipe()` or equivalent backpressure-aware stream plumbing after headers are resolved.
+    - [ ] Implement actionable error mapping for missing guest, disconnect, timeout/stream, protocol, and local handler failure scenarios.
+- [ ] Task: Validate Phase 4 narrowly
+    - [ ] Run `npm run build`.
+    - [ ] Run focused Broker/routing/streaming/concurrency tests.
+    - [ ] Run `npm run lint` if Broker, Host, Guest, or tests changed formatting-sensitive areas.
+    - [ ] Record coverage status and any limitations.
+    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [ ] Task: Conductor - User Manual Verification 'Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency' (Protocol in workflow.md)
+
+## Phase 5: Node `http.Agent` Integration and Domain-Based Routing
+
+- [ ] Task: Review Node Agent requirements before implementation
+    - [ ] Confirm the minimal Agent-compatible subset needed for `http.request`-style routing through Verser2.
+    - [ ] Confirm domain-based routing uses Host-advertised routed domains instead of DNS for registered guest domains.
+- [ ] Task: Write failing Agent integration tests
+    - [ ] Add tests for creating an Agent from a connected Broker.
+    - [ ] Add tests for routing an Agent-originated request through the Broker/Host/Guest path.
+    - [ ] Add tests showing hostnames matching advertised guest domains are routed through Verser2 without external DNS resolution.
+    - [ ] Add tests documenting behavior for non-matching hostnames and unsupported advanced Agent features.
+    - [ ] Confirm the tests fail for missing Agent behavior.
+- [ ] Task: Implement minimal `http.Agent` exposure
+    - [ ] Implement an Agent-compatible integration in `@signicode/verser2-guest-node`.
+    - [ ] Route matching hostname requests through the Broker using the current advertised domain map.
+    - [ ] Preserve ordinary Node request and response behavior for the documented MVP subset.
+    - [ ] Document compatibility limits in the package exports/docs or README as appropriate.
+- [ ] Task: Validate Phase 5 narrowly
+    - [ ] Run `npm run build`.
+    - [ ] Run focused Agent integration tests.
+    - [ ] Run `npm run lint` if Agent code, tests, or docs changed formatting-sensitive areas.
+    - [ ] Record coverage status and any limitations.
+    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [ ] Task: Conductor - User Manual Verification 'Phase 5: Node `http.Agent` Integration and Domain-Based Routing' (Protocol in workflow.md)
+
+## Phase 6: End-to-End Validation, Documentation, and Final Review
+
+- [ ] Task: Write or update end-to-end tests and examples
+    - [ ] Add an end-to-end test covering Host start, Node Guest attachment, Broker request, routed domain advertisement, Agent routing, and response forwarding.
+    - [ ] Add or update docs/examples showing a normal `node:http` server that does not call `listen()`.
+    - [ ] Document TLS HTTP/2 setup, self-signed certificate generation/setup, minimal certificate checking, and HTTP/3 exclusion.
+    - [ ] Document streaming, concurrency, error behavior, and Agent MVP compatibility limits.
+- [ ] Task: Run full validation
+    - [ ] Run `npm run build`.
+    - [ ] Run `npm test`.
+    - [ ] Run `npm run lint`.
+    - [ ] Confirm no HTTP/3, non-Node guest, authentication, authorization, or public gateway behavior was introduced.
+    - [ ] Confirm 95% meaningful coverage for changed behavior or record why exact measurement is unavailable with the current test tooling.
+- [ ] Task: Final code and Conductor review
+    - [ ] Re-read `AGENTS.md` and relevant Conductor documentation before completion.
+    - [ ] Confirm implementation matches `spec.md` acceptance criteria.
+    - [ ] Review edge cases, lifecycle behavior, error paths, streaming, and concurrent requests.
+    - [ ] Confirm shared code was centralized in `@signicode/verser-common` where reuse emerged.
+    - [ ] Update `plan.md` with validation notes, deduplication results, and phase checkpoint commit SHAs.
+- [ ] Task: Conductor - User Manual Verification 'Phase 6: End-to-End Validation, Documentation, and Final Review' (Protocol in workflow.md)
