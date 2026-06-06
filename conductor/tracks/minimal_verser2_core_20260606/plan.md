@@ -104,6 +104,7 @@
 - Additional validation failure recovery: outdated scaffold export assertions and session-introduced formatting/import order were fixed in scope.
 - Deduplication result: Host reuses shared common identifiers, routed domain registration, lifecycle names, contextual errors, and development TLS helpers; HTTP/2 server/session registry behavior remains Host-specific.
 - Manual verification completed with user approval.
+- Phase 2 checkpoint commit: `c624c16`.
 
 ## Phase 3: Node Guest Server Attachment and Request Dispatch
 
