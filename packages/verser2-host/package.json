@@ -5,6 +5,9 @@
   "description": "Initial TypeScript scaffold for the Verser2 Host package.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "dependencies": {
+    "@signicode/verser-common": "0.0.0"
+  },
   "scripts": {
     "build": "tsc -b"
   }
