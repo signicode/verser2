@@ -58,6 +58,34 @@ Choose the narrowest sufficient validation available:
 
 Prefer `CI=true` for commands that may otherwise enter watch mode.
 
+## Failure Recovery Policy
+
+Validate every tool call result, but distinguish incorrect invocation from a real product or code failure.
+
+Before deciding on a recovery path for a recurring or recognizable failure, consult `conductor/known-solutions.md`. If an entry matches the observed problem, follow its Solution, Constraints, and Ignore-If rules. If no entry matches, use the general recovery policy below.
+
+When a new repeatable recovery path is discovered:
+
+1. Apply it without user confirmation only when it is safe, local to the active task, non-destructive, and within the current track scope.
+2. Before adding or updating `conductor/known-solutions.md`, pause and ask the user whether the proposed solution should be recorded.
+3. Present the observed problem, proposed solution, constraints, and ignore conditions in the question.
+4. If approved, update `known-solutions.md` with a fixed five-line problem entry.
+5. If rejected, continue the current task if possible, but do not record the solution as known.
+
+### Test and Validation Failures
+
+When a test, build, lint, or validation command exits non-zero, do not halt solely because the command failed. Instead:
+
+1. Inspect the failure output and identify the root cause.
+2. Determine whether the command was invoked correctly.
+3. If the command was invoked incorrectly, correct the invocation and rerun it.
+4. If the incorrect command mutated files or generated artifacts, revert only those artifacts before continuing.
+5. If the command was invoked correctly, first check whether the test is correct and aligned with the intended behavior.
+6. If the test is incorrect, fix the test.
+7. If the test is correct, fix the implementation.
+8. Rerun the narrowest relevant validation after each fix.
+9. Halt and ask the user only when the failure requires product clarification, repeated fixes do not converge, continuing would require destructive cleanup, or unrelated user/worktree changes directly conflict with the fix.
+
 ## Validation and Tool Failure Continuation Protocol
 
 Validate every tool call result and every command result. When a validation, test, or tool command fails, classify the failure before deciding whether to continue:
@@ -79,6 +107,19 @@ Pause for user guidance when the failure appears preexisting and unrelated to th
 Distinguish command failures from tool misuse. Command and test failures with meaningful output follow the classification rules above. Malformed tool invocations, missing permissions, or unavailable tooling should be corrected if the fix is obvious; otherwise pause for guidance. Read-only diagnostic retries are allowed when the original tool choice or arguments were wrong.
 
 When continuing past a non-blocking failure, record it in the track notes, validation summary, or handoff with the failed command, root cause, classification, and whether it was fixed, ignored as known, or deferred.
+
+### Tool Invocation Failures
+
+If a tool fails because it was wrongly invoked, correct the invocation and continue. Examples include a wrong working directory, wrong package-specific test command, missing CLI flags, direct command used instead of a package's configured runner, or stale/generated output selected because the source-tree invocation was wrong.
+
+If the wrongly invoked tool mutated files, generated output, or changed state:
+
+1. Identify exactly what the bad invocation changed.
+2. Revert only those changes.
+3. Do not revert unrelated user or agent work.
+4. Retry with the corrected invocation.
+
+If the tool failed despite correct invocation, treat it as a real validation failure and follow the test and validation failure policy above.
 
 ## Phase Completion Verification and Checkpointing Protocol
 

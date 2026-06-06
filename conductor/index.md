@@ -8,6 +8,7 @@
 ## Workflow
 - [Workflow](./workflow.md)
 - [Code Style Guides](./code_styleguides/)
+- [Known Solutions](./known-solutions.md)
 
 ## Management
 - [Tracks Registry](./tracks.md)
