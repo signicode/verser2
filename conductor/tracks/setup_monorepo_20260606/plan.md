@@ -21,19 +21,28 @@ Phase 1 validation notes:
 - `npm run lint` initially failed on formatting for new files and generated `conductor/setup_state.json`; fixed new-file formatting and excluded the generated setup state file from Biome.
 - `npm run lint` passes after fixes.
 - Coverage is not line-measured for Phase 1 because changed behavior is configuration/script wiring; smoke tests cover the measurable expectations.
+- Phase 1 checkpoint commit: `ae5e5c2`.
 
 ## Phase 2: Initial Packages
 
-- [ ] Task: Create `verser2-host` package scaffold
-    - [ ] Write tests for the initial host package export.
-    - [ ] Add package manifest, source entrypoint, and build configuration for `packages/verser2-host`.
-- [ ] Task: Create `verser2-guest-node` package scaffold
-    - [ ] Write tests for the initial Node guest package export.
-    - [ ] Add package manifest, source entrypoint, and build configuration for `packages/verser2-guest-node`.
-- [ ] Task: Validate cross-package build and test behavior
-    - [ ] Run root build, test, and lint commands.
-    - [ ] Fix any session-introduced validation failures according to the workflow continuation protocol.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Initial Packages' (Protocol in workflow.md)
+- [x] Task: Create `verser2-host` package scaffold
+    - [x] Write tests for the initial host package export.
+    - [x] Add package manifest, source entrypoint, and build configuration for `packages/verser2-host`.
+- [x] Task: Create `verser2-guest-node` package scaffold
+    - [x] Write tests for the initial Node guest package export.
+    - [x] Add package manifest, source entrypoint, and build configuration for `packages/verser2-guest-node`.
+- [x] Task: Validate cross-package build and test behavior
+    - [x] Run root build, test, and lint commands.
+    - [x] Fix any session-introduced validation failures according to the workflow continuation protocol.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Initial Packages' (Protocol in workflow.md)
+
+Phase 2 validation notes:
+
+- Confirmed package tests failed before implementation because package manifests and built entrypoints did not exist.
+- `npm install` updated the lockfile for workspace package links.
+- `npm run build`, `npm test`, and `npm run lint` pass.
+- Package smoke tests cover the measurable placeholder export behavior added in this phase.
+- Manual verification feedback removed artificial `create*Info()` functions in favor of simple package-name constants that do not imply a future runtime API.
 
 ## Phase 3: Documentation Alignment
 
