@@ -19,6 +19,9 @@
   "files": [],
   "references": [
     {
+      "path": "./packages/verser-common"
+    },
+    {
       "path": "./packages/verser2-host"
     },
     {

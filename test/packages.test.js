@@ -9,6 +9,17 @@ function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(rootDirectory, relativePath), 'utf8'));
 }
 
+test('@signicode/verser-common package exposes initial common metadata', () => {
+  const packageManifest = readJson('packages/verser-common/package.json');
+  const commonPackage = require('../packages/verser-common/dist/index.js');
+
+  assert.equal(packageManifest.name, '@signicode/verser-common');
+  assert.equal(packageManifest.main, 'dist/index.js');
+  assert.equal(packageManifest.types, 'dist/index.d.ts');
+  assert.deepEqual(Object.keys(commonPackage).sort(), ['VERSER_COMMON_PACKAGE_NAME']);
+  assert.equal(commonPackage.VERSER_COMMON_PACKAGE_NAME, '@signicode/verser-common');
+});
+
 test('@signicode/verser2-host package exposes initial host metadata', () => {
   const packageManifest = readJson('packages/verser2-host/package.json');
   const hostPackage = require('../packages/verser2-host/dist/index.js');

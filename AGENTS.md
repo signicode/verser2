@@ -15,7 +15,7 @@
 
 ## Monorepo layout
 - npm workspaces are `packages/*`; root tests live in `test/`.
-- Current package entrypoints are `packages/verser2-host/src/index.ts` and `packages/verser2-guest-node/src/index.ts`.
+- Current package entrypoints are `packages/verser-common/src/index.ts`, `packages/verser2-host/src/index.ts`, and `packages/verser2-guest-node/src/index.ts`.
 - Package builds emit `dist/`, which is ignored and should not be committed.
 
 ## Future language guests
