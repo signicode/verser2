@@ -2,9 +2,9 @@
 
 ## Project Structure
 
-`verser2` is planned as an npm workspace monorepo using `packages/*` for package implementations and `test/` for tests.
+`verser2` is configured as an npm workspace monorepo using `packages/*` for package implementations and `test/` for tests.
 
-Initial package targets:
+Initial package targets now scaffolded:
 
 - `packages/verser2-host`: TypeScript Verser2 Host implementation.
 - `packages/verser2-guest-node`: Node.js Guest library.
@@ -39,6 +39,9 @@ Future package targets:
 - Test command: `npm run test`.
 - Lint command: `npm run lint`.
 - Formatting/linting: Biome.
+- Test runner: Node.js built-in `node:test` smoke tests.
+- TypeScript compiler: `typescript` with per-package composite builds.
+- Type declarations: generated during package builds.
 
 ## Implementation Priorities
 
