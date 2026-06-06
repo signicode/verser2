@@ -7,12 +7,13 @@ Use a test-driven, incremental workflow for every track. Prefer small, reviewabl
 ## Guiding Principles
 
 1. **The Plan is the Source of Truth:** All work must be tracked in `plan.md`.
-2. **The Tech Stack is Deliberate:** Changes to the tech stack must be documented in `tech-stack.md` before implementation.
-3. **Test-Driven Development:** Write failing tests before implementing feature behavior.
-4. **High Code Coverage:** Maintain at least 95% meaningful test coverage for changed behavior.
-5. **Narrow Validation:** Run the smallest reliable build, test, lint, or type-check command that proves the change.
-6. **Protocol Compatibility:** Preserve HTTP method, path, headers, body, status, response, streaming, and lifecycle semantics unless a track explicitly changes them.
-7. **Shared First:** Reuse and adapt existing common libraries before implementing package-local solutions, and move repeated code into common libraries as soon as reuse emerges.
+2. **Tracks Start on Reviewable Branches:** Each new track must begin on a dedicated branch with a GitHub pull request created using `gh`; use the PR as the review and checkpoint surface until the track is complete.
+3. **The Tech Stack is Deliberate:** Changes to the tech stack must be documented in `tech-stack.md` before implementation.
+4. **Test-Driven Development:** Write failing tests before implementing feature behavior.
+5. **High Code Coverage:** Maintain at least 95% meaningful test coverage for changed behavior.
+6. **Narrow Validation:** Run the smallest reliable build, test, lint, or type-check command that proves the change.
+7. **Protocol Compatibility:** Preserve HTTP method, path, headers, body, status, response, streaming, and lifecycle semantics unless a track explicitly changes them.
+8. **Shared First:** Reuse and adapt existing common libraries before implementing package-local solutions, and move repeated code into common libraries as soon as reuse emerges.
 
 ## Task Lifecycle
 
@@ -29,6 +30,31 @@ For each task:
 9. Update documentation or Conductor artifacts when behavior changes.
 10. Mark the task complete in `plan.md` using `[x]`.
 11. Defer commits until the phase is complete.
+
+## Delegation Guidance
+
+Use delegation to accelerate Conductor work while preserving the track plan as the source of truth. Delegated work must remain bounded, reviewable, and aligned with the active `plan.md`.
+
+Delegate when the task is separable, read-only research can run in parallel, or a focused implementation can be handed off with clear inputs and validation expectations. Do not delegate vague product decisions, phase checkpoint commits, destructive cleanup, or work that requires changing the active plan without review.
+
+Recommended delegation patterns:
+
+- Use `explore` or `explorer` for fast read-only codebase searches, file discovery, dependency tracing, and locating existing behavior before implementation.
+- Use `fixer` for small, well-specified code changes after tests, scope, and expected behavior are clear.
+- Use `librarian` for external documentation, API behavior, and public examples.
+- Use `oracle` for architecture tradeoffs, complex debugging, code review, and risk analysis.
+- Use `designer` only for UI/UX work.
+- Use `general` for mixed multi-step tasks that do not fit a narrower agent.
+- Use `councillor` for independent read-only review when a second opinion is useful.
+
+Delegation rules:
+
+1. Provide each delegate with the relevant track goal, affected package, expected output, and whether edits are allowed.
+2. Keep delegated implementation tasks narrow enough to validate with the smallest reliable command.
+3. Review delegated findings or edits before marking any `plan.md` task complete.
+4. Record meaningful delegated findings, validation results, and unresolved risks in the active track notes or phase validation summary.
+5. Do not let delegated agents commit changes unless the current phase checkpoint explicitly authorizes a commit.
+6. Do not use delegation to bypass TDD, coverage, deduplication, documentation, or Conductor checkpoint requirements.
 
 ## Common Library Usage and Deduplication
 
