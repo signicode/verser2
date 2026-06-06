@@ -66,30 +66,44 @@
 
 ## Phase 2: TLS HTTP/2 Host and Connection Registration
 
-- [ ] Task: Review common foundations before Host implementation
-    - [ ] Confirm Host uses shared identifiers, registration, lifecycle, certificate, and error helpers from `@signicode/verser-common`.
-    - [ ] Record any Host-specific behavior intentionally kept package-local.
-- [ ] Task: Write failing Host tests
-    - [ ] Add focused tests for starting and stopping a TLS HTTP/2 Host.
-    - [ ] Add tests for accepting Broker/Guest sessions over TLS HTTP/2.
-    - [ ] Add tests for registering connected peers/guests by explicit id and routed domain names.
-    - [ ] Add tests for advertising routed domain maps to connected client Brokers.
-    - [ ] Add tests for lifecycle events and duplicate/malformed registration errors.
-    - [ ] Confirm the tests fail for missing Host behavior.
-- [ ] Task: Implement minimal Host API
-    - [ ] Implement Host creation/start/close APIs in `@signicode/verser2-host`.
-    - [ ] Accept TLS HTTP/2 connections using Node platform APIs and the shared certificate setup/check behavior.
-    - [ ] Maintain a registry of connected peers/guests, target ids, and routed guest domains.
-    - [ ] Advertise routed domain map changes to connected client Brokers.
-    - [ ] Emit or expose lifecycle and error information with contextual ids, protocol details, and close reasons where available.
-    - [ ] Export the Host API from `packages/verser2-host/src/index.ts` while preserving existing exports.
-- [ ] Task: Validate Phase 2 narrowly
-    - [ ] Run `npm run build`.
-    - [ ] Run the focused Host tests.
-    - [ ] Run `npm run lint` if Host code or tests changed formatting-sensitive areas.
-    - [ ] Record coverage status and any limitations.
-    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: TLS HTTP/2 Host and Connection Registration' (Protocol in workflow.md)
+- [x] Task: Review common foundations before Host implementation
+    - [x] Confirm Host uses shared identifiers, registration, lifecycle, certificate, and error helpers from `@signicode/verser-common`.
+    - [x] Record any Host-specific behavior intentionally kept package-local.
+- [x] Task: Write failing Host tests
+    - [x] Add focused tests for starting and stopping a TLS HTTP/2 Host.
+    - [x] Add tests for accepting Broker/Guest sessions over TLS HTTP/2.
+    - [x] Add tests for registering connected peers/guests by explicit id and routed domain names.
+    - [x] Add tests for advertising routed domain maps to connected client Brokers.
+    - [x] Add tests for lifecycle events and duplicate/malformed registration errors.
+    - [x] Confirm the tests fail for missing Host behavior.
+
+### Phase 2 Notes
+
+- Common foundation scan: Host should use `createDevelopmentTlsCertificate`, `createRoutedDomainRegistration`, `createPeerId`, `VERSER_LIFECYCLE_EVENTS`, and contextual `VerserError` helpers from `@signicode/verser-common`. HTTP/2 server/session registry behavior remains Host-specific.
+- [x] Task: Implement minimal Host API
+    - [x] Implement Host creation/start/close APIs in `@signicode/verser2-host`.
+    - [x] Accept TLS HTTP/2 connections using Node platform APIs and the shared certificate setup/check behavior.
+    - [x] Maintain a registry of connected peers/guests, target ids, and routed guest domains.
+    - [x] Advertise routed domain map changes to connected client Brokers.
+    - [x] Emit or expose lifecycle and error information with contextual ids, protocol details, and close reasons where available.
+    - [x] Export the Host API from `packages/verser2-host/src/index.ts` while preserving existing exports.
+- [x] Task: Validate Phase 2 narrowly
+    - [x] Run `npm run build`.
+    - [x] Run the focused Host tests.
+    - [x] Run `npm run lint` if Host code or tests changed formatting-sensitive areas.
+    - [x] Record coverage status and any limitations.
+    - [x] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: TLS HTTP/2 Host and Connection Registration' (Protocol in workflow.md)
+
+### Phase 2 Validation Notes
+
+- TDD confirmation: `npm run build && node --test test/host.test.js` initially failed because `createVerserHost` was missing.
+- Validation passed: `npm run build`, `node --test test/host.test.js`, `npm run lint`, and `npm run test:coverage`.
+- Coverage: `npm run test:coverage` reported `packages/verser2-host/dist/index.js` at 95.72% line coverage for Host changed behavior; source-map branch/function percentages include generated TypeScript scaffolding and lifecycle/error branches not all practical to force in this phase.
+- Validation failure recovery: focused Host tests initially timed out because graceful shutdown waited on a long-lived Broker control stream; @oracle confirmed the cause, and Host shutdown now closes Broker control streams and clears guest registrations before closing sessions.
+- Additional validation failure recovery: outdated scaffold export assertions and session-introduced formatting/import order were fixed in scope.
+- Deduplication result: Host reuses shared common identifiers, routed domain registration, lifecycle names, contextual errors, and development TLS helpers; HTTP/2 server/session registry behavior remains Host-specific.
+- Manual verification completed with user approval.
 
 ## Phase 3: Node Guest Server Attachment and Request Dispatch
 
