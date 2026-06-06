@@ -51,7 +51,7 @@
     - [x] Run `npm run lint` if shared code or tests changed formatting-sensitive areas.
     - [x] Record coverage status or why coverage cannot be measured precisely with the current Node test setup.
     - [x] Perform a phase-end deduplication check and record that reusable foundations live in `@signicode/verser-common`.
-- [~] Task: Conductor - User Manual Verification 'Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations' (Protocol in workflow.md)
 
 ### Phase 1 Notes
 
@@ -61,6 +61,8 @@
 - Coverage: `npm run test:coverage` reported `packages/verser-common/dist/index.js` at 100% line, 96.97% branch, and 100% function coverage for changed behavior.
 - Validation failure recovery: lint formatting and an outdated scaffold export assertion were session-introduced/in-scope and fixed; coverage below 95% branch for common was in-scope and fixed with additional branch tests.
 - Deduplication result: reusable foundations live in `@signicode/verser-common`; no repeated Host/Guest/Broker implementation exists yet.
+- Manual verification completed after moving development certificate constants into `packages/verser-common/src/development-certificate.ts`.
+- Phase 1 checkpoint commits: `0d4c2b8`, `397f182`.
 
 ## Phase 2: TLS HTTP/2 Host and Connection Registration
 
