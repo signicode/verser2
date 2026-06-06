@@ -15,5 +15,14 @@
     "rootDir": "src",
     "strict": true,
     "target": "ES2019"
-  }
+  },
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/verser2-host"
+    },
+    {
+      "path": "./packages/verser2-guest-node"
+    }
+  ]
 }
