@@ -54,7 +54,7 @@ Examples include:
 The client creates or owns a normal HTTP/1 server, but does not need to call `listen()`. Instead, `verser2` receives remote requests over a shared connection and dispatches them into that local HTTP server.
 
 ```txt
-Connected Server
+Connected Guest
     │
     │ HTTP request
     ▼
@@ -71,7 +71,7 @@ Non-listening HTTP/1 Server
 
 ## Core Idea
 
-A client-side HTTP server can be called by other connected servers even when it is not listening on a network port.
+A guest-side (client side) HTTP server can be called by other connected servers even when it is not listening on a network port.
 
 ```ts
 import http from "node:http";
@@ -89,14 +89,15 @@ const localServer = http.createServer((req, res) => {
 });
 
 const client = new Verser2Client({
-  url: "https://broker.example.com",
-  server: localServer
+  url: "https://broker.example.com"
 });
+
+client.registerServer("client-a", localServer);
 
 await client.connect();
 ```
 
-Another connected server can then call the client-side server:
+Another connected guest can then call the client-side server:
 
 ```ts
 const response = await connectedServer.request({
@@ -107,6 +108,22 @@ const response = await connectedServer.request({
 
 console.log(await response.json());
 ```
+
+Requests can also be made using the `http.Agent` or `undici` dispatcher exposed by `verser2`:
+
+```ts
+import http from "node:http";
+import { Verser2Client } from "verser2";
+const client = await new Verser2Client({
+  url: "https://broker.example.com"
+}).connect();
+
+const agent = client.agent();
+const response = await http.get("http://client-a/health", { agent });
+console.log(await response.json());
+```
+
+
 
 ## Features
 

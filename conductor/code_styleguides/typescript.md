@@ -40,4 +40,10 @@ This document summarizes key rules and best practices from the Google TypeScript
 - **Redundancy:** **Do not declare types in `@param` or `@return` blocks** (e.g., `/** @param {string} user */`). This is redundant in TypeScript.
 - **Add Information:** Comments must add information, not just restate the code.
 
+## 6. Shared Code and DRY Rules
+- **Do not implement the same solution in multiple packages.** Before adding package-local types, constants, validation helpers, serialization helpers, lifecycle helpers, error helpers, protocol-neutral request/response shapes, or test utilities, check whether they belong in `@signicode/verser-common`.
+- Prefer adapting or extending an existing common export over creating a parallel Host, Guest, Broker, Peer, or runtime-specific copy.
+- Package-local implementations are acceptable when behavior is truly runtime-specific, transport-specific, or used by only one package with no clear shared abstraction yet.
+- When reuse appears during or after a phase, move the shared part into `@signicode/verser-common` and keep package-specific code as a thin adapter.
+
 *Source: [Google TypeScript Style Guide](https://google.github.io/styleguide/tsguide.html)*

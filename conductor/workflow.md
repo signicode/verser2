@@ -12,21 +12,44 @@ Use a test-driven, incremental workflow for every track. Prefer small, reviewabl
 4. **High Code Coverage:** Maintain at least 95% meaningful test coverage for changed behavior.
 5. **Narrow Validation:** Run the smallest reliable build, test, lint, or type-check command that proves the change.
 6. **Protocol Compatibility:** Preserve HTTP method, path, headers, body, status, response, streaming, and lifecycle semantics unless a track explicitly changes them.
+7. **Shared First:** Reuse and adapt existing common libraries before implementing package-local solutions, and move repeated code into common libraries as soon as reuse emerges.
 
 ## Task Lifecycle
 
 For each task:
 
 1. Confirm the affected package, entrypoint, protocol behavior, and expected outcome.
-2. Mark the task in `plan.md` as in progress using `[~]`.
-3. Write or update focused tests first and confirm the new tests fail for the expected reason.
-4. Implement the smallest change that makes the tests pass.
-5. Refactor only after tests pass, preserving public behavior.
-6. Run the narrowest sufficient validation command.
-7. Verify coverage is at least 95% for changed behavior.
-8. Update documentation or Conductor artifacts when behavior changes.
-9. Mark the task complete in `plan.md` using `[x]`.
-10. Defer commits until the phase is complete.
+2. Scan existing common libraries, especially `@signicode/verser-common`, for reusable or adaptable code before writing new package-local code.
+3. Mark the task in `plan.md` as in progress using `[~]`.
+4. Write or update focused tests first and confirm the new tests fail for the expected reason.
+5. Implement the smallest change that makes the tests pass, using common libraries where appropriate instead of duplicating solutions.
+6. Refactor only after tests pass, preserving public behavior.
+7. Run the narrowest sufficient validation command.
+8. Verify coverage is at least 95% for changed behavior.
+9. Update documentation or Conductor artifacts when behavior changes.
+10. Mark the task complete in `plan.md` using `[x]`.
+11. Defer commits until the phase is complete.
+
+## Common Library Usage and Deduplication
+
+At the start of each phase:
+
+1. Review existing common libraries, including `@signicode/verser-common`, for exports that can be reused or adapted.
+2. Record in `plan.md` when the phase intentionally does not use common code because the behavior is package-specific, runtime-specific, or not yet repeated.
+3. Prefer adapting common APIs over creating parallel package-local types, constants, helpers, error primitives, lifecycle utilities, protocol-neutral shapes, or test utilities.
+
+During the phase:
+
+1. Keep common code protocol-neutral and runtime-neutral when possible.
+2. Keep package-specific code as thin adapters around common primitives when reuse exists.
+3. Do not implement the same solution independently in multiple packages.
+
+At the end of each phase:
+
+1. Perform a deduplication check across changed packages.
+2. Move repeated or clearly reusable code into the appropriate common library, starting with `@signicode/verser-common` for TypeScript package code.
+3. Update package imports, tests, and documentation to use the common export.
+4. Record the deduplication result in the phase validation notes, including whether common code was added, adapted, or intentionally deferred.
 
 ## Commit Policy
 
@@ -126,13 +149,15 @@ If the tool failed despite correct invocation, treat it as a real validation fai
 At the end of each phase:
 
 1. Review all completed tasks in the phase against the phase goal.
-2. Run the validation command or commands appropriate for the phase scope.
-3. Confirm docs, tests, and code are aligned.
-4. Confirm 95% coverage for changed behavior or record why coverage could not be measured.
-5. Record any skipped validation and the reason.
-6. Ask the user to manually verify the phase before moving to the next phase when the plan includes a Conductor manual verification task.
-7. Create one scoped phase commit with a concise message and a summary in the commit body.
-8. Update `plan.md` with the phase checkpoint commit SHA.
+2. Confirm common libraries were scanned at phase start and reused or adapted where appropriate.
+3. Perform the end-of-phase deduplication check and move shared code into common libraries when reuse emerged.
+4. Run the validation command or commands appropriate for the phase scope.
+5. Confirm docs, tests, and code are aligned.
+6. Confirm 95% coverage for changed behavior or record why coverage could not be measured.
+7. Record any skipped validation and the reason.
+8. Ask the user to manually verify the phase before moving to the next phase when the plan includes a Conductor manual verification task.
+9. Create one scoped phase commit with a concise message and a summary in the commit body.
+10. Update `plan.md` with the phase checkpoint commit SHA.
 
 ## Quality Gates
 
@@ -142,6 +167,8 @@ Before marking any task or phase complete, verify:
 - [ ] Coverage for changed behavior is at least 95%.
 - [ ] Code follows the project code style guides in `code_styleguides/`.
 - [ ] Public APIs and behavior are documented when needed.
+- [ ] Existing common libraries were reviewed for reuse before package-local implementation.
+- [ ] Repeated or reusable code is centralized in common libraries such as `@signicode/verser-common`.
 - [ ] Type safety is enforced.
 - [ ] No linting or static analysis errors are introduced.
 - [ ] Runtime protocol behavior remains compatible unless the track explicitly changes it.
@@ -155,7 +182,8 @@ Before requesting review or completing a phase:
 2. Check edge cases, error paths, lifecycle behavior, and streaming behavior where relevant.
 3. Confirm tests cover both success and failure cases.
 4. Confirm the implementation follows TypeScript and Node.js package conventions.
-5. Confirm docs and examples remain consistent with the product guidelines.
+5. Confirm common libraries were scanned at phase start and repeated code was deduplicated by phase end.
+6. Confirm docs and examples remain consistent with the product guidelines.
 
 ## Commit Guidelines
 
@@ -185,6 +213,7 @@ A phase is complete when:
 2. Tests are written and passing.
 3. Coverage meets the 95% requirement for changed behavior.
 4. Documentation is complete when behavior changed.
-5. Linting and static analysis pass for the changed area.
-6. Manual verification has been requested and confirmed when required by the plan.
-7. Changes are committed once for the phase with a useful commit message body.
+5. Common libraries were reviewed at phase start and the phase-end deduplication result is recorded.
+6. Linting and static analysis pass for the changed area.
+7. Manual verification has been requested and confirmed when required by the plan.
+8. Changes are committed once for the phase with a useful commit message body.

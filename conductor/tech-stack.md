@@ -6,8 +6,9 @@
 
 Initial package targets now scaffolded:
 
-- `packages/verser2-host`: TypeScript Verser2 Host implementation.
-- `packages/verser2-guest-node`: Node.js Guest library.
+- `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives and helpers for Verser packages.
+- `@signicode/verser2-host` in `packages/verser2-host`: TypeScript Verser2 Host implementation.
+- `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest library.
 
 Future package targets:
 
@@ -29,8 +30,8 @@ Future package targets:
 ## Core Platform APIs
 
 - Node.js `node:http` for local HTTP/1 server compatibility.
-- HTTP/2 for the stable MVP multiplexed transport.
-- HTTP/3 as a future or platform-dependent transport.
+- Shared TypeScript package code through `@signicode/verser-common`.
+- HTTP/2, multiplexing, routing, and HTTP/3 behavior only when introduced by explicit tracks.
 
 ## Tooling
 
@@ -46,8 +47,9 @@ Future package targets:
 ## Implementation Priorities
 
 - Establish the TypeScript/Node Host and Guest packages first.
+- Keep reusable cross-package foundations in `@signicode/verser-common`.
 - Preserve normal Node.js HTTP handler ergonomics.
-- Support concurrent requests over multiplexed HTTP/2 streams.
+- Add concurrent request, routing, or multiplexing behavior only in tracks that explicitly target it.
 - Design interfaces so future guest runtimes can map to their native HTTP primitives.
 - Keep HTTP/3 optional until runtime and platform support is mature enough for reliable implementation.
 

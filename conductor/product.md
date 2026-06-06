@@ -1,17 +1,18 @@
 # Initial Concept
 
-`verser2` is a reverse HTTP connectivity package for exposing HTTP servers from client-side processes. It lets a client process host an HTTP/1 server without opening a listening port, then allows other connected servers to call that HTTP/1 server through a multiplexed connection.
+`verser2` is a reverse HTTP connectivity package for exposing HTTP servers from client-side processes. It lets a client process host an HTTP/1 server without opening a listening port, then allows connected hosts, guests, brokers, or peers to call that HTTP/1 server through an outbound connection model.
 
 # Product Guide
 
 ## Product Vision
 
-`verser2` is a reverse HTTP connectivity package that lets connected servers call HTTP/1 servers running inside client-side processes, even when those client-side servers cannot open listening ports. It provides a low-friction way to expose local, sandboxed, NAT-restricted, or agent-hosted services through outbound multiplexed connections.
+`verser2` is a reverse HTTP connectivity package that lets connected processes call HTTP/1 servers running inside client-side processes, even when those client-side servers cannot open listening ports. It provides a low-friction way to expose local, sandboxed, NAT-restricted, or agent-hosted services through outbound connections while preserving familiar HTTP semantics.
 
 ## Target Users
 
 - Node.js developers who want to embed ordinary HTTP server handlers in processes that cannot accept inbound connections.
 - Agent platform teams running local development agents, sandboxed runtimes, worker processes, or containers that can connect outbound but cannot receive direct inbound traffic.
+- Package maintainers extending the Host, Guest, Broker, Peer, or shared common library APIs while keeping implementation details reusable across packages.
 - Teams planning future guest implementations in other languages after the TypeScript/Node foundation is stable.
 
 ## Core Product Model
@@ -25,8 +26,9 @@ The product uses the repo nomenclature:
 
 ## Initial Milestone
 
-The first milestone should build the core Host/Guest path for TypeScript/Node.js:
+The first milestone should establish the TypeScript/Node.js package foundation and then build the core Host/Guest path incrementally:
 
+- A shared `@signicode/verser-common` package for reusable protocol-neutral primitives, types, constants, and helpers.
 - A host that accepts outbound guest connections and routes requests.
 - A Node guest that owns or receives a normal `http.Server` without calling `listen()`.
 - End-to-end request forwarding from a connected caller through the host into the guest's local HTTP/1 server.
@@ -37,7 +39,8 @@ The first milestone should build the core Host/Guest path for TypeScript/Node.js
 - **Low friction:** Developers should be able to reuse normal Node.js HTTP server handlers with minimal adaptation.
 - **Reliability:** Connection lifecycle, timeouts, reconnects, errors, and close reasons should be explicit and actionable.
 - **Streaming support:** Request and response bodies should preserve streaming behavior where the selected transport supports it.
-- **Multiplexed efficiency:** HTTP/2 should be the stable default transport for concurrent logical requests over one physical connection, with HTTP/3 treated as a future or platform-dependent enhancement.
+- **Shared foundations:** Reusable solution code belongs in common packages before it is duplicated across Host, Guest, Broker, Peer, or runtime-specific packages.
+- **Transport incrementality:** Transport behavior, multiplexing, routing, and HTTP/3 support should be introduced only by explicit implementation tracks, not by scaffold or documentation-only work.
 - **Incremental language expansion:** TypeScript/Node is the primary implementation target. Browser, Bun, Python, Rust, Go, and Java guests belong on the roadmap after the core model is proven.
 
 ## Primary Use Cases
@@ -52,13 +55,14 @@ The first milestone should build the core Host/Guest path for TypeScript/Node.js
 
 - `verser2` is not a general-purpose public HTTP gateway by itself.
 - The first milestone does not need to implement every language guest.
-- HTTP/3 support should not block a reliable HTTP/2-based MVP.
-- Authentication, authorization, and routing policy can be designed as host-level capabilities, but should not obscure the core Host/Guest request path.
+- Scaffold tracks should not implement HTTP/2 multiplexing, request routing, or HTTP/3 behavior unless the active track explicitly asks for it.
+- Authentication, authorization, and routing policy can be designed as host-level capabilities in future tracks, but should not obscure the core Host/Guest request path.
 
 ## Success Criteria
 
 - A Node guest can attach a normal HTTP/1 server without opening a port.
 - A connected peer can issue a request through the host to that guest server.
 - Method, path, headers, request body, status, response headers, and response body are preserved.
-- Multiple concurrent requests can be carried over a multiplexed connection.
+- Shared primitives needed by multiple packages are provided by `@signicode/verser-common` instead of duplicated in package-local implementations.
+- Concurrent request or multiplexing behavior is proven only when a track explicitly introduces that transport behavior.
 - Errors include enough context to diagnose connection, target, protocol, path, stream, timeout, and close-reason failures.
