@@ -32,18 +32,18 @@ export interface VerserNodeGuestLifecycleEvent {
 }
 
 export interface VerserNodeGuestDispatchRequest extends RoutedRequestEnvelope {
-  readonly body: readonly string[];
+  readonly body: readonly (string | Buffer)[];
 }
 
 export interface VerserNodeGuestDispatchResponse extends RoutedResponseEnvelope {
-  readonly body: string;
+  readonly body: Buffer;
 }
 
 export interface VerserNodeGuest {
   readonly connected: boolean;
   connect(): Promise<void>;
   close(reason?: string): Promise<void>;
-  attach(serverOrListener: http.Server | NodeRequestListener): void;
+  attach(serverOrListener: http.Server | NodeRequestListener, domain?: string): this;
   dispatchRoutedRequest(
     request: VerserNodeGuestDispatchRequest,
   ): Promise<VerserNodeGuestDispatchResponse>;
@@ -66,7 +66,7 @@ export class MinimalIncomingMessage extends Readable {
 
   public readonly headers: Record<string, string>;
 
-  private readonly body: readonly string[];
+  private readonly body: readonly (string | Buffer)[];
 
   public constructor(request: VerserNodeGuestDispatchRequest) {
     super();
@@ -89,7 +89,7 @@ export class MinimalServerResponse extends EventEmitter {
 
   private readonly headers = new Map<string, string>();
 
-  private readonly chunks: string[] = [];
+  private readonly chunks: Buffer[] = [];
 
   public setHeader(name: string, value: string | number | boolean): this {
     this.headers.set(name.toLowerCase(), String(value));
@@ -111,16 +111,17 @@ export class MinimalServerResponse extends EventEmitter {
     return this;
   }
 
-  public write(chunk: string | Buffer): boolean {
-    this.chunks.push(String(chunk));
+  public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
+    this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
     return true;
   }
 
-  public end(chunk?: string | Buffer): void {
+  public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
     if (chunk !== undefined) {
-      this.write(chunk);
+      this.write(chunk, encoding);
     }
     this.emit('finish');
+    return this;
   }
 
   public toDispatchResponse(requestId: string): VerserNodeGuestDispatchResponse {
@@ -130,7 +131,7 @@ export class MinimalServerResponse extends EventEmitter {
         statusCode: this.statusCode,
         headers: Object.fromEntries(this.headers),
       }),
-      body: this.chunks.join(''),
+      body: Buffer.concat(this.chunks),
     };
   }
 }
@@ -143,6 +144,8 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
   private session?: http2.ClientHttp2Session;
 
   private listener?: NodeRequestListener;
+
+  private attachedDomain?: string;
 
   public constructor(options: VerserNodeGuestOptions) {
     this.options = options;
@@ -186,7 +189,10 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.closed, reason });
   }
 
-  public attach(serverOrListener: http.Server | NodeRequestListener): void {
+  public attach(
+    serverOrListener: http.Server | NodeRequestListener,
+    domain = this.options.guestId,
+  ): this {
     if (serverOrListener instanceof http.Server) {
       const requestListeners = serverOrListener.listeners('request');
       const listener = requestListeners[0];
@@ -200,10 +206,13 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
         );
       }
       this.listener = listener as unknown as NodeRequestListener;
-      return;
+      this.attachedDomain = domain;
+      return this;
     }
 
     this.listener = serverOrListener;
+    this.attachedDomain = domain;
+    return this;
   }
 
   public dispatchRoutedRequest(
@@ -269,11 +278,15 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
       });
     }
 
-    const response = await requestJson(session, {
-      peerId: this.options.guestId,
-      role: 'guest',
-      routedDomains: this.options.routedDomains ?? [],
-    });
+    const response = await requestJson(
+      session,
+      {
+        peerId: this.options.guestId,
+        role: 'guest',
+        routedDomains: this.getRoutedDomains(),
+      },
+      this.options.guestId,
+    );
 
     if (response.status !== 'registered') {
       throw createVerserError('invalid-registration', 'Host did not register Guest', {
@@ -287,11 +300,20 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
   private emitLifecycle(event: Omit<VerserNodeGuestLifecycleEvent, 'guestId'>): void {
     this.lifecycle.emit('event', { guestId: this.options.guestId, ...event });
   }
+
+  private getRoutedDomains(): readonly string[] {
+    if (this.attachedDomain !== undefined) {
+      return [this.attachedDomain];
+    }
+
+    return this.options.routedDomains ?? [];
+  }
 }
 
 function requestJson(
   session: http2.ClientHttp2Session,
   payload: Record<string, string | readonly string[]>,
+  guestId: string,
 ): Promise<{ status?: string }> {
   return new Promise((resolve, reject) => {
     const stream = session.request({ ':method': 'POST', ':path': '/verser/register' });
@@ -300,7 +322,18 @@ function requestJson(
     stream.on('data', (chunk: string) => {
       body += chunk;
     });
-    stream.on('end', () => resolve(JSON.parse(body) as { status?: string }));
+    stream.on('end', () => {
+      try {
+        resolve(JSON.parse(body) as { status?: string });
+      } catch (error) {
+        reject(
+          createVerserError('protocol-error', 'Host returned invalid registration JSON', {
+            guestId,
+            cause: getErrorMessage(error),
+          }),
+        );
+      }
+    });
     stream.on('error', reject);
     stream.end(JSON.stringify(payload));
   });
