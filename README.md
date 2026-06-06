@@ -4,6 +4,39 @@
 
 It lets a client process host an HTTP/1 server without opening a listening port, then allows other connected servers to call that HTTP/1 server through a multiplexed connection.
 
+## Development Setup
+
+This repository is an npm workspace monorepo using `packages/*`.
+
+Initial TypeScript package scaffolds:
+
+- `packages/verser2-host`
+- `packages/verser2-guest-node`
+
+Install dependencies:
+
+```sh
+npm install
+```
+
+Build all workspace packages:
+
+```sh
+npm run build
+```
+
+Run tests:
+
+```sh
+npm test
+```
+
+Run Biome linting and formatting checks:
+
+```sh
+npm run lint
+```
+
 ## What It Does
 
 `verser2` is for cases where a process can make outbound connections but cannot accept inbound connections.

@@ -43,13 +43,22 @@ Phase 2 validation notes:
 - `npm run build`, `npm test`, and `npm run lint` pass.
 - Package smoke tests cover the measurable placeholder export behavior added in this phase.
 - Manual verification feedback removed artificial `create*Info()` functions in favor of simple package-name constants that do not imply a future runtime API.
+- Phase 2 checkpoint commit: `98589bb`.
 
 ## Phase 3: Documentation Alignment
 
-- [ ] Task: Update project documentation for setup commands
-    - [ ] Write or update documentation expectations for install, build, test, and lint commands.
-    - [ ] Update `README.md` or package docs with the established workspace commands.
-- [ ] Task: Confirm Conductor artifacts match implemented setup
-    - [ ] Review `product.md`, `tech-stack.md`, and `workflow.md` for any needed updates.
-    - [ ] Update Conductor artifacts only if implementation decisions changed documented project context.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Documentation Alignment' (Protocol in workflow.md)
+- [x] Task: Update project documentation for setup commands
+    - [x] Write or update documentation expectations for install, build, test, and lint commands.
+    - [x] Update `README.md` or package docs with the established workspace commands.
+- [x] Task: Confirm Conductor artifacts match implemented setup
+    - [x] Review `product.md`, `tech-stack.md`, and `workflow.md` for any needed updates.
+    - [x] Update Conductor artifacts only if implementation decisions changed documented project context.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Documentation Alignment' (Protocol in workflow.md)
+
+Phase 3 validation notes:
+
+- Confirmed documentation test failed before implementation because README did not include setup commands.
+- Added README development setup documentation for `npm install`, `npm run build`, `npm test`, and `npm run lint`.
+- Reviewed Conductor product, tech stack, and workflow documents; they already match the implemented setup, so no Conductor context updates were needed in this phase.
+- `npm run build`, `npm test`, and `npm run lint` pass.
+- Documentation expectations are covered by the README smoke test.
