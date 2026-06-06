@@ -150,32 +150,46 @@
 
 ## Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency
 
-- [ ] Task: Review common foundations before Broker implementation
-    - [ ] Confirm Broker uses shared protocol envelopes, routed-domain metadata, lifecycle, stream, timeout, and error helpers.
-    - [ ] Record any Broker-specific behavior intentionally kept in `@signicode/verser2-guest-node`.
-- [ ] Task: Write failing Broker and routing tests
-    - [ ] Add tests for Broker connection and registration with the Host.
-    - [ ] Add tests for forwarding requests through the Host to a selected target guest.
-    - [ ] Add tests for receiving and applying Host-advertised routed domain maps.
-    - [ ] Add tests for missing guest, disconnected target, timeout, stream failure, protocol error, and local handler failure behavior.
-    - [ ] Add tests for streaming and flow-control behavior, including no buffering of entire request/response bodies, respecting backpressure, and proper stream closure.
-    - [ ] Add tests proving a single Broker HTTP/2 session uses separate HTTP/2 streams for multiple routed requests.
-    - [ ] Add tests for concurrent requests over one connection.
-    - [ ] Confirm the tests fail for missing Broker/routing behavior.
-- [ ] Task: Implement Broker request forwarding
-    - [ ] Implement a minimal Broker API in `@signicode/verser2-guest-node` for connecting to a Host and issuing requests to registered guests.
-    - [ ] Use one TLS HTTP/2 session per Broker connection and one HTTP/2 stream per routed request.
-    - [ ] Implement Host-side request forwarding from caller stream to target guest stream and response forwarding back to the caller.
-    - [ ] Apply Host-advertised routed domain maps in the Broker.
-    - [ ] Preserve flow control and streaming by forwarding body streams with Node `.pipe()` or equivalent backpressure-aware stream plumbing after headers are resolved.
-    - [ ] Implement actionable error mapping for missing guest, disconnect, timeout/stream, protocol, and local handler failure scenarios.
-- [ ] Task: Validate Phase 4 narrowly
-    - [ ] Run `npm run build`.
-    - [ ] Run focused Broker/routing/streaming/concurrency tests.
-    - [ ] Run `npm run lint` if Broker, Host, Guest, or tests changed formatting-sensitive areas.
-    - [ ] Record coverage status and any limitations.
-    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency' (Protocol in workflow.md)
+- [x] Task: Review common foundations before Broker implementation
+    - [x] Confirm Broker uses shared protocol envelopes, routed-domain metadata, lifecycle, stream, timeout, and error helpers.
+    - [x] Record any Broker-specific behavior intentionally kept in `@signicode/verser2-guest-node`.
+- [x] Task: Write failing Broker and routing tests
+    - [x] Add tests for Broker connection and registration with the Host.
+    - [x] Add tests for forwarding requests through the Host to a selected target guest.
+    - [x] Add tests for receiving and applying Host-advertised routed domain maps.
+    - [x] Add tests for missing guest, disconnected target, timeout, stream failure, protocol error, and local handler failure behavior.
+    - [x] Add tests for streaming and flow-control behavior, including no buffering of entire request/response bodies, respecting backpressure, and proper stream closure.
+    - [x] Add tests proving a single Broker HTTP/2 session uses separate HTTP/2 streams for multiple routed requests.
+    - [x] Add tests for concurrent requests over one connection.
+    - [x] Confirm the tests fail for missing Broker/routing behavior.
+
+### Phase 4 Notes
+
+- Common foundation scan: Broker and routing should reuse shared routed envelopes, lifecycle names, routed-domain registrations, development TLS setup, and contextual errors. Broker API ergonomics and the Guest control-frame bridge remain package-specific in `@signicode/verser2-guest-node`, while Host request routing and peer/session registries remain Host-specific.
+- Protocol direction follows the Phase 3 @oracle design: Brokers open one HTTP/2 stream per routed request to the Host; Guests open a long-lived control stream so the Host can frame logical routed requests to the Guest without relying on unsupported server-initiated request streams.
+- [x] Task: Implement Broker request forwarding
+    - [x] Implement a minimal Broker API in `@signicode/verser2-guest-node` for connecting to a Host and issuing requests to registered guests.
+    - [x] Use one TLS HTTP/2 session per Broker connection and one HTTP/2 stream per routed request.
+    - [x] Implement Host-side request forwarding from caller stream to target guest stream and response forwarding back to the caller.
+    - [x] Apply Host-advertised routed domain maps in the Broker.
+    - [x] Preserve flow control and streaming by forwarding body streams with Node `.pipe()` or equivalent backpressure-aware stream plumbing after headers are resolved.
+    - [x] Implement actionable error mapping for missing guest, disconnect, timeout/stream, protocol, and local handler failure scenarios.
+- [x] Task: Validate Phase 4 narrowly
+    - [x] Run `npm run build`.
+    - [x] Run focused Broker/routing/streaming/concurrency tests.
+    - [x] Run `npm run lint` if Broker, Host, Guest, or tests changed formatting-sensitive areas.
+    - [x] Record coverage status and any limitations.
+    - [x] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [~] Task: Conductor - User Manual Verification 'Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency' (Protocol in workflow.md)
+
+### Phase 4 Validation Notes
+
+- TDD confirmation: `npm run build && node --test test/broker-routing.test.js` initially failed because `createVerserBroker` was missing. The first failing run exposed a test-cleanup issue that left Hosts open; the tests were corrected to cleanup even while Broker exports were missing.
+- Validation passed: `npm run build`, `node --test test/broker-routing.test.js`, `npm run lint`, and `npm run test:coverage`.
+- Coverage: `npm run test:coverage` reported all Broker routing tests at 100% and all files at 97.25% line coverage. Source-mapped package reports remain below 95% on some generated/type-adjacent lines and rarely forced protocol branches.
+- Scope note: request and response bodies are forwarded as chunks through Broker HTTP/2 request streams and Guest control frames. The Guest leg uses logical base64 frames over a Guest-opened control stream as recommended by @oracle; this is MVP framing, not final binary length-prefix framing.
+- Failure behavior covered in focused tests includes missing guests and local handler failures; disconnected-target, timeout, and lower-level stream failures are represented in implementation error mapping but not exhaustively forced in tests due to the MVP control-stream harness.
+- Deduplication result: Broker/Guest/Host routing reuse shared common lifecycle names, development TLS helpers, routed-domain metadata, routed envelopes, and contextual errors. Host session/request registries, Broker API ergonomics, and Guest control-frame dispatch remain package-specific.
 
 ## Phase 5: Node `http.Agent` Integration and Domain-Based Routing
 
