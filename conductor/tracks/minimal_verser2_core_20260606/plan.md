@@ -2,9 +2,9 @@
 
 ## Phase 0: Track Setup and Baseline Review
 
-- [~] Task: Create implementation branch and pull request
+- [x] Task: Create implementation branch and pull request
     - [x] Create a dedicated branch for `minimal_verser2_core_20260606`.
-    - [ ] Create a GitHub pull request with `gh` for review and phase checkpoints.
+    - [x] Create a GitHub pull request with `gh` for review and phase checkpoints.
 - [x] Task: Review project instructions and current scaffolds
     - [x] Review `AGENTS.md`, `conductor/index.md`, `conductor/workflow.md`, `conductor/product.md`, `conductor/tech-stack.md`, and `conductor/product-guidelines.md`.
     - [x] Review existing package entrypoints in `packages/verser-common`, `packages/verser2-host`, and `packages/verser2-guest-node`.
@@ -22,12 +22,14 @@
 ### Phase 0 Notes
 
 - Implementation branch: `minimal_verser2_core_20260606`.
+- Pull request: https://github.com/signicode/verser2/pull/1.
 - Project and Conductor instructions reviewed: `AGENTS.md`, `conductor/index.md`, `conductor/workflow.md`, `conductor/product.md`, `conductor/tech-stack.md`, and `conductor/product-guidelines.md`.
 - Current package entrypoints are scaffold constants only: `VERSER_COMMON_PACKAGE_NAME`, `VERSER2_HOST_PACKAGE_NAME`, and `VERSER2_GUEST_NODE_PACKAGE_NAME`.
 - Baseline validation passed with `npm run build`, `npm test`, and `npm run lint`.
 - Coverage path established as `npm run test:coverage`, using Node's `--experimental-test-coverage`; baseline coverage reported 100% for current scaffold behavior.
 - Common-library scan result: `@signicode/verser-common` currently has no reusable protocol primitives beyond its package-name constant; Phase 1 should add shared protocol-neutral foundations there before package-local Host/Guest/Broker code.
 - Manual verification completed with user approval.
+- Phase 0 checkpoint commit: `fc552d9`.
 
 ## Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations
 
