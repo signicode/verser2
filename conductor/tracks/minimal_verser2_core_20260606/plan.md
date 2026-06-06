@@ -33,25 +33,34 @@
 
 ## Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations
 
-- [ ] Task: Review common-library reuse before implementation
-    - [ ] Inspect `@signicode/verser-common` for reusable exports and record that the phase starts from scaffold-only common code.
-    - [ ] Decide which protocol-neutral shapes belong in `@signicode/verser-common` before writing package-local implementations.
-- [ ] Task: Write failing tests for shared protocol foundations
-    - [ ] Add tests for guest/peer identifiers, routed domain registration metadata, request/response envelope shapes, lifecycle event names, and contextual error helpers.
-    - [ ] Add tests for self-signed certificate generation/setup helpers and minimal certificate verification behavior.
-    - [ ] Confirm the new tests fail for missing exports or behavior.
-- [ ] Task: Implement shared protocol foundations
-    - [ ] Add protocol-neutral request, response, routing, registration, lifecycle, timeout, stream, and error types in `@signicode/verser-common`.
-    - [ ] Add constants/helpers for HTTP/2 pseudo-header mapping where they are protocol-neutral enough to share.
-    - [ ] Add certificate setup and verification helpers that support the MVP self-signed development path and are extensible toward future CA validation.
-    - [ ] Export all shared foundations from `packages/verser-common/src/index.ts` without removing existing package-name exports.
-- [ ] Task: Validate Phase 1 narrowly
-    - [ ] Run `npm run build`.
-    - [ ] Run the focused test command covering shared foundations.
-    - [ ] Run `npm run lint` if shared code or tests changed formatting-sensitive areas.
-    - [ ] Record coverage status or why coverage cannot be measured precisely with the current Node test setup.
-    - [ ] Perform a phase-end deduplication check and record that reusable foundations live in `@signicode/verser-common`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations' (Protocol in workflow.md)
+- [x] Task: Review common-library reuse before implementation
+    - [x] Inspect `@signicode/verser-common` for reusable exports and record that the phase starts from scaffold-only common code.
+    - [x] Decide which protocol-neutral shapes belong in `@signicode/verser-common` before writing package-local implementations.
+- [x] Task: Write failing tests for shared protocol foundations
+    - [x] Add tests for guest/peer identifiers, routed domain registration metadata, request/response envelope shapes, lifecycle event names, and contextual error helpers.
+    - [x] Add tests for self-signed certificate generation/setup helpers and minimal certificate verification behavior.
+    - [x] Confirm the new tests fail for missing exports or behavior.
+- [x] Task: Implement shared protocol foundations
+    - [x] Add protocol-neutral request, response, routing, registration, lifecycle, timeout, stream, and error types in `@signicode/verser-common`.
+    - [x] Add constants/helpers for HTTP/2 pseudo-header mapping where they are protocol-neutral enough to share.
+    - [x] Add certificate setup and verification helpers that support the MVP self-signed development path and are extensible toward future CA validation.
+    - [x] Export all shared foundations from `packages/verser-common/src/index.ts` without removing existing package-name exports.
+- [x] Task: Validate Phase 1 narrowly
+    - [x] Run `npm run build`.
+    - [x] Run the focused test command covering shared foundations.
+    - [x] Run `npm run lint` if shared code or tests changed formatting-sensitive areas.
+    - [x] Record coverage status or why coverage cannot be measured precisely with the current Node test setup.
+    - [x] Perform a phase-end deduplication check and record that reusable foundations live in `@signicode/verser-common`.
+- [~] Task: Conductor - User Manual Verification 'Phase 1: Shared Protocol, Types, Errors, and Certificate Foundations' (Protocol in workflow.md)
+
+### Phase 1 Notes
+
+- Common-library reuse scan: `@signicode/verser-common` was scaffold-only at phase start, so protocol-neutral identifiers, envelopes, lifecycle names, errors, HTTP/2 pseudo-header helpers, and development TLS helpers were added there before Host/Guest/Broker package implementation.
+- TDD confirmation: `npm test` initially failed as expected because the new shared-foundation exports were missing.
+- Validation passed: `npm run build`, `node --test test/common-protocol.test.js`, `npm run lint`, and `npm run test:coverage`.
+- Coverage: `npm run test:coverage` reported `packages/verser-common/dist/index.js` at 100% line, 96.97% branch, and 100% function coverage for changed behavior.
+- Validation failure recovery: lint formatting and an outdated scaffold export assertion were session-introduced/in-scope and fixed; coverage below 95% branch for common was in-scope and fixed with additional branch tests.
+- Deduplication result: reusable foundations live in `@signicode/verser-common`; no repeated Host/Guest/Broker implementation exists yet.
 
 ## Phase 2: TLS HTTP/2 Host and Connection Registration
 
