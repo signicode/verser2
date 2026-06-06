@@ -135,7 +135,7 @@
     - [x] Run `npm run lint` if Guest code or tests changed formatting-sensitive areas.
     - [x] Record coverage status and any limitations.
     - [x] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Node Guest Server Attachment and Request Dispatch' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Node Guest Server Attachment and Request Dispatch' (Protocol in workflow.md)
 
 ### Phase 3 Validation Notes
 
@@ -145,6 +145,8 @@
 - Scope note: Phase 3 implements outbound Host registration and local request-listener/server dispatch via `dispatchRoutedRequest`; full Host-to-Guest control-stream routing remains for Phase 4.
 - Deduplication result: Guest reuses shared common lifecycle names, development TLS helpers, routed envelopes, and contextual errors; Node HTTP request/response adapter code remains runtime-specific in `@signicode/verser2-guest-node`.
 - PR review fixes: response body handling now preserves binary `Buffer` chunks and string encodings, synchronous `attach`/`end` methods are chainable, `attach(serverOrListener, domain?)` supports a single routed domain with the Guest id as the automatic default, and invalid Host registration JSON maps to a contextual protocol error with tests.
+- Manual verification completed with user approval to continue.
+- Phase 3 checkpoint commits: `ecfcb84`, `f8e3d1c`.
 
 ## Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency
 
