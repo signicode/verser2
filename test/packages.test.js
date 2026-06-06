@@ -37,15 +37,19 @@ test('@signicode/verser-common package exposes common foundations', () => {
   assert.equal(commonPackage.VERSER_COMMON_PACKAGE_NAME, '@signicode/verser-common');
 });
 
-test('@signicode/verser2-host package exposes initial host metadata', () => {
+test('@signicode/verser2-host package exposes Host API', () => {
   const packageManifest = readJson('packages/verser2-host/package.json');
   const hostPackage = require('../packages/verser2-host/dist/index.js');
 
   assert.equal(packageManifest.name, '@signicode/verser2-host');
   assert.equal(packageManifest.main, 'dist/index.js');
   assert.equal(packageManifest.types, 'dist/index.d.ts');
-  assert.deepEqual(Object.keys(hostPackage).sort(), ['VERSER2_HOST_PACKAGE_NAME']);
+  assert.deepEqual(Object.keys(hostPackage).sort(), [
+    'VERSER2_HOST_PACKAGE_NAME',
+    'createVerserHost',
+  ]);
   assert.equal(hostPackage.VERSER2_HOST_PACKAGE_NAME, '@signicode/verser2-host');
+  assert.equal(typeof hostPackage.createVerserHost, 'function');
 });
 
 test('@signicode/verser2-guest-node package exposes initial Node guest metadata', () => {
