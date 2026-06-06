@@ -108,29 +108,42 @@
 
 ## Phase 3: Node Guest Server Attachment and Request Dispatch
 
-- [ ] Task: Review common foundations before Guest implementation
-    - [ ] Confirm Guest uses shared protocol, lifecycle, certificate, stream, and error helpers.
-    - [ ] Record Guest-specific Node HTTP adapter behavior that should remain in `@signicode/verser2-guest-node`.
-- [ ] Task: Write failing Node Guest tests
-    - [ ] Add tests for connecting outbound to the Host over TLS HTTP/2.
-    - [ ] Add tests for attaching a normal `node:http` server or request listener without calling `listen()`.
-    - [ ] Add tests for dispatching routed requests into the local HTTP/1 handler.
-    - [ ] Add tests preserving method, path, headers, request body, status code, response headers, and response body.
-    - [ ] Add tests for lifecycle events and local handler failure mapping.
-    - [ ] Confirm the tests fail for missing Guest behavior.
-- [ ] Task: Implement minimal Node Guest API
-    - [ ] Implement Guest connection, registration, and close APIs in `@signicode/verser2-guest-node`.
-    - [ ] Bridge inbound routed HTTP/2 streams from the Host to the attached local Node HTTP/1 handler/server.
-    - [ ] Preserve request and response HTTP semantics for the MVP path.
-    - [ ] Surface lifecycle and error information for connect, disconnect, request handling failures, and close.
-    - [ ] Export the Guest API from `packages/verser2-guest-node/src/index.ts` while preserving existing exports.
-- [ ] Task: Validate Phase 3 narrowly
-    - [ ] Run `npm run build`.
-    - [ ] Run focused Guest tests.
-    - [ ] Run `npm run lint` if Guest code or tests changed formatting-sensitive areas.
-    - [ ] Record coverage status and any limitations.
-    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Node Guest Server Attachment and Request Dispatch' (Protocol in workflow.md)
+- [x] Task: Review common foundations before Guest implementation
+    - [x] Confirm Guest uses shared protocol, lifecycle, certificate, stream, and error helpers.
+    - [x] Record Guest-specific Node HTTP adapter behavior that should remain in `@signicode/verser2-guest-node`.
+- [x] Task: Write failing Node Guest tests
+    - [x] Add tests for connecting outbound to the Host over TLS HTTP/2.
+    - [x] Add tests for attaching a normal `node:http` server or request listener without calling `listen()`.
+    - [x] Add tests for dispatching routed requests into the local HTTP/1 handler.
+    - [x] Add tests preserving method, path, headers, request body, status code, response headers, and response body.
+    - [x] Add tests for lifecycle events and local handler failure mapping.
+    - [x] Confirm the tests fail for missing Guest behavior.
+
+### Phase 3 Notes
+
+- Common foundation scan: Guest should reuse shared lifecycle names, development TLS certificate setup, routed request/response envelopes, and contextual errors. The Node request-listener adapter is runtime-specific and remains in `@signicode/verser2-guest-node`.
+- Design check: @oracle recommended a Guest-opened long-lived control stream for future Host-to-Guest frames because Node server-side HTTP/2 cannot initiate normal request streams back to a client-initiated Guest session. Phase 3 focuses on Guest connection/registration and local dispatch adapter behavior; Phase 4 should connect Broker forwarding to the Guest control protocol.
+- [x] Task: Implement minimal Node Guest API
+    - [x] Implement Guest connection, registration, and close APIs in `@signicode/verser2-guest-node`.
+    - [x] Bridge inbound routed HTTP/2 streams from the Host to the attached local Node HTTP/1 handler/server.
+    - [x] Preserve request and response HTTP semantics for the MVP path.
+    - [x] Surface lifecycle and error information for connect, disconnect, request handling failures, and close.
+    - [x] Export the Guest API from `packages/verser2-guest-node/src/index.ts` while preserving existing exports.
+- [x] Task: Validate Phase 3 narrowly
+    - [x] Run `npm run build`.
+    - [x] Run focused Guest tests.
+    - [x] Run `npm run lint` if Guest code or tests changed formatting-sensitive areas.
+    - [x] Record coverage status and any limitations.
+    - [x] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [~] Task: Conductor - User Manual Verification 'Phase 3: Node Guest Server Attachment and Request Dispatch' (Protocol in workflow.md)
+
+### Phase 3 Validation Notes
+
+- TDD confirmation: `npm run build && node --test test/guest-node.test.js` initially failed because `createVerserNodeGuest` was missing. The first failing run exposed a test-cleanup issue that left a Host open; the test was corrected to cleanup even while API exports were missing.
+- Validation passed: `npm run build`, `node --test test/guest-node.test.js`, `npm run lint`, and `npm run test:coverage`.
+- Coverage: `npm run test:coverage` reported all Guest behavior tests at 100% and all files at 98.18% line coverage. The source-mapped package report for `packages/verser2-guest-node/dist/index.js` remained below 95% on generated/type-adjacent lines and event/error branches that are not all practical to force in Phase 3.
+- Scope note: Phase 3 implements outbound Host registration and local request-listener/server dispatch via `dispatchRoutedRequest`; full Host-to-Guest control-stream routing remains for Phase 4.
+- Deduplication result: Guest reuses shared common lifecycle names, development TLS helpers, routed envelopes, and contextual errors; Node HTTP request/response adapter code remains runtime-specific in `@signicode/verser2-guest-node`.
 
 ## Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency
 

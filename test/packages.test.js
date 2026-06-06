@@ -52,13 +52,19 @@ test('@signicode/verser2-host package exposes Host API', () => {
   assert.equal(typeof hostPackage.createVerserHost, 'function');
 });
 
-test('@signicode/verser2-guest-node package exposes initial Node guest metadata', () => {
+test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   const packageManifest = readJson('packages/verser2-guest-node/package.json');
   const guestPackage = require('../packages/verser2-guest-node/dist/index.js');
 
   assert.equal(packageManifest.name, '@signicode/verser2-guest-node');
   assert.equal(packageManifest.main, 'dist/index.js');
   assert.equal(packageManifest.types, 'dist/index.d.ts');
-  assert.deepEqual(Object.keys(guestPackage).sort(), ['VERSER2_GUEST_NODE_PACKAGE_NAME']);
+  assert.deepEqual(Object.keys(guestPackage).sort(), [
+    'MinimalIncomingMessage',
+    'MinimalServerResponse',
+    'VERSER2_GUEST_NODE_PACKAGE_NAME',
+    'createVerserNodeGuest',
+  ]);
   assert.equal(guestPackage.VERSER2_GUEST_NODE_PACKAGE_NAME, '@signicode/verser2-guest-node');
+  assert.equal(typeof guestPackage.createVerserNodeGuest, 'function');
 });
