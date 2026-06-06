@@ -144,6 +144,7 @@
 - Coverage: `npm run test:coverage` reported all Guest behavior tests at 100% and all files at 98.18% line coverage. The source-mapped package report for `packages/verser2-guest-node/dist/index.js` remained below 95% on generated/type-adjacent lines and event/error branches that are not all practical to force in Phase 3.
 - Scope note: Phase 3 implements outbound Host registration and local request-listener/server dispatch via `dispatchRoutedRequest`; full Host-to-Guest control-stream routing remains for Phase 4.
 - Deduplication result: Guest reuses shared common lifecycle names, development TLS helpers, routed envelopes, and contextual errors; Node HTTP request/response adapter code remains runtime-specific in `@signicode/verser2-guest-node`.
+- PR review fixes: response body handling now preserves binary `Buffer` chunks and string encodings, synchronous `attach`/`end` methods are chainable, `attach(serverOrListener, domain?)` supports a single routed domain with the Guest id as the automatic default, and invalid Host registration JSON maps to a contextual protocol error with tests.
 
 ## Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency
 
