@@ -10,8 +10,8 @@ This repository is an npm workspace monorepo using `packages/*`.
 
 Initial TypeScript package scaffolds:
 
-- `packages/verser2-host`
-- `packages/verser2-guest-node`
+- `@signicode/verser2-host` in `packages/verser2-host`
+- `@signicode/verser2-guest-node` in `packages/verser2-guest-node`
 
 Install dependencies:
 

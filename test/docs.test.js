@@ -13,6 +13,8 @@ test('README documents workspace setup commands', () => {
   assert.match(readme, /npm run build/);
   assert.match(readme, /npm test/);
   assert.match(readme, /npm run lint/);
+  assert.match(readme, /@signicode\/verser2-host/);
   assert.match(readme, /packages\/verser2-host/);
+  assert.match(readme, /@signicode\/verser2-guest-node/);
   assert.match(readme, /packages\/verser2-guest-node/);
 });

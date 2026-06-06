@@ -25,10 +25,10 @@ Phase 1 validation notes:
 
 ## Phase 2: Initial Packages
 
-- [x] Task: Create `verser2-host` package scaffold
+- [x] Task: Create `@signicode/verser2-host` package scaffold
     - [x] Write tests for the initial host package export.
     - [x] Add package manifest, source entrypoint, and build configuration for `packages/verser2-host`.
-- [x] Task: Create `verser2-guest-node` package scaffold
+- [x] Task: Create `@signicode/verser2-guest-node` package scaffold
     - [x] Write tests for the initial Node guest package export.
     - [x] Add package manifest, source entrypoint, and build configuration for `packages/verser2-guest-node`.
 - [x] Task: Validate cross-package build and test behavior

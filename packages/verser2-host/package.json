@@ -1,5 +1,5 @@
 {
-  "name": "verser2-host",
+  "name": "@signicode/verser2-host",
   "version": "0.0.0",
   "private": true,
   "description": "Initial TypeScript scaffold for the Verser2 Host package.",

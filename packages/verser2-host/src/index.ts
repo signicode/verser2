@@ -1,1 +1,1 @@
-export const VERSER2_HOST_PACKAGE_NAME = 'verser2-host';
+export const VERSER2_HOST_PACKAGE_NAME = '@signicode/verser2-host';

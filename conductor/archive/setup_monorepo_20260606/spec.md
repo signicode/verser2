@@ -9,7 +9,7 @@ Set up the initial npm workspace monorepo for `verser2` so future Host and Guest
 - Create a root npm workspace configured for `packages/*`.
 - Add strict TypeScript configuration targeting ES2019 CommonJS with declaration output.
 - Add Biome configuration for linting and formatting.
-- Add initial package directories for `verser2-host` and `verser2-guest-node`.
+- Add initial package directories for `@signicode/verser2-host` and `@signicode/verser2-guest-node`.
 - Add minimal package manifests and source entrypoints that compile.
 - Add a test setup and smoke tests proving the initial packages are wired correctly.
 - Ensure `npm run build`, `npm run test`, and `npm run lint` are available.

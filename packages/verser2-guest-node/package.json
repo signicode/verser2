@@ -1,5 +1,5 @@
 {
-  "name": "verser2-guest-node",
+  "name": "@signicode/verser2-guest-node",
   "version": "0.0.0",
   "private": true,
   "description": "Initial TypeScript scaffold for the Verser2 Node Guest package.",
