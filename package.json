@@ -1,0 +1,20 @@
+{
+  "name": "verser2",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reverse HTTP connectivity packages for exposing HTTP servers from client-side processes.",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "tsc -b packages/*",
+    "test": "node --test test/*.test.js",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

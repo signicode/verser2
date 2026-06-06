@@ -2,17 +2,25 @@
 
 ## Phase 1: Root Workspace and Tooling
 
-- [ ] Task: Define root npm workspace configuration
-    - [ ] Write tests or validation checks for expected workspace package discovery where practical.
-    - [ ] Create root `package.json` with `packages/*` workspaces and core scripts.
-- [ ] Task: Add TypeScript and Biome configuration
-    - [ ] Write or update validation expectations for build and lint commands.
-    - [ ] Add strict CommonJS TypeScript configuration targeting ES2019 with declaration output.
-    - [ ] Add Biome configuration aligned with the TypeScript style guide.
-- [ ] Task: Configure test tooling
-    - [ ] Write a minimal failing smoke test target before implementation.
-    - [ ] Add the test runner configuration and root `npm run test` script.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Root Workspace and Tooling' (Protocol in workflow.md)
+- [x] Task: Define root npm workspace configuration
+    - [x] Write tests or validation checks for expected workspace package discovery where practical.
+    - [x] Create root `package.json` with `packages/*` workspaces and core scripts.
+- [x] Task: Add TypeScript and Biome configuration
+    - [x] Write or update validation expectations for build and lint commands.
+    - [x] Add strict CommonJS TypeScript configuration targeting ES2019 with declaration output.
+    - [x] Add Biome configuration aligned with the TypeScript style guide.
+- [x] Task: Configure test tooling
+    - [x] Write a minimal failing smoke test target before implementation.
+    - [x] Add the test runner configuration and root `npm run test` script.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Root Workspace and Tooling' (Protocol in workflow.md)
+
+Phase 1 validation notes:
+
+- Confirmed `npm test` failed before implementation because `package.json` did not exist.
+- `npm test` passes after adding root workspace and configuration smoke tests.
+- `npm run lint` initially failed on formatting for new files and generated `conductor/setup_state.json`; fixed new-file formatting and excluded the generated setup state file from Biome.
+- `npm run lint` passes after fixes.
+- Coverage is not line-measured for Phase 1 because changed behavior is configuration/script wiring; smoke tests cover the measurable expectations.
 
 ## Phase 2: Initial Packages
 
