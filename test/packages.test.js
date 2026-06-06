@@ -63,8 +63,10 @@ test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
     'MinimalIncomingMessage',
     'MinimalServerResponse',
     'VERSER2_GUEST_NODE_PACKAGE_NAME',
+    'createVerserBroker',
     'createVerserNodeGuest',
   ]);
   assert.equal(guestPackage.VERSER2_GUEST_NODE_PACKAGE_NAME, '@signicode/verser2-guest-node');
+  assert.equal(typeof guestPackage.createVerserBroker, 'function');
   assert.equal(typeof guestPackage.createVerserNodeGuest, 'function');
 });
