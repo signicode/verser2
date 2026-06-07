@@ -11,3 +11,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: Leased HTTP/2 streams for routed bodies**
 *Link: [./archive/leased_http2_streams_for_routed_bodies_20260607/](./archive/leased_http2_streams_for_routed_bodies_20260607/)*
+
+---
+
+- [ ] **Track: Implement the Undici dispatcher and fetch helper for fetch compatibility in the Node guest, with reusable JS common guest foundations for future browser compatibility.**
+*Link: [./tracks/undici_dispatcher_fetch_compatibility_20260607/](./tracks/undici_dispatcher_fetch_compatibility_20260607/)*

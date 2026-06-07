@@ -1,0 +1,8 @@
+{
+  "track_id": "undici_dispatcher_fetch_compatibility_20260607",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-06-07T19:19:30Z",
+  "updated_at": "2026-06-07T19:19:30Z",
+  "description": "Implement the Undici dispatcher and fetch helper for fetch compatibility in the Node guest, with reusable JS common guest foundations for future browser compatibility."
+}
