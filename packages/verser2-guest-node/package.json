@@ -6,7 +6,9 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@signicode/verser-common": "0.0.0"
+    "@signicode/verser-common": "0.0.0",
+    "@signicode/verser2-guest-js-common": "0.0.0",
+    "undici": "^6.26.0"
   },
   "scripts": {
     "build": "tsc -b"

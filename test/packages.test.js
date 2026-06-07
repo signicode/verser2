@@ -68,6 +68,27 @@ test('@signicode/verser2-host package exposes Host API', () => {
   assert.equal(typeof hostPackage.createVerserHost, 'function');
 });
 
+test('@signicode/verser2-guest-js-common package exposes JS Guest foundations', () => {
+  const packageManifest = readJson('packages/verser2-guest-js-common/package.json');
+  const jsCommonPackage = require('../packages/verser2-guest-js-common/dist/index.js');
+
+  assert.equal(packageManifest.name, '@signicode/verser2-guest-js-common');
+  assert.equal(packageManifest.main, 'dist/index.js');
+  assert.equal(packageManifest.types, 'dist/index.d.ts');
+  assert.deepEqual(Object.keys(jsCommonPackage).sort(), [
+    'AbstractVerserFetchDispatcher',
+    'VERSER2_GUEST_JS_COMMON_PACKAGE_NAME',
+    'createCommonBrokerRequest',
+    'flattenHeaderValue',
+    'normalizeHeaders',
+    'resolveRouteForHostname',
+  ]);
+  assert.equal(
+    jsCommonPackage.VERSER2_GUEST_JS_COMMON_PACKAGE_NAME,
+    '@signicode/verser2-guest-js-common',
+  );
+});
+
 test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   const packageManifest = readJson('packages/verser2-guest-node/package.json');
   const guestPackage = require('../packages/verser2-guest-node/dist/index.js');
@@ -85,6 +106,13 @@ test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   assert.equal(guestPackage.VERSER2_GUEST_NODE_PACKAGE_NAME, '@signicode/verser2-guest-node');
   assert.equal(typeof guestPackage.createVerserBroker, 'function');
   assert.equal(typeof guestPackage.createVerserNodeGuest, 'function');
+
+  const broker = guestPackage.createVerserBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'package-test-broker',
+  });
+  assert.equal(typeof broker.createDispatcher, 'function');
+  assert.equal(typeof broker.createFetch, 'function');
 });
 
 test('routed body transport no longer contains bodyBase64 control-frame paths', () => {

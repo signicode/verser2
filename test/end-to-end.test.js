@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
+const { fetch } = require('../packages/verser2-guest-node/node_modules/undici');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
 const {
@@ -145,6 +146,71 @@ test('leased routing preserves binary Broker bodies and Agent compatibility end-
     if (agent !== undefined) {
       agent.destroy();
     }
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Dispatcher fetch routes through Host, Guest, and Broker end-to-end', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e-dispatcher' });
+  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-e2e-dispatcher' });
+  guest.attach((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on('end', () => {
+      response.writeHead(209, { 'x-e2e-dispatcher': 'verser' });
+      response.end(`${request.method} ${request.url} ${Buffer.concat(chunks).toString('utf8')}`);
+    });
+  }, 'dispatcher-e2e.local.test');
+
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('dispatcher-e2e.local.test');
+
+    const response = await fetch('http://dispatcher-e2e.local.test/fetch?mode=e2e', {
+      method: 'POST',
+      body: 'payload',
+      dispatcher: broker.createDispatcher(),
+    });
+
+    assert.equal(response.status, 209);
+    assert.equal(response.headers.get('x-e2e-dispatcher'), 'verser');
+    assert.equal(await response.text(), 'POST /fetch?mode=e2e payload');
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('createFetch helper routes through Host, Guest, and Broker end-to-end', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e-create-fetch' });
+  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-e2e-create-fetch' });
+  guest.attach((_request, response) => {
+    response.writeHead(203, { 'content-type': 'text/plain' });
+    response.end('create-fetch-e2e');
+  }, 'create-fetch-e2e.local.test');
+
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('create-fetch-e2e.local.test');
+
+    const routedFetch = broker.createFetch();
+    const response = await routedFetch('http://create-fetch-e2e.local.test/helper');
+
+    assert.equal(response.status, 203);
+    assert.equal(response.headers.get('content-type'), 'text/plain');
+    assert.equal(await response.text(), 'create-fetch-e2e');
+  } finally {
     await broker.close('test-complete');
     await guest.close('test-complete');
     await host.close('test-complete');
