@@ -22,6 +22,9 @@
       "path": "./packages/verser-common"
     },
     {
+      "path": "./packages/verser2-guest-js-common"
+    },
+    {
       "path": "./packages/verser2-host"
     },
     {

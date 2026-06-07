@@ -21,6 +21,11 @@ import {
   readNdjsonLines,
   validateVerserHeaders,
 } from '@signicode/verser-common';
+import {
+  normalizeHeaders as normalizeCommonHeaders,
+  resolveRouteForHostname,
+} from '@signicode/verser2-guest-js-common';
+import { Dispatcher, fetch as undiciFetch } from 'undici';
 
 export const VERSER2_GUEST_NODE_PACKAGE_NAME = '@signicode/verser2-guest-node';
 
@@ -74,6 +79,8 @@ export interface VerserBroker {
   connect(): Promise<void>;
   close(reason?: string): Promise<void>;
   createAgent(): http.Agent;
+  createDispatcher(): Dispatcher;
+  createFetch(): typeof undiciFetch;
   getRoutes(): { targetId: string; domain: string }[];
   waitForRoute(domain: string): Promise<void>;
   request(request: VerserBrokerRequest): Promise<VerserBrokerResponse>;
@@ -665,6 +672,20 @@ class Http2VerserBroker implements VerserBroker {
     return new VerserBrokerAgent(this);
   }
 
+  public createDispatcher(): Dispatcher {
+    return new VerserBrokerDispatcher(this);
+  }
+
+  public createFetch(): typeof undiciFetch {
+    const dispatcher = this.createDispatcher();
+    return function verserFetch(input, init) {
+      return undiciFetch(input, {
+        ...init,
+        dispatcher: init?.dispatcher ?? dispatcher,
+      });
+    } satisfies typeof undiciFetch;
+  }
+
   public waitForRoute(domain: string): Promise<void> {
     if (this.routes.some((route) => route.domain === domain)) {
       return Promise.resolve();
@@ -767,6 +788,245 @@ class Http2VerserBroker implements VerserBroker {
   }
 
   private readonly frameEmitter = new EventEmitter();
+}
+
+class VerserBrokerDispatcher extends Dispatcher {
+  public constructor(private readonly nodeBroker: Http2VerserBroker) {
+    super();
+  }
+
+  public override dispatch(
+    options: Dispatcher.DispatchOptions,
+    handler: Dispatcher.DispatchHandlers,
+  ): boolean {
+    const controller = new VerserDispatchController(handler);
+    handler.onConnect?.((error?: Error) => {
+      controller.abort(error ?? new Error('Verser Dispatcher request aborted'));
+    });
+
+    if (options.upgrade !== undefined && options.upgrade !== null && options.upgrade !== false) {
+      process.nextTick(() => {
+        controller.fail(new Error('Verser Dispatcher does not support upgrade requests'));
+      });
+      return true;
+    }
+
+    this.dispatchAsync(options, handler, controller).catch((error: unknown) => {
+      controller.fail(error instanceof Error ? error : new Error(String(error)));
+    });
+    return true;
+  }
+
+  private async dispatchAsync(
+    options: Dispatcher.DispatchOptions,
+    handler: Dispatcher.DispatchHandlers,
+    controller: VerserDispatchController,
+  ): Promise<void> {
+    const origin = new URL(String(options.origin ?? 'http://localhost'));
+    const requestPath = appendQueryString(options.path, options.query);
+    const requestUrl = new URL(requestPath, origin);
+    const route = resolveRouteForHostname(this.nodeBroker.getRoutes(), requestUrl.hostname);
+    if (route === undefined) {
+      throw new Error(`No Verser route advertised for host ${requestUrl.hostname}`);
+    }
+
+    const body = toBrokerRequestBody(options.body ?? null, controller);
+    const response = await this.nodeBroker.request({
+      targetId: route.targetId,
+      method: options.method,
+      path: `${requestUrl.pathname}${requestUrl.search}`,
+      headers: normalizeCommonHeaders(options.headers ?? undefined),
+      body,
+    });
+    if (controller.aborted) {
+      response.body.destroy(controller.reason ?? undefined);
+      return;
+    }
+
+    controller.attachResponseBody(response.body);
+    response.body.pause();
+    controller.rawHeaders = toRawHeaderList(response.headers);
+    handler.onResponseStarted?.();
+    handler.onHeaders?.(
+      response.statusCode,
+      controller.rawHeaders,
+      () => controller.resume(),
+      http.STATUS_CODES[response.statusCode] ?? '',
+    );
+    response.body.on('data', (chunk: Buffer | string) => {
+      if (controller.aborted) {
+        return;
+      }
+      const shouldContinue = handler.onData?.(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (shouldContinue === false) {
+        controller.pause();
+      }
+    });
+    response.body.once('end', () => {
+      if (!controller.aborted) {
+        handler.onComplete?.([]);
+      }
+    });
+    response.body.once('error', (error) => controller.fail(error));
+  }
+}
+
+class VerserDispatchController {
+  public rawHeaders?: Buffer[] | string[] | http.IncomingHttpHeaders | null;
+
+  public rawTrailers?: Buffer[] | string[] | http.IncomingHttpHeaders | null;
+
+  private responseBody?: Readable;
+
+  private abortedState = false;
+
+  private pausedState = false;
+
+  private abortReason: Error | null = null;
+
+  private errorEmitted = false;
+
+  private totalBytesSent = 0;
+
+  public constructor(private readonly handler: Dispatcher.DispatchHandlers) {}
+
+  public get aborted(): boolean {
+    return this.abortedState;
+  }
+
+  public get paused(): boolean {
+    return this.pausedState;
+  }
+
+  public get reason(): Error | null {
+    return this.abortReason;
+  }
+
+  public attachResponseBody(body: Readable): void {
+    this.responseBody = body;
+    if (this.pausedState) {
+      body.pause();
+    }
+  }
+
+  public abort(reason: Error): void {
+    if (this.abortedState) {
+      return;
+    }
+    this.abortedState = true;
+    this.abortReason = reason;
+    this.responseBody?.destroy(reason);
+    this.fail(reason);
+  }
+
+  public pause(): void {
+    this.pausedState = true;
+    this.responseBody?.pause();
+  }
+
+  public resume(): void {
+    this.pausedState = false;
+    this.responseBody?.resume();
+  }
+
+  public fail(error: Error): void {
+    if (this.errorEmitted) {
+      return;
+    }
+    this.errorEmitted = true;
+    this.handler.onError?.(error);
+  }
+
+  public emitBodySent(chunk: Buffer): void {
+    this.totalBytesSent += chunk.byteLength;
+    this.handler.onBodySent?.(chunk.byteLength, this.totalBytesSent);
+  }
+
+  public emitRequestSent(): void {
+    // Undici 6 has no request-sent callback; body progress is reported through onBodySent.
+  }
+}
+
+function appendQueryString(
+  path: string,
+  query: Dispatcher.DispatchOptions['query'] | undefined,
+): string {
+  if (query === undefined || Object.keys(query).length === 0) {
+    return path;
+  }
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        searchParams.append(key, String(entry));
+      }
+      continue;
+    }
+    searchParams.append(key, String(value));
+  }
+  const separator = path.includes('?') ? '&' : '?';
+  const queryString = searchParams.toString();
+  return queryString.length === 0 ? path : `${path}${separator}${queryString}`;
+}
+
+function toBrokerRequestBody(
+  body: unknown,
+  controller: VerserDispatchController,
+): readonly Buffer[] | Readable | undefined {
+  if (body === null) {
+    return undefined;
+  }
+  if (typeof body === 'string') {
+    const buffer = Buffer.from(body);
+    controller.emitBodySent(buffer);
+    controller.emitRequestSent();
+    return [buffer];
+  }
+  if (Buffer.isBuffer(body)) {
+    controller.emitBodySent(body);
+    controller.emitRequestSent();
+    return [body];
+  }
+  if (body instanceof Uint8Array) {
+    const buffer = Buffer.from(body);
+    controller.emitBodySent(buffer);
+    controller.emitRequestSent();
+    return [buffer];
+  }
+  if (body instanceof Readable) {
+    body.on('data', (chunk: Buffer | string) => {
+      controller.emitBodySent(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    body.once('end', () => controller.emitRequestSent());
+    return body;
+  }
+  if (isIterableBody(body) || isAsyncIterableBody(body)) {
+    const stream = Readable.from(body);
+    stream.on('data', (chunk: Buffer | string | Uint8Array) => {
+      controller.emitBodySent(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    stream.once('end', () => controller.emitRequestSent());
+    return stream;
+  }
+  throw new Error('Verser Dispatcher does not support this request body type');
+}
+
+function toRawHeaderList(headers: Record<string, string>): Buffer[] {
+  return Object.entries(headers).flatMap(([name, value]) => [
+    Buffer.from(name),
+    Buffer.from(value),
+  ]);
+}
+
+function isIterableBody(value: unknown): value is Iterable<unknown> {
+  return value !== null && typeof value === 'object' && Symbol.iterator in value;
+}
+
+function isAsyncIterableBody(value: unknown): value is AsyncIterable<unknown> {
+  return value !== null && typeof value === 'object' && Symbol.asyncIterator in value;
 }
 
 class VerserBrokerAgent extends http.Agent {
