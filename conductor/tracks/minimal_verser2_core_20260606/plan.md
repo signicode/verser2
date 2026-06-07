@@ -233,6 +233,7 @@
 - Compatibility limits: the Agent MVP supports plain `http.request`/`http.get` style calls for advertised domains, no real DNS lookup for matching routes, and explicit rejection for non-advertised hosts. Keep-alive, HTTPS, advanced socket behavior, trailers, upgrades, and full Agent pooling semantics are not supported in this phase.
 - Deduplication result: Agent integration remains package-specific in `@signicode/verser2-guest-node`; it reuses the Broker API and shared contextual errors rather than adding new common abstractions.
 - Manual verification completed with user approval.
+- Phase 5 checkpoint commit: `b49afc7`.
 
 ## Phase 6: End-to-End Validation, Documentation, and Final Review
 
