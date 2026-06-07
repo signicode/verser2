@@ -133,3 +133,37 @@ test('Broker uses one session with separate concurrent routed request streams', 
     await host.close('test-complete');
   }
 });
+
+test('Broker receives route retraction after Guest disconnect', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-retraction-1' });
+  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-retraction-1' });
+  guest.attach((_request, response) => response.end('ok'), 'retraction.local.test');
+
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('retraction.local.test');
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-retraction-1', domain: 'retraction.local.test' },
+    ]);
+
+    await guest.close('test-disconnect');
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('route retraction timed out')), 5000);
+      const check = setInterval(() => {
+        if (broker.getRoutes().length === 0) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});

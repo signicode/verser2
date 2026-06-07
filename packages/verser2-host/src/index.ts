@@ -391,16 +391,22 @@ class NodeHttp2VerserHost implements VerserHost {
   }
 
   private removeSessionPeers(session: http2.ServerHttp2Session): void {
+    let shouldAdvertiseRoutes = false;
     for (const [peerId, peer] of this.peers) {
       if (peer.session === session) {
         this.peers.delete(peerId);
         this.guestRegistrations.delete(peerId);
+        shouldAdvertiseRoutes = shouldAdvertiseRoutes || peer.role === 'guest';
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.disconnected,
           peerId,
           role: peer.role,
         });
       }
+    }
+
+    if (shouldAdvertiseRoutes) {
+      this.advertiseRoutes();
     }
   }
 
