@@ -152,7 +152,8 @@ const brokerResponse = await broker.request({
   path: '/health',
 });
 
-console.log(brokerResponse.statusCode, brokerResponse.body.toString('utf8'));
+console.log(brokerResponse.statusCode);
+brokerResponse.body.pipe(process.stdout);
 
 const agent = broker.createAgent();
 http.get('http://client-a.local.test/health', { agent }, (response) => {
@@ -166,7 +167,10 @@ http.get('http://client-a.local.test/health', { agent }, (response) => {
 - The Broker and Guest use that development certificate as a pinned CA for the MVP path.
 - HTTP/3 and QUIC are explicitly not implemented in the current TypeScript MVP.
 - A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
-- The current Guest leg uses a Guest-opened control stream for routed request/response framing. A future leased-stream design is documented under the active Conductor track to replace body transfer over control frames with raw leased HTTP/2 streams.
+- The Guest maintains a configurable pool of one-use leased HTTP/2 streams. Routed request and response bodies are transferred as raw octets over an assigned lease, not as base64 NDJSON control frames.
+- Guest control streams remain for coordination such as route advertisements.
+- Node Guest lease pool options include `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and `maxMetadataBytes`.
+- Successful `broker.request()` calls expose `body` as a Node.js `Readable` stream. Error response bodies may be read internally so routed errors include actionable diagnostics.
 - The Agent MVP supports plain `http.request`/`http.get` for Host-advertised domains only. Non-advertised hostnames are rejected instead of falling back to DNS.
 - Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, and advanced socket features are outside the current MVP subset.
 
@@ -288,11 +292,11 @@ await Promise.all([
 ]);
 ```
 
-Each Broker-to-Host request maps to a separate HTTP/2 stream in the current MVP. The current Guest leg uses an internal Guest-opened control stream; a future leased-stream design is documented in Conductor to move routed bodies onto one-use raw HTTP/2 streams.
+Each Broker-to-Host request maps to a separate HTTP/2 stream in the current MVP. The Guest leg uses an assigned one-use Guest-opened lease stream for raw routed request and response body bytes, while the Guest control stream remains available for route advertisements and coordination.
 
 ## Streaming Status
 
-`verser2` should support streaming request and response bodies. The current MVP preserves binary bodies for basic routed requests but buffers some request/response data internally and uses MVP control framing on the Guest leg. Full backpressure-aware streaming is future work captured by the leased-stream handoff in the active Conductor track.
+`verser2` supports streaming request and response bodies on the leased HTTP/2 routed path. Successful `broker.request()` calls return a response body `Readable`, and request bodies may be provided as a `Readable` or as explicit chunks. Error response bodies may still be read internally to produce actionable routed error diagnostics.
 
 ```ts
 const response = await broker.request({

@@ -14,6 +14,64 @@ function once(emitter, eventName) {
   });
 }
 
+async function createLeaseTrackingHost() {
+  const certificate = createDevelopmentTlsCertificate();
+  const server = http2.createSecureServer({ cert: certificate.cert, key: certificate.key });
+  const leases = [];
+
+  server.on('stream', (stream, headers) => {
+    const path = String(headers[':path'] ?? '');
+    if (path === '/verser/register') {
+      stream.respond({ ':status': 200, 'content-type': 'application/json' });
+      stream.end(JSON.stringify({ status: 'registered', routes: [] }));
+      return;
+    }
+
+    if (path === '/verser/guest/control') {
+      stream.respond({ ':status': 200, 'content-type': 'application/x-ndjson' });
+      return;
+    }
+
+    if (path === '/verser/guest/lease') {
+      const lease = {
+        stream,
+        peerId: String(headers['x-verser-peer-id'] ?? ''),
+        leaseId: String(headers['x-verser-lease-id'] ?? ''),
+      };
+      leases.push(lease);
+      stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
+      return;
+    }
+
+    stream.respond({ ':status': 404 });
+    stream.end();
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  return {
+    url: `https://localhost:${address.port}`,
+    leases,
+    async close() {
+      for (const lease of leases) {
+        lease.stream.close();
+      }
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+async function waitForLeaseCount(leases, expectedCount) {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (leases.length >= expectedCount) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${expectedCount} leases; saw ${leases.length}`);
+}
+
 test('Node Guest connects outbound to Host and registers routed domains', async () => {
   const host = createVerserHost({ port: 0 });
   await host.start();
@@ -311,4 +369,73 @@ test('Node Guest maps local handler failures to contextual errors and lifecycle 
     events.map((event) => event.name),
     ['request-started', 'error'],
   );
+});
+
+test('Node Guest opens leases until minWaitingStreams is satisfied', async () => {
+  const host = await createLeaseTrackingHost();
+  const guest = createVerserNodeGuest({
+    hostUrl: host.url,
+    guestId: 'guest-lease-min',
+    minWaitingStreams: 2,
+    maxOpenStreams: 4,
+  });
+
+  try {
+    await guest.connect();
+    await waitForLeaseCount(host.leases, 2);
+
+    assert.equal(host.leases.length, 2);
+    assert.deepEqual(
+      host.leases.map((lease) => lease.peerId),
+      ['guest-lease-min', 'guest-lease-min'],
+    );
+    assert.equal(new Set(host.leases.map((lease) => lease.leaseId)).size, 2);
+  } finally {
+    await guest.close('test-complete');
+    await host.close();
+  }
+});
+
+test('Node Guest never exceeds maxOpenStreams while opening leases', async () => {
+  const host = await createLeaseTrackingHost();
+  const guest = createVerserNodeGuest({
+    hostUrl: host.url,
+    guestId: 'guest-lease-max',
+    minWaitingStreams: 4,
+    maxOpenStreams: 2,
+  });
+
+  try {
+    await guest.connect();
+    await waitForLeaseCount(host.leases, 2);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(host.leases.length, 2);
+  } finally {
+    await guest.close('test-complete');
+    await host.close();
+  }
+});
+
+test('Node Guest replenishes leases after an idle lease closes', async () => {
+  const host = await createLeaseTrackingHost();
+  const guest = createVerserNodeGuest({
+    hostUrl: host.url,
+    guestId: 'guest-lease-replenish',
+    minWaitingStreams: 2,
+    maxOpenStreams: 2,
+  });
+
+  try {
+    await guest.connect();
+    await waitForLeaseCount(host.leases, 2);
+
+    host.leases[0].stream.close();
+    await waitForLeaseCount(host.leases, 3);
+
+    assert.equal(host.leases.length, 3);
+  } finally {
+    await guest.close('test-complete');
+    await host.close();
+  }
 });

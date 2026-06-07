@@ -9,6 +9,10 @@ function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(rootDirectory, relativePath), 'utf8'));
 }
 
+function readText(relativePath) {
+  return fs.readFileSync(path.join(rootDirectory, relativePath), 'utf8');
+}
+
 test('@signicode/verser-common package exposes common foundations', () => {
   const packageManifest = readJson('packages/verser-common/package.json');
   const commonPackage = require('../packages/verser-common/dist/index.js');
@@ -17,7 +21,11 @@ test('@signicode/verser-common package exposes common foundations', () => {
   assert.equal(packageManifest.main, 'dist/index.js');
   assert.equal(packageManifest.types, 'dist/index.d.ts');
   assert.deepEqual(Object.keys(commonPackage).sort(), [
+    'DEFAULT_MAX_ENVELOPE_METADATA_BYTES',
     'VERSER_COMMON_PACKAGE_NAME',
+    'VERSER_ENVELOPE_PREFIX_BYTES',
+    'VERSER_ENVELOPE_TYPES',
+    'VERSER_ENVELOPE_VERSION',
     'VERSER_LIFECYCLE_EVENTS',
     'VerserError',
     'createDevelopmentTlsCertificate',
@@ -26,12 +34,20 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'createRoutedDomainRegistration',
     'createRoutedRequestEnvelope',
     'createRoutedResponseEnvelope',
+    'createVerserEnvelopeParser',
     'createVerserError',
+    'encodeVerserEnvelope',
     'fromHttp2RequestHeaders',
     'fromHttp2ResponseHeaders',
     'getCertificateFingerprint',
+    'readExactly',
+    'readLeaseRequestMetadataFromStream',
+    'readLeaseResponseMetadataFromStream',
+    'readNdjsonLines',
+    'readVerserEnvelopeFromStream',
     'toHttp2RequestHeaders',
     'toHttp2ResponseHeaders',
+    'validateVerserHeaders',
     'verifyPinnedCertificate',
   ]);
   assert.equal(commonPackage.VERSER_COMMON_PACKAGE_NAME, '@signicode/verser-common');
@@ -69,4 +85,18 @@ test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   assert.equal(guestPackage.VERSER2_GUEST_NODE_PACKAGE_NAME, '@signicode/verser2-guest-node');
   assert.equal(typeof guestPackage.createVerserBroker, 'function');
   assert.equal(typeof guestPackage.createVerserNodeGuest, 'function');
+});
+
+test('routed body transport no longer contains bodyBase64 control-frame paths', () => {
+  const routedSources = [
+    'packages/verser2-host/src/index.ts',
+    'packages/verser2-guest-node/src/index.ts',
+  ];
+
+  for (const sourcePath of routedSources) {
+    assert.doesNotMatch(
+      readText(sourcePath),
+      /bodyBase64|response-body|response-start|response-end/,
+    );
+  }
 });

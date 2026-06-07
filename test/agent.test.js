@@ -30,6 +30,13 @@ function requestWithAgent(url, options, body) {
       clearTimeout(timeout);
       reject(error);
     });
+    if (Array.isArray(body)) {
+      for (const chunk of body) {
+        request.write(chunk);
+      }
+      request.end();
+      return;
+    }
     if (body !== undefined) {
       request.end(body);
       return;
@@ -121,5 +128,153 @@ test('Broker Agent routes advertised domains without DNS resolution and rejects 
     await withTimeout(broker.close('test-complete'), 'broker-agent-2 close');
     await withTimeout(guest.close('test-complete'), 'guest-agent-2 close');
     await withTimeout(host.close('test-complete'), 'host-agent-2 close');
+  }
+});
+
+test('Broker Agent forwards chunked request bodies through leased routing', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-chunked-1' });
+  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-chunked-1' });
+  let agent;
+  guest.attach((request, response) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on('end', () => response.end(Buffer.concat(chunks)));
+  }, 'chunked-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-chunked-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-chunked-1 connect');
+    await withTimeout(
+      broker.waitForRoute('chunked-agent.local.test'),
+      'chunked-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+    const response = await requestWithAgent(
+      'http://chunked-agent.local.test/chunked',
+      { agent, method: 'POST' },
+      [Buffer.from('one'), Buffer.from('two')],
+    );
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.body, Buffer.from('onetwo'));
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-chunked-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-chunked-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-chunked-1 close');
+  }
+});
+
+test('Broker Agent streams request body before the client request ends', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-streaming-1' });
+  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-streaming-1' });
+  let agent;
+  guest.attach((request, response) => {
+    request.once('data', (chunk) => {
+      response.end(Buffer.from(chunk));
+    });
+  }, 'streaming-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-streaming-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-streaming-1 connect');
+    await withTimeout(
+      broker.waitForRoute('streaming-agent.local.test'),
+      'streaming-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+    let request;
+    const responsePromise = new Promise((resolve, reject) => {
+      request = http.request(
+        'http://streaming-agent.local.test/streaming',
+        { agent, method: 'POST' },
+        (incoming) => {
+          const chunks = [];
+          incoming.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          incoming.on('end', () => resolve(Buffer.concat(chunks)));
+          incoming.on('error', reject);
+        },
+      );
+      request.on('error', reject);
+      request.write(Buffer.from('first'));
+    });
+    const response = await Promise.race([
+      responsePromise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Agent request body was not streamed')), 50),
+      ),
+    ]);
+    request.end(Buffer.from('second'));
+    request.destroy();
+
+    assert.deepEqual(response, Buffer.from('first'));
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-streaming-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-streaming-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-streaming-1 close');
+  }
+});
+
+test('Broker Agent resumes streamed responses after client-side backpressure', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-backpressure-1' });
+  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-backpressure-1' });
+  const expectedBody = Buffer.alloc(256 * 1024, 'a');
+  let agent;
+  guest.attach((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/octet-stream' });
+    response.end(expectedBody);
+  }, 'backpressure-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-backpressure-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-backpressure-1 connect');
+    await withTimeout(
+      broker.waitForRoute('backpressure-agent.local.test'),
+      'backpressure-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+    const response = await withTimeout(
+      new Promise((resolve, reject) => {
+        const request = http.request('http://backpressure-agent.local.test/large', { agent });
+        request.on('response', (incoming) => {
+          const chunks = [];
+          incoming.pause();
+          setTimeout(() => incoming.resume(), 25);
+          incoming.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          incoming.on('end', () => resolve(Buffer.concat(chunks)));
+          incoming.on('error', reject);
+        });
+        request.on('error', reject);
+        request.end();
+      }),
+      'backpressure Agent response',
+    );
+
+    assert.equal(response.length, expectedBody.length);
+    assert.deepEqual(response, expectedBody);
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-backpressure-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-backpressure-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-backpressure-1 close');
   }
 });
