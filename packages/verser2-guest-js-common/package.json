@@ -1,0 +1,14 @@
+{
+  "name": "@signicode/verser2-guest-js-common",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runtime-neutral JavaScript Guest foundations for Verser2 packages.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "@signicode/verser-common": "0.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  }
+}
