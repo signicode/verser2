@@ -237,21 +237,33 @@
 
 ## Phase 6: End-to-End Validation, Documentation, and Final Review
 
-- [ ] Task: Write or update end-to-end tests and examples
-    - [ ] Add an end-to-end test covering Host start, Node Guest attachment, Broker request, routed domain advertisement, Agent routing, and response forwarding.
-    - [ ] Add or update docs/examples showing a normal `node:http` server that does not call `listen()`.
-    - [ ] Document TLS HTTP/2 setup, self-signed certificate generation/setup, minimal certificate checking, and HTTP/3 exclusion.
-    - [ ] Document streaming, concurrency, error behavior, and Agent MVP compatibility limits.
-- [ ] Task: Run full validation
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm test`.
-    - [ ] Run `npm run lint`.
-    - [ ] Confirm no HTTP/3, non-Node guest, authentication, authorization, or public gateway behavior was introduced.
-    - [ ] Confirm 95% meaningful coverage for changed behavior or record why exact measurement is unavailable with the current test tooling.
-- [ ] Task: Final code and Conductor review
-    - [ ] Re-read `AGENTS.md` and relevant Conductor documentation before completion.
-    - [ ] Confirm implementation matches `spec.md` acceptance criteria.
-    - [ ] Review edge cases, lifecycle behavior, error paths, streaming, and concurrent requests.
-    - [ ] Confirm shared code was centralized in `@signicode/verser-common` where reuse emerged.
-    - [ ] Update `plan.md` with validation notes, deduplication results, and phase checkpoint commit SHAs.
-- [ ] Task: Conductor - User Manual Verification 'Phase 6: End-to-End Validation, Documentation, and Final Review' (Protocol in workflow.md)
+- [x] Task: Write or update end-to-end tests and examples
+    - [x] Add an end-to-end test covering Host start, Node Guest attachment, Broker request, routed domain advertisement, Agent routing, and response forwarding.
+    - [x] Add or update docs/examples showing a normal `node:http` server that does not call `listen()`.
+    - [x] Document TLS HTTP/2 setup, self-signed certificate generation/setup, minimal certificate checking, and HTTP/3 exclusion.
+    - [x] Document streaming, concurrency, error behavior, and Agent MVP compatibility limits.
+- [x] Task: Run full validation
+    - [x] Run `npm run build`.
+    - [x] Run `npm test`.
+    - [x] Run `npm run lint`.
+    - [x] Confirm no HTTP/3, non-Node guest, authentication, authorization, or public gateway behavior was introduced.
+    - [x] Confirm 95% meaningful coverage for changed behavior or record why exact measurement is unavailable with the current test tooling.
+- [x] Task: Final code and Conductor review
+    - [x] Re-read `AGENTS.md` and relevant Conductor documentation before completion.
+    - [x] Confirm implementation matches `spec.md` acceptance criteria.
+    - [x] Review edge cases, lifecycle behavior, error paths, streaming, and concurrent requests.
+    - [x] Confirm shared code was centralized in `@signicode/verser-common` where reuse emerged.
+    - [x] Update `plan.md` with validation notes, deduplication results, and phase checkpoint commit SHAs.
+- [x] Task: Conductor - User Manual Verification 'Phase 6: End-to-End Validation, Documentation, and Final Review' (Protocol in workflow.md)
+
+### Phase 6 Validation Notes
+
+- End-to-end coverage added in `test/end-to-end.test.js` for Host start, Node Guest attachment without `listen()`, Broker request forwarding, routed domain advertisement, Agent routing, and response forwarding.
+- README updated with the current TypeScript MVP API, TLS HTTP/2 setup notes, development certificate behavior, HTTP/3 exclusion, streaming status, concurrency notes, error behavior, and Agent MVP compatibility limits.
+- Full validation passed: `npm run build`, `npm test`, `npm run lint`, and `npm run test:coverage`.
+- Coverage: `npm run test:coverage` reported all files at 96.14% line coverage. Source-mapped package branch/function percentages remain lower for generated/type-adjacent lines and rarely forced protocol/socket branches; behavior-focused tests cover the MVP paths.
+- Final review: @oracle identified route retraction and documentation consistency gaps. Route retraction to connected Brokers on Guest disconnect was fixed and covered by `test/broker-routing.test.js`. README now explicitly documents the current MVP limitations and marks full streaming/backpressure, leased streams, HTTP/3, and advanced Agent behavior as future work.
+- Scope exclusions confirmed: no HTTP/3, non-Node guest, authentication, authorization, or public gateway behavior was introduced.
+- Deduplication result: shared protocol-neutral identifiers, routed envelopes, lifecycle names, contextual errors, HTTP/2 helper primitives, and development TLS helpers remain centralized in `@signicode/verser-common`; Host session routing and Node Guest/Broker/Agent adapters remain package-specific.
+- Phase 6 implementation checkpoint commit: `e356135` (`test: Add end-to-end MVP validation`).
+- Manual verification: approved by user after automated validation passed.
