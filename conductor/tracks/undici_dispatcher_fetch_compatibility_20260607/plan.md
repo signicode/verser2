@@ -104,3 +104,9 @@
     - [x] Run `npm run lint`.
     - [x] Confirm or record 95% meaningful coverage status for changed behavior.
 - [x] Task: Conductor - User Manual Verification 'Phase 4: End-to-End Coverage, Documentation, and Final Validation' (Protocol in workflow.md)
+
+## Phase Checkpoints
+
+- [x] Implementation checkpoint commit: `442b881`
+- [x] Validation summary: `npm run build`, `node --test test/dispatcher.test.js`, `node --test test/agent.test.js`, `node --test test/end-to-end.test.js`, `node --test test/packages.test.js`, `npm test`, `npm run lint`, and `npm run test:coverage` passed. Overall line coverage: 95.65%.
+- [x] Deduplication summary: runtime-neutral route resolution and header normalization were added to `@signicode/verser2-guest-js-common`; Undici and Node stream handling remain in `@signicode/verser2-guest-node` because they are runtime-specific.
