@@ -205,3 +205,21 @@ test('shared NDJSON parser uses data chunks and parses split lines', () => {
 
   assert.deepEqual(frames, [{ type: 'one' }, { type: 'two' }]);
 });
+
+test('shared NDJSON parser reports invalid JSON without throwing from data handlers', () => {
+  const stream = new PassThrough();
+  let reportedError;
+
+  common.readNdjsonLines(
+    stream,
+    () => {},
+    (error) => {
+      reportedError = error;
+    },
+  );
+
+  assert.doesNotThrow(() => stream.write('{bad json}\n'));
+  assert.equal(reportedError.code, 'protocol-error');
+  assert.match(reportedError.message, /invalid ndjson/i);
+  assert.equal(stream.destroyed, true);
+});

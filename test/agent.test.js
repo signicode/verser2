@@ -227,3 +227,54 @@ test('Broker Agent streams request body before the client request ends', async (
     await withTimeout(host.close('test-complete'), 'host-agent-streaming-1 close');
   }
 });
+
+test('Broker Agent resumes streamed responses after client-side backpressure', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-backpressure-1' });
+  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-backpressure-1' });
+  const expectedBody = Buffer.alloc(256 * 1024, 'a');
+  let agent;
+  guest.attach((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/octet-stream' });
+    response.end(expectedBody);
+  }, 'backpressure-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-backpressure-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-backpressure-1 connect');
+    await withTimeout(
+      broker.waitForRoute('backpressure-agent.local.test'),
+      'backpressure-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+    const response = await withTimeout(
+      new Promise((resolve, reject) => {
+        const request = http.request('http://backpressure-agent.local.test/large', { agent });
+        request.on('response', (incoming) => {
+          const chunks = [];
+          incoming.pause();
+          setTimeout(() => incoming.resume(), 25);
+          incoming.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+          incoming.on('end', () => resolve(Buffer.concat(chunks)));
+          incoming.on('error', reject);
+        });
+        request.on('error', reject);
+        request.end();
+      }),
+      'backpressure Agent response',
+    );
+
+    assert.equal(response.length, expectedBody.length);
+    assert.deepEqual(response, expectedBody);
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-backpressure-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-backpressure-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-backpressure-1 close');
+  }
+});

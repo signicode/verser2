@@ -824,6 +824,8 @@ class VerserBrokerSocket extends Duplex {
 
   private forwardingStarted = false;
 
+  private pendingResponseWriteCallback?: () => void;
+
   public constructor(broker: Http2VerserBroker, targetId: string, options: http.RequestOptions) {
     super();
     this.broker = broker;
@@ -833,7 +835,13 @@ class VerserBrokerSocket extends Duplex {
   }
 
   public override _read(): void {
-    // Response bytes are pushed after the Broker response is available.
+    const callback = this.pendingResponseWriteCallback;
+    if (callback === undefined) {
+      return;
+    }
+
+    this.pendingResponseWriteCallback = undefined;
+    callback();
   }
 
   public override _write(
@@ -852,6 +860,8 @@ class VerserBrokerSocket extends Duplex {
 
   public override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
     this.bodyStream?.end();
+    this.pendingResponseWriteCallback?.();
+    this.pendingResponseWriteCallback = undefined;
     callback(error);
   }
 
@@ -903,8 +913,15 @@ class VerserBrokerSocket extends Duplex {
   private createResponseSink(): Writable {
     return new Writable({
       write: (chunk: Buffer | string, encoding, callback): void => {
-        this.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
-        callback();
+        const shouldContinue = this.push(
+          Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding),
+        );
+        if (shouldContinue) {
+          callback();
+          return;
+        }
+
+        this.pendingResponseWriteCallback = callback;
       },
       final: (callback): void => {
         this.bodyStream?.end();

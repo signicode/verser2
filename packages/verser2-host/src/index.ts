@@ -425,7 +425,6 @@ class NodeHttp2VerserHost implements VerserHost {
           headers: flattenValidatedHeaders(
             validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
           ),
-          timeoutMs: parseLeaseAcquireTimeoutMs(headers),
         },
       }),
     );
@@ -480,7 +479,7 @@ class NodeHttp2VerserHost implements VerserHost {
     if (queued !== undefined) {
       clearTimeout(queued.timeout);
       lease.active = true;
-      this.activeLeases.set(lease.leaseId, lease);
+      this.activeLeases.set(activeLeaseKey(lease), lease);
       queued.resolve(lease);
       return;
     }
@@ -499,7 +498,7 @@ class NodeHttp2VerserHost implements VerserHost {
     const lease = idleLeases.shift();
     if (lease !== undefined) {
       lease.active = true;
-      this.activeLeases.set(lease.leaseId, lease);
+      this.activeLeases.set(activeLeaseKey(lease), lease);
       return Promise.resolve(lease);
     }
 
@@ -545,7 +544,7 @@ class NodeHttp2VerserHost implements VerserHost {
       lease.guestId,
       idleLeases.filter((candidate) => candidate !== lease),
     );
-    this.activeLeases.delete(lease.leaseId);
+    this.activeLeases.delete(activeLeaseKey(lease));
   }
 
   private closeGuestLeases(guestId: VerserPeerId): void {
@@ -557,7 +556,7 @@ class NodeHttp2VerserHost implements VerserHost {
     for (const lease of this.activeLeases.values()) {
       if (lease.guestId === guestId) {
         lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-        this.activeLeases.delete(lease.leaseId);
+        this.activeLeases.delete(activeLeaseKey(lease));
       }
     }
   }
@@ -682,6 +681,10 @@ function flattenValidatedHeaders(
       typeof value === 'string' ? value : value.join(','),
     ]),
   );
+}
+
+function activeLeaseKey(lease: Pick<GuestLeaseStream, 'guestId' | 'leaseId'>): string {
+  return `${lease.guestId}:${lease.leaseId}`;
 }
 
 function parseLeaseAcquireTimeoutMs(headers: http2.IncomingHttpHeaders): number {
