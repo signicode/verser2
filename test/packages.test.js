@@ -17,7 +17,11 @@ test('@signicode/verser-common package exposes common foundations', () => {
   assert.equal(packageManifest.main, 'dist/index.js');
   assert.equal(packageManifest.types, 'dist/index.d.ts');
   assert.deepEqual(Object.keys(commonPackage).sort(), [
+    'DEFAULT_MAX_ENVELOPE_METADATA_BYTES',
     'VERSER_COMMON_PACKAGE_NAME',
+    'VERSER_ENVELOPE_PREFIX_BYTES',
+    'VERSER_ENVELOPE_TYPES',
+    'VERSER_ENVELOPE_VERSION',
     'VERSER_LIFECYCLE_EVENTS',
     'VerserError',
     'createDevelopmentTlsCertificate',
@@ -26,12 +30,15 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'createRoutedDomainRegistration',
     'createRoutedRequestEnvelope',
     'createRoutedResponseEnvelope',
+    'createVerserEnvelopeParser',
     'createVerserError',
+    'encodeVerserEnvelope',
     'fromHttp2RequestHeaders',
     'fromHttp2ResponseHeaders',
     'getCertificateFingerprint',
     'toHttp2RequestHeaders',
     'toHttp2ResponseHeaders',
+    'validateVerserHeaders',
     'verifyPinnedCertificate',
   ]);
   assert.equal(commonPackage.VERSER_COMMON_PACKAGE_NAME, '@signicode/verser-common');
