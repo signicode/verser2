@@ -152,7 +152,8 @@ const brokerResponse = await broker.request({
   path: '/health',
 });
 
-console.log(brokerResponse.statusCode, brokerResponse.body.toString('utf8'));
+console.log(brokerResponse.statusCode);
+brokerResponse.body.pipe(process.stdout);
 
 const agent = broker.createAgent();
 http.get('http://client-a.local.test/health', { agent }, (response) => {
@@ -166,7 +167,9 @@ http.get('http://client-a.local.test/health', { agent }, (response) => {
 - The Broker and Guest use that development certificate as a pinned CA for the MVP path.
 - HTTP/3 and QUIC are explicitly not implemented in the current TypeScript MVP.
 - A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
-- The current Guest leg uses a Guest-opened control stream for routed request/response framing. A future leased-stream design is documented under the active Conductor track to replace body transfer over control frames with raw leased HTTP/2 streams.
+- The Guest maintains a configurable pool of one-use leased HTTP/2 streams. Routed request and response bodies are transferred as raw octets over an assigned lease, not as base64 NDJSON control frames.
+- Guest control streams remain for coordination such as route advertisements.
+- Node Guest lease pool options include `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and `maxMetadataBytes`.
 - The Agent MVP supports plain `http.request`/`http.get` for Host-advertised domains only. Non-advertised hostnames are rejected instead of falling back to DNS.
 - Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, and advanced socket features are outside the current MVP subset.
 
