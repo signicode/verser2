@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import * as http from 'node:http';
 import * as http2 from 'node:http2';
-import { Readable } from 'node:stream';
+import { Duplex, Readable } from 'node:stream';
 
 import {
   type RoutedRequestEnvelope,
@@ -61,6 +61,7 @@ export interface VerserBroker {
   readonly routedRequestCount: number;
   connect(): Promise<void>;
   close(reason?: string): Promise<void>;
+  createAgent(): http.Agent;
   getRoutes(): { targetId: string; domain: string }[];
   waitForRoute(domain: string): Promise<void>;
   request(request: VerserBrokerRequest): Promise<VerserBrokerResponse>;
@@ -455,6 +456,10 @@ class Http2VerserBroker implements VerserBroker {
     return [...this.routes];
   }
 
+  public createAgent(): http.Agent {
+    return new VerserBrokerAgent(this);
+  }
+
   public waitForRoute(domain: string): Promise<void> {
     if (this.routes.some((route) => route.domain === domain)) {
       return Promise.resolve();
@@ -546,6 +551,138 @@ class Http2VerserBroker implements VerserBroker {
   private readonly frameEmitter = new EventEmitter();
 }
 
+class VerserBrokerAgent extends http.Agent {
+  public readonly protocol = 'http:';
+
+  private readonly broker: Http2VerserBroker;
+
+  public constructor(broker: Http2VerserBroker) {
+    super({ keepAlive: false });
+    this.broker = broker;
+  }
+
+  public addRequest(request: http.ClientRequest, options: http.RequestOptions): void {
+    const hostname = String(options.hostname ?? options.host ?? '');
+    const route = this.broker.getRoutes().find((candidate) => candidate.domain === hostname);
+    if (route === undefined) {
+      process.nextTick(() => {
+        const error = new Error(`No Verser route advertised for host ${hostname}`);
+        request.emit('error', error);
+        request.destroy(error);
+      });
+      return;
+    }
+
+    const socket = new VerserBrokerSocket(this.broker, route.targetId, options);
+    request.onSocket(socket as unknown as never);
+    request.once('finish', () => {
+      socket.forwardRequestOnce();
+    });
+  }
+}
+
+class VerserBrokerSocket extends Duplex {
+  public override writable = true;
+
+  public override readable = true;
+
+  public connecting = false;
+
+  private readonly broker: Http2VerserBroker;
+
+  private readonly targetId: string;
+
+  private readonly options: http.RequestOptions;
+
+  private readonly requestChunks: Buffer[] = [];
+
+  private forwardingStarted = false;
+
+  public constructor(broker: Http2VerserBroker, targetId: string, options: http.RequestOptions) {
+    super();
+    this.broker = broker;
+    this.targetId = targetId;
+    this.options = options;
+    process.nextTick(() => this.emit('connect'));
+  }
+
+  public override _read(): void {
+    // Response bytes are pushed after the Broker response is available.
+  }
+
+  public override _write(
+    chunk: Buffer | string,
+    encoding: BufferEncoding,
+    callback: () => void,
+  ): void {
+    this.requestChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
+    this.forwardIfNoBodyRequest();
+    callback();
+  }
+
+  public override _final(callback: () => void): void {
+    callback();
+  }
+
+  public setTimeout(_timeout: number, callback?: () => void): this {
+    if (callback !== undefined) {
+      this.once('timeout', callback);
+    }
+    return this;
+  }
+
+  public setNoDelay(_noDelay?: boolean): this {
+    return this;
+  }
+
+  public setKeepAlive(_enable?: boolean, _initialDelay?: number): this {
+    return this;
+  }
+
+  public forwardRequestOnce(): void {
+    if (this.forwardingStarted) {
+      return;
+    }
+    this.forwardingStarted = true;
+    this.forwardRequest().catch((error: unknown) => {
+      this.destroy(error instanceof Error ? error : new Error(String(error)));
+    });
+  }
+
+  private async forwardRequest(): Promise<void> {
+    const requestHeaders = this.options.headers;
+    const response = await this.broker.request({
+      targetId: this.targetId,
+      method: String(this.options.method ?? 'GET'),
+      path: String(this.options.path ?? '/'),
+      headers: normalizeRequestHeaders(
+        Array.isArray(requestHeaders)
+          ? undefined
+          : (requestHeaders as http.OutgoingHttpHeaders | undefined),
+      ),
+      body: [extractHttpRequestBody(Buffer.concat(this.requestChunks))],
+    });
+    this.push(serializeHttpResponse(response));
+    this.push(null);
+    process.nextTick(() => this.destroy());
+  }
+
+  private forwardIfNoBodyRequest(): void {
+    const serializedRequest = Buffer.concat(this.requestChunks);
+    const separatorIndex = serializedRequest.indexOf('\r\n\r\n', 0, 'latin1');
+    if (separatorIndex === -1) {
+      return;
+    }
+
+    const headerText = serializedRequest.slice(0, separatorIndex).toString('latin1');
+    const expectsBody =
+      /content-length:\s*[1-9]/i.test(headerText) || /transfer-encoding:/i.test(headerText);
+    if (!expectsBody) {
+      this.forwardRequestOnce();
+    }
+  }
+}
+
 interface HostRequestFrame {
   readonly type: 'request';
   readonly requestId: string;
@@ -635,6 +772,70 @@ function errorFromBody(body: Buffer, targetId: string): VerserError {
     targetId,
     ...(parsed.error?.context ?? {}),
   });
+}
+
+function normalizeRequestHeaders(
+  headers: http.OutgoingHttpHeaders | undefined,
+): Record<string, string> {
+  const normalizedHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (typeof value === 'string') {
+      normalizedHeaders[key] = value;
+    } else if (typeof value === 'number') {
+      normalizedHeaders[key] = String(value);
+    } else if (Array.isArray(value)) {
+      normalizedHeaders[key] = value.join(', ');
+    }
+  }
+  return normalizedHeaders;
+}
+
+function extractHttpRequestBody(serializedRequest: Buffer): Buffer {
+  const separator = Buffer.from('\r\n\r\n');
+  const separatorIndex = serializedRequest.indexOf(separator);
+  if (separatorIndex === -1) {
+    return Buffer.alloc(0);
+  }
+
+  const headerText = serializedRequest.slice(0, separatorIndex).toString('latin1');
+  const body = serializedRequest.slice(separatorIndex + separator.length);
+  if (/transfer-encoding:\s*chunked/i.test(headerText)) {
+    return decodeChunkedBody(body);
+  }
+
+  return body;
+}
+
+function decodeChunkedBody(body: Buffer): Buffer {
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  while (offset < body.length) {
+    const lineEnd = body.indexOf('\r\n', offset, 'latin1');
+    if (lineEnd === -1) {
+      break;
+    }
+    const size = Number.parseInt(body.slice(offset, lineEnd).toString('ascii'), 16);
+    if (size === 0 || !Number.isFinite(size)) {
+      break;
+    }
+    const chunkStart = lineEnd + 2;
+    chunks.push(body.slice(chunkStart, chunkStart + size));
+    offset = chunkStart + size + 2;
+  }
+
+  return Buffer.concat(chunks);
+}
+
+function serializeHttpResponse(response: VerserBrokerResponse): Buffer {
+  const headers = {
+    ...response.headers,
+    'content-length': String(response.body.length),
+  };
+  const headerLines = Object.entries(headers).map(([key, value]) => `${key}: ${value}`);
+  return Buffer.concat([
+    Buffer.from(`HTTP/1.1 ${response.statusCode} OK\r\n${headerLines.join('\r\n')}\r\n\r\n`),
+    response.body,
+  ]);
 }
 
 function once(emitter: EventEmitter, eventName: string): Promise<void> {

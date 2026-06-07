@@ -196,27 +196,43 @@
 
 ## Phase 5: Node `http.Agent` Integration and Domain-Based Routing
 
-- [ ] Task: Review Node Agent requirements before implementation
-    - [ ] Confirm the minimal Agent-compatible subset needed for `http.request`-style routing through Verser2.
-    - [ ] Confirm domain-based routing uses Host-advertised routed domains instead of DNS for registered guest domains.
-- [ ] Task: Write failing Agent integration tests
-    - [ ] Add tests for creating an Agent from a connected Broker.
-    - [ ] Add tests for routing an Agent-originated request through the Broker/Host/Guest path.
-    - [ ] Add tests showing hostnames matching advertised guest domains are routed through Verser2 without external DNS resolution.
-    - [ ] Add tests documenting behavior for non-matching hostnames and unsupported advanced Agent features.
-    - [ ] Confirm the tests fail for missing Agent behavior.
-- [ ] Task: Implement minimal `http.Agent` exposure
-    - [ ] Implement an Agent-compatible integration in `@signicode/verser2-guest-node`.
-    - [ ] Route matching hostname requests through the Broker using the current advertised domain map.
-    - [ ] Preserve ordinary Node request and response behavior for the documented MVP subset.
-    - [ ] Document compatibility limits in the package exports/docs or README as appropriate.
-- [ ] Task: Validate Phase 5 narrowly
-    - [ ] Run `npm run build`.
-    - [ ] Run focused Agent integration tests.
-    - [ ] Run `npm run lint` if Agent code, tests, or docs changed formatting-sensitive areas.
-    - [ ] Record coverage status and any limitations.
-    - [ ] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Node `http.Agent` Integration and Domain-Based Routing' (Protocol in workflow.md)
+- [x] Task: Review Node Agent requirements before implementation
+    - [x] Confirm the minimal Agent-compatible subset needed for `http.request`-style routing through Verser2.
+    - [x] Confirm domain-based routing uses Host-advertised routed domains instead of DNS for registered guest domains.
+- [x] Task: Write failing Agent integration tests
+    - [x] Add tests for creating an Agent from a connected Broker.
+    - [x] Add tests for routing an Agent-originated request through the Broker/Host/Guest path.
+    - [x] Add tests showing hostnames matching advertised guest domains are routed through Verser2 without external DNS resolution.
+    - [x] Add tests documenting behavior for non-matching hostnames and unsupported advanced Agent features.
+    - [x] Confirm the tests fail for missing Agent behavior.
+
+### Phase 5 Notes
+
+- Node Agent requirement review: the MVP should expose an `http.Agent` from a connected Broker. Matching hostnames use Host-advertised routed domains and are converted to Broker requests without DNS lookup. Non-matching hostnames should fail explicitly in the MVP instead of silently opening real sockets.
+- @librarian guidance: the safest Node integration point is an Agent that provides a custom Duplex socket and lets Node's HTTP client parser build the response, instead of manually emitting `IncomingMessage` from `addRequest`.
+- Agent test isolation guidance: for custom `http.Agent` or fake socket hangs, run isolated tests with `--test-name-pattern` and `--test-timeout`, wrap `http.request` helpers in explicit timeouts that call `request.destroy(error)`, and prefer production failure paths that destroy the `ClientRequest` rather than only emitting an `error` event.
+- [x] Task: Implement minimal `http.Agent` exposure
+    - [x] Implement an Agent-compatible integration in `@signicode/verser2-guest-node`.
+    - [x] Route matching hostname requests through the Broker using the current advertised domain map.
+    - [x] Preserve ordinary Node request and response behavior for the documented MVP subset.
+    - [x] Document compatibility limits in the package exports/docs or README as appropriate.
+- [x] Task: Validate Phase 5 narrowly
+    - [x] Run `npm run build`.
+    - [x] Run focused Agent integration tests.
+    - [x] Run `npm run lint` if Agent code, tests, or docs changed formatting-sensitive areas.
+    - [x] Record coverage status and any limitations.
+    - [x] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Node `http.Agent` Integration and Domain-Based Routing' (Protocol in workflow.md)
+
+### Phase 5 Validation Notes
+
+- TDD confirmation: `npm run build && node --test test/agent.test.js` initially failed because `broker.createAgent` was missing.
+- Validation passed: `npm run build`, `node --test --test-timeout=15000 test/agent.test.js`, `npm run lint`, and `npm run test:coverage`.
+- Coverage: `npm run test:coverage` reported all files at 95.69% line coverage. Source-mapped package reports remain below 95% on some generated/type-adjacent lines and rarely forced protocol/socket branches.
+- Failure recovery: custom Agent tests initially hung because a fake socket did not complete Node's `ClientRequest` lifecycle. @oracle recommended isolated `--test-timeout` runs, request helper timeouts, and `request.destroy(error)` for non-matching routes. This recovery path is recorded in `conductor/known-solutions.md`.
+- Compatibility limits: the Agent MVP supports plain `http.request`/`http.get` style calls for advertised domains, no real DNS lookup for matching routes, and explicit rejection for non-advertised hosts. Keep-alive, HTTPS, advanced socket behavior, trailers, upgrades, and full Agent pooling semantics are not supported in this phase.
+- Deduplication result: Agent integration remains package-specific in `@signicode/verser2-guest-node`; it reuses the Broker API and shared contextual errors rather than adding new common abstractions.
+- Manual verification completed with user approval.
 
 ## Phase 6: End-to-End Validation, Documentation, and Final Review
 
