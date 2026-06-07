@@ -125,27 +125,41 @@
 
 ## Phase 4: Leased Routed Request and Response Transport
 
-- [ ] Task: Write failing routed transport tests first
-    - [ ] Add tests that Broker request bodies stream raw bytes Host-to-Guest over a leased stream.
-    - [ ] Add tests that Guest response bodies stream raw bytes Guest-to-Host-to-Broker over the same lease.
-    - [ ] Add binary round-trip tests with null bytes and non-UTF-8 data.
-    - [ ] Add tests that multiple concurrent Broker requests use distinct leases and complete out of order.
-    - [ ] Add tests that existing `broker.request()` behavior remains compatible.
-- [ ] Task: Implement Host leased routing
-    - [ ] Replace Host forwarding of routed request/response body frames with lease acquisition and raw stream piping.
-    - [ ] Write request metadata envelope before piping Broker request body bytes to the lease.
-    - [ ] Parse Guest response metadata envelope before sending status and headers to the Broker stream.
-    - [ ] Pipe Guest response body bytes to the Broker stream without base64 encoding.
-- [ ] Task: Implement Guest leased dispatch
-    - [ ] Parse request metadata envelope on assigned leases.
-    - [ ] Dispatch raw leased request body bytes into the attached local HTTP handler.
-    - [ ] Write response metadata envelope followed by raw response body bytes.
-    - [ ] Preserve normal method, path, headers, status, and body semantics.
-- [ ] Task: Validate routed transport migration
-    - [ ] Run focused Broker routing, Guest, Host, and end-to-end tests.
-    - [ ] Run `npm run build`.
-    - [ ] Record coverage and deduplication notes in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Leased Routed Request and Response Transport' (Protocol in workflow.md)
+- [x] Task: Write failing routed transport tests first
+    - [x] Add tests that Broker request bodies stream raw bytes Host-to-Guest over a leased stream.
+    - [x] Add tests that Guest response bodies stream raw bytes Guest-to-Host-to-Broker over the same lease.
+    - [x] Add binary round-trip tests with null bytes and non-UTF-8 data.
+    - [x] Add tests that multiple concurrent Broker requests use distinct leases and complete out of order.
+    - [x] Add tests that existing `broker.request()` behavior remains compatible.
+- [x] Task: Implement Host leased routing
+    - [x] Replace Host forwarding of routed request/response body frames with lease acquisition and raw stream piping.
+    - [x] Write request metadata envelope before piping Broker request body bytes to the lease.
+    - [x] Parse Guest response metadata envelope before sending status and headers to the Broker stream.
+    - [x] Pipe Guest response body bytes to the Broker stream without base64 encoding.
+- [x] Task: Implement Guest leased dispatch
+    - [x] Parse request metadata envelope on assigned leases.
+    - [x] Dispatch raw leased request body bytes into the attached local HTTP handler.
+    - [x] Write response metadata envelope followed by raw response body bytes.
+    - [x] Preserve normal method, path, headers, status, and body semantics.
+- [x] Task: Validate routed transport migration
+    - [x] Run focused Broker routing, Guest, Host, and end-to-end tests.
+    - [x] Run `npm run build`.
+    - [x] Record coverage and deduplication notes in `plan.md`.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Leased Routed Request and Response Transport' (Protocol in workflow.md)
+
+### Phase 4 Notes
+
+- TDD check: a raw leased routing test failed before implementation because the Host acquired a lease but did not yet forward routed request/response envelopes over it.
+- Added a low-level raw Guest test that registers a Guest, opens a lease without a Guest control stream, receives a request metadata envelope and raw binary body, and replies with response metadata plus raw binary body.
+- Implemented Host leased routing: acquire idle lease, write request metadata envelope, write raw request body bytes, parse response/error envelope, and return raw response bytes to the Broker stream.
+- Review fix: Host response handling now parses only the response metadata envelope using strict `stream.read()`/`readable` reads, unshifts any over-read body bytes when needed, and pipes the rest of the lease response stream to the Broker stream. No `data` handler is used for Host response metadata parsing.
+- Added regression tests proving the Broker receives leased response body bytes before the lease stream ends, split response metadata is parsed correctly, and leased error envelopes map to Broker request errors.
+- Implemented Guest leased dispatch: parse request metadata envelope, collect raw body bytes, dispatch into the attached local handler, and write response or error envelope followed by raw response bytes.
+- Existing `broker.request()`, Agent, Host, Guest, Broker routing, and end-to-end tests continue to pass. Current public `broker.request()` still returns a buffered response while the internal routed transport uses leased streams when available.
+- Deduplication: Host and Guest both use shared `@signicode/verser-common` envelope helpers; transport coordination remains package-specific.
+- Validation passed: `npm run build`, focused Broker/Guest/Agent/Host/E2E tests, `npm run lint`, and `npm run test:coverage`.
+- Coverage after Phase 4: all files 95.10% line coverage; changed leased routing behavior is covered by focused raw-lease, split metadata, lease error, lease response piping, and existing Broker/Guest integration tests.
+- Manual verification: approved by user after strict `stream.read()` parser refactor and automated validation passed.
 
 ## Phase 5: Backpressure, Cancellation, and Error Semantics
 

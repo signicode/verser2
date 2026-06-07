@@ -8,11 +8,14 @@ import {
   type RoutedResponseEnvelope,
   VERSER_LIFECYCLE_EVENTS,
   type VerserError,
+  type VerserRequestEnvelopeMetadata,
   createDevelopmentTlsCertificate,
   createGuestId,
   createRoutedRequestEnvelope,
   createRoutedResponseEnvelope,
+  createVerserEnvelopeParser,
   createVerserError,
+  encodeVerserEnvelope,
 } from '@signicode/verser-common';
 
 export const VERSER2_GUEST_NODE_PACKAGE_NAME = '@signicode/verser2-guest-node';
@@ -425,6 +428,98 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
     stream.on('error', (error) => {
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
     });
+    this.handleLeaseStream(lease).catch((error: unknown) => {
+      if (this.closing) {
+        return;
+      }
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+      stream.close();
+    });
+  }
+
+  private async handleLeaseStream(lease: GuestLeaseStream): Promise<void> {
+    const parser = createVerserEnvelopeParser({
+      maxMetadataBytes: this.options.maxMetadataBytes,
+    });
+    const bodyChunks: Buffer[] = [];
+    let metadata: VerserRequestEnvelopeMetadata | undefined;
+
+    lease.stream.on('data', (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (metadata === undefined) {
+        const parsed = parser.push(buffer);
+        if (parsed === undefined) {
+          return;
+        }
+        if (parsed.type !== 'request') {
+          throw createVerserError(
+            'protocol-error',
+            'Lease stream received a non-request envelope',
+            {
+              guestId: this.options.guestId,
+              leaseId: lease.leaseId,
+            },
+          );
+        }
+        metadata = parsed.metadata as VerserRequestEnvelopeMetadata;
+        bodyChunks.push(parsed.bodyRemainder);
+        return;
+      }
+
+      bodyChunks.push(buffer);
+    });
+
+    await once(lease.stream, 'end');
+    if (metadata === undefined) {
+      if (this.closing) {
+        return;
+      }
+      throw createVerserError('protocol-error', 'Lease stream ended before request metadata', {
+        guestId: this.options.guestId,
+        leaseId: lease.leaseId,
+      });
+    }
+
+    lease.state = 'active';
+    let response: VerserNodeGuestDispatchResponse;
+    try {
+      response = await this.dispatchRoutedRequest({
+        requestId: metadata.requestId,
+        sourceId: metadata.sourceId,
+        targetId: metadata.targetId,
+        method: metadata.method,
+        path: metadata.path,
+        headers: flattenHeaders(metadata.headers),
+        body: [Buffer.concat(bodyChunks)],
+      });
+    } catch (error) {
+      const verserError = error as VerserError;
+      lease.stream.write(
+        encodeVerserEnvelope({
+          type: 'error',
+          metadata: {
+            requestId: metadata.requestId,
+            code: verserError.code ?? 'local-handler-failure',
+            message: getErrorMessage(error),
+            context: verserError.context,
+          },
+        }),
+      );
+      lease.stream.end();
+      return;
+    }
+
+    lease.stream.write(
+      encodeVerserEnvelope({
+        type: 'response',
+        metadata: {
+          requestId: response.requestId,
+          statusCode: response.statusCode,
+          headers: response.headers,
+        },
+      }),
+    );
+    lease.stream.end(response.body);
   }
 
   private closeLeaseStreams(): void {
@@ -879,6 +974,17 @@ function normalizeRequestHeaders(
   return normalizedHeaders;
 }
 
+function flattenHeaders(
+  headers: Readonly<Record<string, string | readonly string[]>>,
+): Record<string, string> {
+  const flattenedHeaders: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    flattenedHeaders[headerName] =
+      typeof headerValue === 'string' ? headerValue : headerValue.join(',');
+  }
+  return flattenedHeaders;
+}
+
 function extractHttpRequestBody(serializedRequest: Buffer): Buffer {
   const separator = Buffer.from('\r\n\r\n');
   const separatorIndex = serializedRequest.indexOf(separator);
@@ -934,8 +1040,8 @@ function once(emitter: EventEmitter, eventName: string): Promise<void> {
   });
 }
 
-function toVerserError(error: Error): VerserError {
-  return createVerserError('protocol-error', error.message, { guestId: 'unknown' });
+function toVerserError(error: unknown): VerserError {
+  return createVerserError('protocol-error', getErrorMessage(error), { guestId: 'unknown' });
 }
 
 function getErrorMessage(error: unknown): string {
