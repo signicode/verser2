@@ -17,14 +17,14 @@ Specific tasks for the Node.js implementation include:
 - [x] Implement the HTTP/2 transport layer for communication between clients via the broker
 - [ ] Implement the HTTP/3 transport layer for communication between clients via the broker
 - [x] Implement the http.Agent exposure for client-side requests
-- [ ] Implement the undici dispatcher for client-side requests
+- [~] Implement the undici dispatcher for client-side requests
 
 Status evidence, reviewed 2026-06-07:
 
 - Node Host, Node Guest, and Broker entrypoints exist and expose connection, registration, routing, lifecycle, and local server attachment APIs in `packages/verser2-host/src/index.ts` and `packages/verser2-guest-node/src/index.ts`.
 - Broker registration, route advertisements, routed request forwarding, leased stream acquisition, request/response body streaming, and error handling are implemented over HTTP/2 streams in `packages/verser2-host/src/index.ts` and `packages/verser2-guest-node/src/index.ts`, with integration coverage in `test/broker-routing.test.js` and `test/end-to-end.test.js`.
 - `VerserBroker.createAgent()` returns a `node:http` Agent implementation for routed client requests in `packages/verser2-guest-node/src/index.ts`.
-- No code evidence was found for HTTP/3/QUIC transport or an undici dispatcher API.
+- No code evidence was found for HTTP/3/QUIC transport. Undici dispatcher implementation is in progress in the active Conductor track.
 
 ### Browser Implementation
 
