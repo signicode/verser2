@@ -93,22 +93,35 @@
 
 ## Phase 3: Guest Lease Pool Management
 
-- [ ] Task: Write failing Guest lease pool tests first
-    - [ ] Add tests for Guest options: `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and metadata size limits.
-    - [ ] Add tests that Guest opens leases until `minWaitingStreams` is satisfied.
-    - [ ] Add tests that Guest never exceeds `maxOpenStreams` across idle, active, and opening leases.
-    - [ ] Add tests that Guest replenishes leases after assignment, close, cancellation, error, and reconnect while connected.
-- [ ] Task: Implement Guest lease pool
-    - [ ] Add lease pool configuration to the Node Guest public options.
-    - [ ] Open Guest-initiated lease streams to the Host with peer id and lease id headers.
-    - [ ] Maintain opening, waiting, active, and closed lease accounting.
-    - [ ] Replenish leases safely without runaway loops or exceeding stream limits.
-    - [ ] Integrate lease shutdown into Guest `close()` and disconnect handling.
-- [ ] Task: Validate Guest lease behavior
-    - [ ] Run focused Guest tests and Host lease tests.
-    - [ ] Run `npm run build`.
-    - [ ] Record coverage and deduplication notes in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Guest Lease Pool Management' (Protocol in workflow.md)
+- [x] Task: Write failing Guest lease pool tests first
+    - [x] Add tests for Guest options: `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and metadata size limits.
+    - [x] Add tests that Guest opens leases until `minWaitingStreams` is satisfied.
+    - [x] Add tests that Guest never exceeds `maxOpenStreams` across idle, active, and opening leases.
+    - [x] Add tests that Guest replenishes leases after assignment, close, cancellation, error, and reconnect while connected.
+- [x] Task: Implement Guest lease pool
+    - [x] Add lease pool configuration to the Node Guest public options.
+    - [x] Open Guest-initiated lease streams to the Host with peer id and lease id headers.
+    - [x] Maintain opening, waiting, active, and closed lease accounting.
+    - [x] Replenish leases safely without runaway loops or exceeding stream limits.
+    - [x] Integrate lease shutdown into Guest `close()` and disconnect handling.
+- [x] Task: Validate Guest lease behavior
+    - [x] Run focused Guest tests and Host lease tests.
+    - [x] Run `npm run build`.
+    - [x] Record coverage and deduplication notes in `plan.md`.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Guest Lease Pool Management' (Protocol in workflow.md)
+
+### Phase 3 Notes
+
+- TDD check: focused Guest lease tests failed as expected before implementation because the Node Guest did not open `/verser/guest/lease` streams.
+- Added fake TLS HTTP/2 lease-tracking Host test helper for Guest lease pool behavior.
+- Added Guest tests for satisfying `minWaitingStreams`, respecting `maxOpenStreams`, and replenishing an idle lease after close.
+- Added Guest options: `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and `maxMetadataBytes`.
+- Added Guest lease stream opening with `x-verser-peer-id` and `x-verser-lease-id`, opening/waiting/active accounting, safe replenishment, and shutdown cleanup.
+- Transitional note: `leaseAcquireTimeoutMs` and `maxMetadataBytes` are now accepted as Guest options and will be consumed by routed leased dispatch work in later phases.
+- Deduplication: Guest lease pool state remains Node Guest-specific; no shared helper extraction was needed beyond existing common TLS/error/lifecycle foundations.
+- Validation passed: `npm run build`, focused Guest/Host/routing tests, `npm run lint`, and `npm run test:coverage`.
+- Coverage after Phase 3: all files 95.43% line coverage; changed Guest lease behavior is covered by focused fake-Host tests.
+- Manual verification: approved by user after automated validation passed.
 
 ## Phase 4: Leased Routed Request and Response Transport
 
