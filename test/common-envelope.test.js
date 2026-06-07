@@ -173,6 +173,28 @@ test('shared stream helpers read request metadata without consuming body bytes',
   assert.deepEqual(stream.read(body.length), body);
 });
 
+test('shared stream helpers reject oversized metadata before reading the full payload', async () => {
+  const stream = new PassThrough();
+  const prefix = Buffer.from([
+    common.VERSER_ENVELOPE_VERSION,
+    common.VERSER_ENVELOPE_TYPES.response,
+  ]);
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(1024, 0);
+
+  stream.end(Buffer.concat([prefix, length]));
+
+  await assert.rejects(
+    () =>
+      common.readLeaseResponseMetadataFromStream(stream, {
+        requestId: 'req-oversized-stream-1',
+        targetId: 'guest-oversized-stream-1',
+        maxMetadataBytes: 1,
+      }),
+    /metadata length exceeds limit/i,
+  );
+});
+
 test('shared NDJSON parser uses data chunks and parses split lines', () => {
   const stream = new PassThrough();
   const frames = [];

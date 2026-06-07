@@ -294,6 +294,14 @@ export async function readVerserEnvelopeFromStream(
   const prefix = await readExactly(stream, 2, context);
   const lengthBytes = await readExactly(stream, 4, context);
   const metadataLength = lengthBytes.readUInt32BE(0);
+  const maxMetadataBytes = options.maxMetadataBytes ?? DEFAULT_MAX_ENVELOPE_METADATA_BYTES;
+  if (metadataLength > maxMetadataBytes) {
+    throw createVerserError('protocol-error', 'Envelope metadata length exceeds limit', {
+      ...context,
+      metadataLength,
+      maxMetadataBytes,
+    });
+  }
   const metadataBytes = await readExactly(stream, metadataLength, context);
   const parsed = parser.push(Buffer.concat([prefix, lengthBytes, metadataBytes]));
 

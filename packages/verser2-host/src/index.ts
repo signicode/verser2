@@ -15,6 +15,7 @@ import {
   encodeVerserEnvelope,
   readLeaseResponseMetadataFromStream,
   readNdjsonLines,
+  validateVerserHeaders,
 } from '@signicode/verser-common';
 
 export const VERSER2_HOST_PACKAGE_NAME = '@signicode/verser2-host';
@@ -421,7 +422,9 @@ class NodeHttp2VerserHost implements VerserHost {
           targetId,
           method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
           path: String(headers['x-verser-path'] ?? '/'),
-          headers: decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}')),
+          headers: flattenValidatedHeaders(
+            validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+          ),
           timeoutMs: parseLeaseAcquireTimeoutMs(headers),
         },
       }),
@@ -429,7 +432,10 @@ class NodeHttp2VerserHost implements VerserHost {
     stream.pipe(lease.stream);
 
     const responseMetadata = await responsePromise;
-    stream.respond({ ':status': responseMetadata.statusCode, ...responseMetadata.headers });
+    stream.respond({
+      ':status': responseMetadata.statusCode,
+      ...validateVerserHeaders(responseMetadata.headers),
+    });
     lease.stream.once('error', () => {
       if (!stream.closed) {
         stream.close(http2.constants.NGHTTP2_CANCEL);
@@ -664,6 +670,17 @@ function decodeHeaderMap(value: string): Record<string, string> {
   const parsed = JSON.parse(value) as Record<string, string>;
   return Object.fromEntries(
     Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]),
+  );
+}
+
+function flattenValidatedHeaders(
+  headers: Readonly<Record<string, string | readonly string[]>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [
+      name,
+      typeof value === 'string' ? value : value.join(','),
+    ]),
   );
 }
 
