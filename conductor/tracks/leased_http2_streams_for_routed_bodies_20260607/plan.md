@@ -30,21 +30,32 @@
 
 ## Phase 1: Shared Binary Envelope Foundations
 
-- [ ] Task: Write failing common envelope tests first
-    - [ ] Add tests for request, response, and error envelope encoding.
-    - [ ] Add parser tests for partial prefix chunks, partial metadata chunks, and body bytes arriving with metadata.
-    - [ ] Add validation tests for invalid version, unknown envelope type, oversized metadata, and malformed JSON.
-    - [ ] Add metadata/header validation tests for invalid header names and forbidden HTTP/1 connection headers.
-- [ ] Task: Implement shared envelope helpers in `@signicode/verser-common`
-    - [ ] Add envelope types, constants, metadata shapes, and encode helpers.
-    - [ ] Add incremental parser helpers that return parsed metadata and body remainder without losing bytes.
-    - [ ] Add metadata and header validation helpers with contextual errors.
-    - [ ] Export new helpers from the common package entrypoint.
-- [ ] Task: Validate and deduplicate common foundations
-    - [ ] Run focused common tests and `npm run build`.
-    - [ ] Confirm no package-local duplicate envelope or metadata validation logic exists.
-    - [ ] Record coverage and deduplication notes in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Shared Binary Envelope Foundations' (Protocol in workflow.md)
+- [x] Task: Write failing common envelope tests first
+    - [x] Add tests for request, response, and error envelope encoding.
+    - [x] Add parser tests for partial prefix chunks, partial metadata chunks, and body bytes arriving with metadata.
+    - [x] Add validation tests for invalid version, unknown envelope type, oversized metadata, and malformed JSON.
+    - [x] Add metadata/header validation tests for invalid header names and forbidden HTTP/1 connection headers.
+- [x] Task: Implement shared envelope helpers in `@signicode/verser-common`
+    - [x] Add envelope types, constants, metadata shapes, and encode helpers.
+    - [x] Add incremental parser helpers that return parsed metadata and body remainder without losing bytes.
+    - [x] Add metadata and header validation helpers with contextual errors.
+    - [x] Export new helpers from the common package entrypoint.
+- [x] Task: Validate and deduplicate common foundations
+    - [x] Run focused common tests and `npm run build`.
+    - [x] Confirm no package-local duplicate envelope or metadata validation logic exists.
+    - [x] Record coverage and deduplication notes in `plan.md`.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Shared Binary Envelope Foundations' (Protocol in workflow.md)
+
+### Phase 1 Notes
+
+- TDD check: `npm run build && node --test test/common-envelope.test.js` failed as expected before implementation because `encodeVerserEnvelope`, `createVerserEnvelopeParser`, and `validateVerserHeaders` were not exported yet. Classified as session-introduced, in-scope, intended TDD failure.
+- Added `test/common-envelope.test.js` for envelope encoding, incremental parsing across prefix/metadata/body chunk boundaries, invalid envelope handling, metadata size limits, malformed JSON, and header validation.
+- Added shared envelope constants, metadata types, `encodeVerserEnvelope`, `createVerserEnvelopeParser`, and `validateVerserHeaders` in `@signicode/verser-common`.
+- Updated package export tests for the new common helpers.
+- Deduplication: envelope helpers and header validation exist only in `@signicode/verser-common`; no package-local duplicate implementations were found.
+- Validation passed: `npm run build`, focused common/package tests, `npm run lint`, and `npm run test:coverage`.
+- Coverage after Phase 1: all files 96.25% line coverage; `packages/verser-common/dist/index.js` 97.40% line coverage and 100% function coverage.
+- Manual verification: approved by user after automated validation passed.
 
 ## Phase 2: Host Lease Registration, Pooling, and Acquisition
 
