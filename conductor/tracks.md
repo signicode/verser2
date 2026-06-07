@@ -14,5 +14,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [~] **Track: Implement the Undici dispatcher and fetch helper for fetch compatibility in the Node guest, with reusable JS common guest foundations for future browser compatibility.**
+- [x] **Track: Implement the Undici dispatcher and fetch helper for fetch compatibility in the Node guest, with reusable JS common guest foundations for future browser compatibility.**
 *Link: [./tracks/undici_dispatcher_fetch_compatibility_20260607/](./tracks/undici_dispatcher_fetch_compatibility_20260607/)*
