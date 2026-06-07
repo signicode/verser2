@@ -9,6 +9,10 @@ function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(rootDirectory, relativePath), 'utf8'));
 }
 
+function readText(relativePath) {
+  return fs.readFileSync(path.join(rootDirectory, relativePath), 'utf8');
+}
+
 test('@signicode/verser-common package exposes common foundations', () => {
   const packageManifest = readJson('packages/verser-common/package.json');
   const commonPackage = require('../packages/verser-common/dist/index.js');
@@ -81,4 +85,18 @@ test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   assert.equal(guestPackage.VERSER2_GUEST_NODE_PACKAGE_NAME, '@signicode/verser2-guest-node');
   assert.equal(typeof guestPackage.createVerserBroker, 'function');
   assert.equal(typeof guestPackage.createVerserNodeGuest, 'function');
+});
+
+test('routed body transport no longer contains bodyBase64 control-frame paths', () => {
+  const routedSources = [
+    'packages/verser2-host/src/index.ts',
+    'packages/verser2-guest-node/src/index.ts',
+  ];
+
+  for (const sourcePath of routedSources) {
+    assert.doesNotMatch(
+      readText(sourcePath),
+      /bodyBase64|response-body|response-start|response-end/,
+    );
+  }
 });

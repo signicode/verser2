@@ -180,7 +180,7 @@
     - [x] Run focused streaming/cancellation tests with timeouts that avoid hangs.
     - [x] Run `npm run build`.
     - [x] Record coverage and unresolved edge-case notes in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Backpressure, Cancellation, and Error Semantics' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Backpressure, Cancellation, and Error Semantics' (Protocol in workflow.md)
 
 ### Phase 5 Notes
 
@@ -206,24 +206,35 @@
 - Deduplication: shared envelope, exact-read stream parsing, typed leased metadata readers, and NDJSON parsing are centralized in `@signicode/verser-common`; Phase 5 streaming/cancellation state remains Host/Node Guest-specific.
 - Validation passed: `npm run build`, focused common/package/Broker/Guest/Host/Agent/E2E tests, `npm run lint`, and `npm run test:coverage`. After the `data` handler review, `npm run build && node --test --test-timeout=15000 test/agent.test.js test/broker-routing.test.js test/guest-node.test.js test/host.test.js` and `npm run lint` also passed.
 - Coverage after Phase 5: all files 96.71% line coverage.
+- Manual verification: approved by user; checkpoint committed as `3ea924c feat(streams): Complete streaming leased bodies` and pushed to PR branch.
 
 ## Phase 6: Remove NDJSON Body Frames and Preserve Agent Compatibility
 
-- [ ] Task: Write failing migration and Agent tests first
-    - [ ] Add or update tests proving routed request/response body transfer no longer uses `bodyBase64` NDJSON frames.
-    - [ ] Update Agent tests to prove the plain `node:http` Agent path still works through leased routing.
-    - [ ] Add regression tests for route advertisements remaining on the control stream.
-- [ ] Task: Remove old routed body frame path
-    - [ ] Remove request/response `bodyBase64` routing frame handling from Host and Guest routed body transfer.
-    - [ ] Keep control-stream route advertisements and required coordination behavior.
-    - [ ] Remove obsolete types, helpers, or tests that only exist for NDJSON body transfer.
-    - [ ] Ensure docs and README describe leased streams as the current routed body transport.
-- [ ] Task: Validate migration compatibility
-    - [ ] Run focused Agent, Broker routing, and end-to-end tests.
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm run lint`.
-    - [ ] Record coverage and deduplication notes in `plan.md`.
+- [x] Task: Write failing migration and Agent tests first
+    - [x] Add or update tests proving routed request/response body transfer no longer uses `bodyBase64` NDJSON frames.
+    - [x] Update Agent tests to prove the plain `node:http` Agent path still works through leased routing.
+    - [x] Add regression tests for route advertisements remaining on the control stream.
+- [x] Task: Remove old routed body frame path
+    - [x] Remove request/response `bodyBase64` routing frame handling from Host and Guest routed body transfer.
+    - [x] Keep control-stream route advertisements and required coordination behavior.
+    - [x] Remove obsolete types, helpers, or tests that only exist for NDJSON body transfer.
+    - [x] Ensure docs and README describe leased streams as the current routed body transport.
+- [x] Task: Validate migration compatibility
+    - [x] Run focused Agent, Broker routing, and end-to-end tests.
+    - [x] Run `npm run build`.
+    - [x] Run `npm run lint`.
+    - [x] Record coverage and deduplication notes in `plan.md`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 6: Remove NDJSON Body Frames and Preserve Agent Compatibility' (Protocol in workflow.md)
+
+### Phase 6 Notes
+
+- TDD/dependency note: most old routed body frame removal was completed during Phase 5 stream-side cleanup because the remaining fallback aggregation paths directly violated Phase 5 streaming/cancellation semantics. Phase 6 added explicit regression coverage that Host and Node Guest routed sources no longer contain `bodyBase64`, `response-start`, `response-body`, or `response-end` control-frame body paths.
+- Existing Agent tests already covered plain `node:http` Agent routing; Phase 5 added chunked-body and early-upload streaming Agent regressions that continue to validate Agent compatibility through leased routing.
+- Route advertisements remain on control streams and continue to be covered by Host, Broker routing, Agent, and end-to-end tests.
+- README now describes the current leased HTTP/2 stream transport, streaming `broker.request()` response body, retained control-stream route advertisements, and Node Guest lease pool options.
+- Validation passed: `npm run build && node --test --test-timeout=15000 test/packages.test.js test/agent.test.js test/broker-routing.test.js test/end-to-end.test.js`, `npm run lint`, and `npm run test:coverage`.
+- Formatting failure during the first Phase 6 lint run was session-introduced in `test/packages.test.js`, fixed locally, and the rerun passed.
+- Coverage after Phase 6: all files 96.72% line coverage.
 
 ## Phase 7: End-to-End Validation, Documentation, and Final Review
 
