@@ -13,7 +13,8 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^20.14.0",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "undici": "^6.26.0"
   },
   "engines": {
     "node": ">=20"

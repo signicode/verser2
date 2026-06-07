@@ -1,5 +1,3 @@
-import { validateVerserHeaders } from '@signicode/verser-common';
-
 export const VERSER2_GUEST_JS_COMMON_PACKAGE_NAME = '@signicode/verser2-guest-js-common';
 
 export interface VerserRoute {
@@ -76,7 +74,7 @@ export function normalizeHeaders(headers: VerserHeaderInput | undefined): Record
         normalizedHeaders[name.toLowerCase()] = value;
       }
     }
-    return validateVerserHeaders(normalizedHeaders) as Record<string, string>;
+    return validateRuntimeNeutralHeaders(normalizedHeaders);
   }
 
   if (isHeaderPairIterable(headers)) {
@@ -86,7 +84,7 @@ export function normalizeHeaders(headers: VerserHeaderInput | undefined): Record
         normalizedHeaders[name.toLowerCase()] = flattenedValue;
       }
     }
-    return validateVerserHeaders(normalizedHeaders) as Record<string, string>;
+    return validateRuntimeNeutralHeaders(normalizedHeaders);
   }
 
   for (const [name, value] of Object.entries(headers)) {
@@ -95,7 +93,7 @@ export function normalizeHeaders(headers: VerserHeaderInput | undefined): Record
       normalizedHeaders[name.toLowerCase()] = flattenedValue;
     }
   }
-  return validateVerserHeaders(normalizedHeaders) as Record<string, string>;
+  return validateRuntimeNeutralHeaders(normalizedHeaders);
 }
 
 export function createCommonBrokerRequest<TBody>(
@@ -131,4 +129,32 @@ function isHeaderPairIterable(
   value: VerserHeaderInput,
 ): value is Iterable<readonly [string, VerserHeaderValue]> {
   return Symbol.iterator in Object(value) && !Array.isArray(value);
+}
+
+function validateRuntimeNeutralHeaders(headers: Record<string, string>): Record<string, string> {
+  const validatedHeaders: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    if (!isValidHeaderName(headerName)) {
+      throw new Error(`Invalid header name: ${headerName}`);
+    }
+    if (!isValidHeaderValue(headerValue)) {
+      throw new Error(`Invalid header value for ${headerName}`);
+    }
+    validatedHeaders[headerName] = headerValue;
+  }
+  return validatedHeaders;
+}
+
+function isValidHeaderName(headerName: string): boolean {
+  return /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(headerName);
+}
+
+function isValidHeaderValue(headerValue: string): boolean {
+  for (let index = 0; index < headerValue.length; index += 1) {
+    const code = headerValue.charCodeAt(index);
+    if ((code >= 0x00 && code <= 0x08) || (code >= 0x0a && code <= 0x1f) || code === 0x7f) {
+      return false;
+    }
+  }
+  return true;
 }

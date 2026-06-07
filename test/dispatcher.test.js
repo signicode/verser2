@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
-const { fetch } = require('../packages/verser2-guest-node/node_modules/undici');
+const { fetch } = require('undici');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
 const {

@@ -844,13 +844,14 @@ class VerserBrokerDispatcher extends Dispatcher {
     }
 
     controller.attachResponseBody(response.body);
+    response.body.pause();
     controller.rawHeaders = toRawHeaderList(response.headers);
     handler.onResponseStarted?.();
     handler.onHeaders?.(
       response.statusCode,
       controller.rawHeaders,
       () => controller.resume(),
-      'OK',
+      http.STATUS_CODES[response.statusCode] ?? '',
     );
     response.body.on('data', (chunk: Buffer | string) => {
       if (controller.aborted) {
