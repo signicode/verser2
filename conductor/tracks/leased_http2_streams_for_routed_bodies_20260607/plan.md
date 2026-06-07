@@ -2,22 +2,31 @@
 
 ## Phase 0: Track Setup, Branch/PR, and Baseline Verification
 
-- [ ] Task: Confirm scope and baseline
-    - [ ] Read `conductor/index.md`, `product.md`, `tech-stack.md`, `workflow.md`, this track `spec.md`, and the leased-stream handoff document.
-    - [ ] Confirm the affected packages: `@signicode/verser-common`, `@signicode/verser2-host`, and `@signicode/verser2-guest-node`.
-    - [ ] Confirm current MVP routed body transfer still uses NDJSON/base64 frames before replacement work begins.
-    - [ ] Review existing common exports for reusable protocol, error, lifecycle, and HTTP/2 helpers.
-- [ ] Task: Create review branch and PR
-    - [ ] Create a dedicated branch for this track, using the track id as the branch name.
-    - [ ] Push the branch to `origin`.
-    - [ ] Create a GitHub pull request with `gh` for review and phase checkpoints.
-    - [ ] Record the PR URL in `plan.md`.
-- [ ] Task: Establish baseline validation
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm test`.
-    - [ ] Run `npm run lint`.
-    - [ ] Run coverage measurement and record baseline coverage.
-- [ ] Task: Conductor - User Manual Verification 'Phase 0: Track Setup, Branch/PR, and Baseline Verification' (Protocol in workflow.md)
+- [x] Task: Confirm scope and baseline
+    - [x] Read `conductor/index.md`, `product.md`, `tech-stack.md`, `workflow.md`, this track `spec.md`, and the leased-stream handoff document.
+    - [x] Confirm the affected packages: `@signicode/verser-common`, `@signicode/verser2-host`, and `@signicode/verser2-guest-node`.
+    - [x] Confirm current MVP routed body transfer still uses NDJSON/base64 frames before replacement work begins.
+    - [x] Review existing common exports for reusable protocol, error, lifecycle, and HTTP/2 helpers.
+- [x] Task: Create review branch and PR
+    - [x] Create a dedicated branch for this track, using the track id as the branch name.
+    - [x] Push the branch to `origin`.
+    - [x] Create a GitHub pull request with `gh` for review and phase checkpoints.
+    - [x] Record the PR URL in `plan.md`.
+- [x] Task: Establish baseline validation
+    - [x] Run `npm run build`.
+    - [x] Run `npm test`.
+    - [x] Run `npm run lint`.
+    - [x] Run coverage measurement and record baseline coverage.
+- [x] Task: Conductor - User Manual Verification 'Phase 0: Track Setup, Branch/PR, and Baseline Verification' (Protocol in workflow.md)
+
+### Phase 0 Notes
+
+- PR: https://github.com/signicode/verser2/pull/2
+- Baseline routing still uses Guest control stream NDJSON/base64 body frames: `bodyBase64` is present in Host routed request/response frame handling and Guest control dispatch.
+- Existing common exports include protocol-neutral routed envelope shapes, lifecycle names, contextual errors, HTTP/2 header helpers, and development TLS helpers. Binary envelope helpers are not present yet and belong in `@signicode/verser-common`.
+- Baseline validation passed: `npm run build`, `npm test`, `npm run lint`, and `npm run test:coverage`.
+- Baseline coverage: all files 96.14% line coverage; package source maps show lower branch/function percentages for generated/type-adjacent and rarely forced socket/protocol branches.
+- Manual verification: approved by user after automated validation passed.
 
 ## Phase 1: Shared Binary Envelope Foundations
 
