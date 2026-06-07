@@ -85,6 +85,21 @@ interface PendingRoutedRequest {
   statusCode?: number;
 }
 
+interface GuestLeaseStream {
+  readonly guestId: VerserPeerId;
+  readonly leaseId: string;
+  readonly stream: http2.ServerHttp2Stream;
+  active: boolean;
+}
+
+interface QueuedLeaseAcquisition {
+  readonly guestId: VerserPeerId;
+  readonly requestId: string;
+  readonly timeout: NodeJS.Timeout;
+  readonly resolve: (lease: GuestLeaseStream) => void;
+  readonly reject: (error: VerserError) => void;
+}
+
 export function createVerserHost(options: VerserHostOptions = {}): VerserHost {
   return new NodeHttp2VerserHost(options);
 }
@@ -99,6 +114,12 @@ class NodeHttp2VerserHost implements VerserHost {
   private readonly sessions = new Set<http2.ServerHttp2Session>();
 
   private readonly pendingRequests = new Map<string, PendingRoutedRequest>();
+
+  private readonly idleLeases = new Map<VerserPeerId, GuestLeaseStream[]>();
+
+  private readonly activeLeases = new Map<string, GuestLeaseStream>();
+
+  private readonly queuedLeaseAcquisitions = new Map<VerserPeerId, QueuedLeaseAcquisition[]>();
 
   private server?: http2.Http2SecureServer;
 
@@ -167,6 +188,9 @@ class NodeHttp2VerserHost implements VerserHost {
       peer.controlStream?.close(http2.constants.NGHTTP2_NO_ERROR);
     }
 
+    this.closeAllLeases();
+    this.failAllQueuedLeaseAcquisitions(reason);
+
     for (const session of this.sessions) {
       session.close();
     }
@@ -210,6 +234,11 @@ class NodeHttp2VerserHost implements VerserHost {
     const path = String(headers[':path'] ?? '');
     if (path === '/verser/guest/control') {
       this.attachGuestControlStream(stream, headers);
+      return;
+    }
+
+    if (path === '/verser/guest/lease') {
+      this.attachGuestLeaseStream(stream, headers);
       return;
     }
 
@@ -320,6 +349,35 @@ class NodeHttp2VerserHost implements VerserHost {
     readJsonLines(stream, (frame) => this.handleGuestControlFrame(frame));
   }
 
+  private attachGuestLeaseStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): void {
+    const guestId = createPeerId(String(headers['x-verser-peer-id'] ?? ''));
+    const leaseId = String(headers['x-verser-lease-id'] ?? '').trim();
+    const peer = this.peers.get(guestId);
+    if (peer === undefined || peer.role !== 'guest') {
+      throw createVerserError('disconnected-target', 'Guest lease stream has no registered peer', {
+        targetId: guestId,
+      });
+    }
+    if (leaseId.length === 0) {
+      throw createVerserError('protocol-error', 'Guest lease stream requires a lease id', {
+        targetId: guestId,
+      });
+    }
+
+    const lease: GuestLeaseStream = { guestId, leaseId, stream, active: false };
+    stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
+    stream.on('close', () => this.removeLease(lease));
+    stream.on('error', (error) => {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+      this.removeLease(lease);
+    });
+
+    this.addIdleLease(lease);
+  }
+
   private async routeBrokerRequest(
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders,
@@ -332,8 +390,14 @@ class NodeHttp2VerserHost implements VerserHost {
       throw createVerserError('missing-guest', 'Target Guest is not registered', { targetId });
     }
     if (target.controlStream === undefined || target.controlStream.closed) {
-      throw createVerserError('disconnected-target', 'Target Guest has no active control stream', {
+      await this.acquireLease(
+        createPeerId(targetId),
+        requestId,
+        parseLeaseAcquireTimeoutMs(headers),
+      );
+      throw createVerserError('protocol-error', 'Leased routing is not active yet', {
         targetId,
+        requestId,
       });
     }
 
@@ -396,6 +460,8 @@ class NodeHttp2VerserHost implements VerserHost {
       if (peer.session === session) {
         this.peers.delete(peerId);
         this.guestRegistrations.delete(peerId);
+        this.closeGuestLeases(peerId);
+        this.failQueuedLeaseAcquisitions(peerId, 'guest-disconnect');
         shouldAdvertiseRoutes = shouldAdvertiseRoutes || peer.role === 'guest';
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.disconnected,
@@ -415,6 +481,122 @@ class NodeHttp2VerserHost implements VerserHost {
   }
 
   private readonly guestRegistrations = new Map<VerserPeerId, RoutedDomainRegistration[]>();
+
+  private addIdleLease(lease: GuestLeaseStream): void {
+    const queued = this.queuedLeaseAcquisitions.get(lease.guestId)?.shift();
+    if (queued !== undefined) {
+      clearTimeout(queued.timeout);
+      lease.active = true;
+      this.activeLeases.set(lease.leaseId, lease);
+      queued.resolve(lease);
+      return;
+    }
+
+    const idleLeases = this.idleLeases.get(lease.guestId) ?? [];
+    idleLeases.push(lease);
+    this.idleLeases.set(lease.guestId, idleLeases);
+  }
+
+  private acquireLease(
+    guestId: VerserPeerId,
+    requestId: string,
+    timeoutMs: number,
+  ): Promise<GuestLeaseStream> {
+    const idleLeases = this.idleLeases.get(guestId) ?? [];
+    const lease = idleLeases.shift();
+    if (lease !== undefined) {
+      lease.active = true;
+      this.activeLeases.set(lease.leaseId, lease);
+      return Promise.resolve(lease);
+    }
+
+    return new Promise((resolve, reject) => {
+      const acquisition: QueuedLeaseAcquisition = {
+        guestId,
+        requestId,
+        resolve,
+        reject,
+        timeout: setTimeout(() => {
+          this.removeQueuedLeaseAcquisition(acquisition);
+          reject(
+            createVerserError('timeout', 'Timed out waiting for a Guest lease stream', {
+              targetId: guestId,
+              requestId,
+              timeoutMs,
+            }),
+          );
+        }, timeoutMs),
+      };
+      const queued = this.queuedLeaseAcquisitions.get(guestId) ?? [];
+      queued.push(acquisition);
+      this.queuedLeaseAcquisitions.set(guestId, queued);
+    });
+  }
+
+  private removeLease(lease: GuestLeaseStream): void {
+    const idleLeases = this.idleLeases.get(lease.guestId) ?? [];
+    this.idleLeases.set(
+      lease.guestId,
+      idleLeases.filter((candidate) => candidate !== lease),
+    );
+    this.activeLeases.delete(lease.leaseId);
+  }
+
+  private closeGuestLeases(guestId: VerserPeerId): void {
+    for (const lease of this.idleLeases.get(guestId) ?? []) {
+      lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+    }
+    this.idleLeases.delete(guestId);
+
+    for (const lease of this.activeLeases.values()) {
+      if (lease.guestId === guestId) {
+        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+        this.activeLeases.delete(lease.leaseId);
+      }
+    }
+  }
+
+  private closeAllLeases(): void {
+    for (const leases of this.idleLeases.values()) {
+      for (const lease of leases) {
+        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    }
+    for (const lease of this.activeLeases.values()) {
+      lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+    }
+    this.idleLeases.clear();
+    this.activeLeases.clear();
+  }
+
+  private failQueuedLeaseAcquisitions(guestId: VerserPeerId, reason: string): void {
+    const queued = this.queuedLeaseAcquisitions.get(guestId) ?? [];
+    this.queuedLeaseAcquisitions.delete(guestId);
+    for (const acquisition of queued) {
+      clearTimeout(acquisition.timeout);
+      acquisition.reject(
+        createVerserError('disconnected-target', 'Guest disconnected while waiting for a lease', {
+          targetId: guestId,
+          requestId: acquisition.requestId,
+          reason,
+        }),
+      );
+    }
+  }
+
+  private failAllQueuedLeaseAcquisitions(reason: string): void {
+    for (const guestId of this.queuedLeaseAcquisitions.keys()) {
+      this.failQueuedLeaseAcquisitions(guestId, reason);
+    }
+  }
+
+  private removeQueuedLeaseAcquisition(acquisition: QueuedLeaseAcquisition): void {
+    const queued = this.queuedLeaseAcquisitions.get(acquisition.guestId) ?? [];
+    this.queuedLeaseAcquisitions.set(
+      acquisition.guestId,
+      queued.filter((candidate) => candidate !== acquisition),
+    );
+  }
 }
 
 function parseRegistrationRequest(body: string): VerserHostRegistrationRequest {
@@ -519,4 +701,13 @@ function decodeHeaderMap(value: string): Record<string, string> {
   return Object.fromEntries(
     Object.entries(parsed).map(([key, headerValue]) => [key, String(headerValue)]),
   );
+}
+
+function parseLeaseAcquireTimeoutMs(headers: http2.IncomingHttpHeaders): number {
+  const value = Number(headers['x-verser-lease-acquire-timeout-ms'] ?? 5000);
+  if (!Number.isFinite(value) || value < 0) {
+    return 5000;
+  }
+
+  return value;
 }
