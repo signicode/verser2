@@ -59,23 +59,37 @@
 
 ## Phase 2: Host Lease Registration, Pooling, and Acquisition
 
-- [ ] Task: Write failing Host lease tests first
-    - [ ] Add tests for accepting Guest-opened lease streams on `/verser/guest/lease`.
-    - [ ] Add tests for storing idle leases by Guest id and lease id.
-    - [ ] Add tests for acquiring one idle lease per Broker routed request.
-    - [ ] Add tests for queueing and timing out when no lease is available.
-    - [ ] Add tests for lease cleanup on stream close, reset, error, and Guest disconnect.
-- [ ] Task: Implement Host lease lifecycle
-    - [ ] Add Host route handling for Guest lease streams.
-    - [ ] Track idle, active, queued, and closed lease state per Guest.
-    - [ ] Implement lease acquisition with timeout and actionable contextual errors.
-    - [ ] Ensure Guest disconnect fails active and queued requests and removes idle leases.
-    - [ ] Emit or preserve lifecycle/error diagnostics for lease close and failure paths.
-- [ ] Task: Validate Host lease behavior
-    - [ ] Run focused Host and routing tests.
-    - [ ] Run `npm run build`.
-    - [ ] Record coverage and deduplication notes in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Host Lease Registration, Pooling, and Acquisition' (Protocol in workflow.md)
+- [x] Task: Write failing Host lease tests first
+    - [x] Add tests for accepting Guest-opened lease streams on `/verser/guest/lease`.
+    - [x] Add tests for storing idle leases by Guest id and lease id.
+    - [x] Add tests for acquiring one idle lease per Broker routed request.
+    - [x] Add tests for queueing and timing out when no lease is available.
+    - [x] Add tests for lease cleanup on stream close, reset, error, and Guest disconnect.
+- [x] Task: Implement Host lease lifecycle
+    - [x] Add Host route handling for Guest lease streams.
+    - [x] Track idle, active, queued, and closed lease state per Guest.
+    - [x] Implement lease acquisition with timeout and actionable contextual errors.
+    - [x] Ensure Guest disconnect fails active and queued requests and removes idle leases.
+    - [x] Emit or preserve lifecycle/error diagnostics for lease close and failure paths.
+- [x] Task: Validate Host lease behavior
+    - [x] Run focused Host and routing tests.
+    - [x] Run `npm run build`.
+    - [x] Record coverage and deduplication notes in `plan.md`.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Host Lease Registration, Pooling, and Acquisition' (Protocol in workflow.md)
+
+### Phase 2 Notes
+
+- TDD check: focused Host tests failed before implementation due missing `/verser/guest/lease` handling and no lease acquisition timeout behavior. An initial harness timeout exposed an unclosed lease-test stream, which was fixed in the test helper before implementation.
+- Added Host tests for registered Guest lease acceptance, missing Guest lease rejection, and Broker routed request timeout while waiting for an unavailable lease.
+- Added Host lease state for idle leases, active leases, and queued lease acquisitions keyed by Guest id.
+- Added `/verser/guest/lease` handling with peer and lease id validation, idle lease storage, stream close/error cleanup, and queued acquisition fulfillment.
+- Added lease acquisition timeout diagnostics with `targetId`, `requestId`, and `timeoutMs` context.
+- Added Guest disconnect and Host close cleanup for idle leases, active leases, and queued lease acquisitions.
+- Transitional note: Phase 2 establishes lease lifecycle and acquisition primitives; full routed body transfer over assigned leases is implemented in Phase 4.
+- Deduplication: lease lifecycle remains Host-specific; shared protocol-neutral envelope/header helpers from Phase 1 remain in `@signicode/verser-common`.
+- Validation passed: `npm run build`, focused Host/routing tests, `npm run lint`, and `npm run test:coverage`.
+- Coverage after Phase 2: all files 95.40% line coverage; changed Host behavior is covered by focused lease tests.
+- Manual verification: approved by user after automated validation passed.
 
 ## Phase 3: Guest Lease Pool Management
 
