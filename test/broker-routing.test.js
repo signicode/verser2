@@ -252,6 +252,62 @@ test('Broker forwards configured lease acquire timeout to the Host', async () =>
   }
 });
 
+test('Host does not serialize lease acquire timeout as request metadata timeout', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({
+    hostUrl,
+    brokerId: 'broker-timeout-metadata-1',
+    leaseAcquireTimeoutMs: 25,
+  });
+  const rawGuest = await connectRawClient(host.address.port);
+  let requestMetadata;
+
+  try {
+    await broker.connect();
+    assert.equal(
+      (
+        await requestJson(rawGuest, {
+          peerId: 'guest-timeout-metadata-1',
+          role: 'guest',
+          routedDomains: ['timeout-metadata.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    await broker.waitForRoute('timeout-metadata.local.test');
+
+    await openRawLease(
+      rawGuest,
+      'guest-timeout-metadata-1',
+      'raw-lease-timeout-metadata-1',
+      (metadata, _body, lease) => {
+        requestMetadata = metadata;
+        lease.end(
+          common.encodeVerserEnvelope({
+            type: 'response',
+            metadata: { requestId: metadata.requestId, statusCode: 204, headers: {} },
+          }),
+        );
+      },
+    );
+
+    const response = await broker.request({
+      targetId: 'guest-timeout-metadata-1',
+      method: 'GET',
+      path: '/timeout-metadata',
+    });
+    await readBody(response.body);
+
+    assert.equal(Object.hasOwn(requestMetadata, 'timeoutMs'), false);
+  } finally {
+    rawGuest.destroy();
+    await broker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Broker uses one session with separate concurrent routed request streams', async () => {
   const host = createVerserHost({ port: 0 });
   await host.start();
@@ -377,6 +433,93 @@ test('Broker request routes over a raw leased HTTP/2 stream without a Guest cont
   } finally {
     await broker.close('test-complete');
     rawGuest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host isolates active leases when different Guests reuse a lease id', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-duplicate-lease-id-1' });
+  const firstGuest = await connectRawClient(host.address.port);
+  const secondGuest = await connectRawClient(host.address.port);
+
+  try {
+    await broker.connect();
+    assert.equal(
+      (
+        await requestJson(firstGuest, {
+          peerId: 'guest-duplicate-lease-id-1',
+          role: 'guest',
+          routedDomains: ['duplicate-one.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    assert.equal(
+      (
+        await requestJson(secondGuest, {
+          peerId: 'guest-duplicate-lease-id-2',
+          role: 'guest',
+          routedDomains: ['duplicate-two.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    await broker.waitForRoute('duplicate-one.local.test');
+    await broker.waitForRoute('duplicate-two.local.test');
+
+    await openRawLease(
+      firstGuest,
+      'guest-duplicate-lease-id-1',
+      'shared-lease-id',
+      (metadata, _body, lease) => {
+        setTimeout(() => {
+          lease.end(
+            common.encodeVerserEnvelope({
+              type: 'response',
+              metadata: { requestId: metadata.requestId, statusCode: 200, headers: {} },
+            }),
+          );
+        }, 25);
+      },
+    );
+    await openRawLease(
+      secondGuest,
+      'guest-duplicate-lease-id-2',
+      'shared-lease-id',
+      (metadata, _body, lease) => {
+        lease.end(
+          common.encodeVerserEnvelope({
+            type: 'response',
+            metadata: { requestId: metadata.requestId, statusCode: 200, headers: {} },
+          }),
+        );
+      },
+    );
+
+    const firstResponsePromise = broker.request({
+      targetId: 'guest-duplicate-lease-id-1',
+      method: 'GET',
+      path: '/one',
+    });
+    const secondResponse = await broker.request({
+      targetId: 'guest-duplicate-lease-id-2',
+      method: 'GET',
+      path: '/two',
+    });
+    await readBody(secondResponse.body);
+    secondGuest.close();
+    await once(secondGuest, 'close');
+
+    const firstResponse = await firstResponsePromise;
+    assert.equal(firstResponse.statusCode, 200);
+    await readBody(firstResponse.body);
+  } finally {
+    firstGuest.destroy();
+    secondGuest.destroy();
+    await broker.close('test-complete');
     await host.close('test-complete');
   }
 });
