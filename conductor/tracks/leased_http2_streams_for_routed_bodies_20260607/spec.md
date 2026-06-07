@@ -52,7 +52,7 @@ This track implements the follow-up design captured in `conductor/tracks/minimal
 
 - Remove routed request/response `bodyBase64` NDJSON body transfer after leased-stream routing tests pass.
 - Keep route advertisements and other coordination messages on the existing control path unless this track explicitly requires a minimal lease coordination message.
-- Preserve the existing buffer-returning `broker.request()` API while the internal transport becomes streaming.
+- Change `broker.request()` to expose a streaming response body instead of returning an aggregated body buffer.
 - Preserve the minimal plain `node:http` Agent route for Host-advertised domains, updating it to use leased stream routing underneath.
 
 ### Cancellation, Failure, and Lifecycle Behavior
@@ -84,7 +84,7 @@ This track implements the follow-up design captured in `conductor/tracks/minimal
 - Slow Broker response consumers apply backpressure to Guest response production, and slow Guest request consumers apply backpressure to Broker uploads.
 - Broker abort, Guest disconnect, lease timeout, and lease stream error paths are covered by tests and produce actionable errors or lifecycle events.
 - Existing route advertisement behavior remains functional.
-- Existing `broker.request()` and plain `node:http` Agent MVP tests continue to pass using leased routing internally.
+- Existing Broker request semantics and plain `node:http` Agent MVP tests continue to pass using leased routing internally, with Broker response bodies exposed as streams rather than aggregated buffers.
 - Routed request/response body transfer over NDJSON `bodyBase64` frames is removed.
 - Full validation passes with `npm run build`, `npm test`, `npm run lint`, and coverage measurement.
 

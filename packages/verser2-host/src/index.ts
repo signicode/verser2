@@ -1,20 +1,20 @@
 import { EventEmitter } from 'node:events';
 import * as http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
+import { text as readStreamText } from 'node:stream/consumers';
 
 import {
   type RoutedDomainRegistration,
   VERSER_LIFECYCLE_EVENTS,
   type VerserError,
-  type VerserErrorEnvelopeMetadata,
   type VerserPeerId,
-  type VerserResponseEnvelopeMetadata,
   createDevelopmentTlsCertificate,
   createPeerId,
   createRoutedDomainRegistration,
-  createVerserEnvelopeParser,
   createVerserError,
   encodeVerserEnvelope,
+  readLeaseResponseMetadataFromStream,
+  readNdjsonLines,
 } from '@signicode/verser-common';
 
 export const VERSER2_HOST_PACKAGE_NAME = '@signicode/verser2-host';
@@ -69,26 +69,6 @@ interface ErrorResponse {
   };
 }
 
-interface GuestControlFrame {
-  readonly type: string;
-  readonly requestId: string;
-  readonly statusCode?: number;
-  readonly headers?: Record<string, string>;
-  readonly bodyBase64?: string;
-  readonly error?: {
-    readonly code: string;
-    readonly message: string;
-  };
-}
-
-interface PendingRoutedRequest {
-  readonly stream: http2.ServerHttp2Stream;
-  readonly targetId: string;
-  readonly bodyChunks: Buffer[];
-  responseHeaders?: Record<string, string>;
-  statusCode?: number;
-}
-
 interface GuestLeaseStream {
   readonly guestId: VerserPeerId;
   readonly leaseId: string;
@@ -116,8 +96,6 @@ class NodeHttp2VerserHost implements VerserHost {
   private readonly peers = new Map<VerserPeerId, RegisteredPeer>();
 
   private readonly sessions = new Set<http2.ServerHttp2Session>();
-
-  private readonly pendingRequests = new Map<string, PendingRoutedRequest>();
 
   private readonly idleLeases = new Map<VerserPeerId, GuestLeaseStream[]>();
 
@@ -350,7 +328,9 @@ class NodeHttp2VerserHost implements VerserHost {
 
     this.peers.set(peerId, { ...peer, controlStream: stream });
     stream.respond({ ':status': 200, 'content-type': 'application/x-ndjson' });
-    readJsonLines(stream, (frame) => this.handleGuestControlFrame(frame));
+    readNdjsonLines<unknown>(stream, () => {
+      // Guest control stream body routing was removed; keep the stream open for coordination.
+    });
   }
 
   private attachGuestLeaseStream(
@@ -403,28 +383,12 @@ class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
-    if (target.controlStream === undefined || target.controlStream.closed) {
-      const queuedLease = await this.acquireLease(
-        createPeerId(targetId),
-        requestId,
-        parseLeaseAcquireTimeoutMs(headers),
-      );
-      await this.routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
-      return;
-    }
-
-    const body = await readRequestBuffer(stream);
-    this.pendingRequests.set(requestId, { stream, targetId, bodyChunks: [] });
-    writeJsonLine(target.controlStream, {
-      type: 'request',
+    const queuedLease = await this.acquireLease(
+      createPeerId(targetId),
       requestId,
-      sourceId: String(headers['x-verser-source-id'] ?? ''),
-      targetId,
-      method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
-      path: String(headers['x-verser-path'] ?? '/'),
-      headers: decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}')),
-      bodyBase64: body.toString('base64'),
-    });
+      parseLeaseAcquireTimeoutMs(headers),
+    );
+    await this.routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
   }
 
   private async routeBrokerRequestOverLease(
@@ -434,13 +398,20 @@ class NodeHttp2VerserHost implements VerserHost {
     requestId: string,
     targetId: string,
   ): Promise<void> {
-    const responsePromise = readLeaseResponseMetadata(
-      lease.stream,
+    let completed = false;
+    const cancelLease = (): void => {
+      if (!completed && !lease.stream.closed) {
+        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    };
+    stream.once('aborted', cancelLease);
+    stream.once('error', cancelLease);
+    stream.once('close', cancelLease);
+
+    const responsePromise = readLeaseResponseMetadataFromStream(lease.stream, {
       requestId,
       targetId,
-      DEFAULT_LEASE_METADATA_BYTES,
-    );
-    const body = await readRequestBuffer(stream);
+    });
     lease.stream.write(
       encodeVerserEnvelope({
         type: 'request',
@@ -455,50 +426,19 @@ class NodeHttp2VerserHost implements VerserHost {
         },
       }),
     );
-    lease.stream.end(body);
+    stream.pipe(lease.stream);
 
     const responseMetadata = await responsePromise;
     stream.respond({ ':status': responseMetadata.statusCode, ...responseMetadata.headers });
+    lease.stream.once('error', () => {
+      if (!stream.closed) {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    });
     lease.stream.pipe(stream);
-  }
-
-  private handleGuestControlFrame(frame: GuestControlFrame): void {
-    const pending = this.pendingRequests.get(frame.requestId);
-    if (pending === undefined) {
-      return;
-    }
-
-    if (frame.type === 'response-start') {
-      pending.statusCode = frame.statusCode ?? 200;
-      pending.responseHeaders = frame.headers ?? {};
-      return;
-    }
-
-    if (frame.type === 'response-body' && frame.bodyBase64 !== undefined) {
-      pending.bodyChunks.push(Buffer.from(frame.bodyBase64, 'base64'));
-      return;
-    }
-
-    if (frame.type === 'handler-error') {
-      this.pendingRequests.delete(frame.requestId);
-      sendError(
-        pending.stream,
-        createVerserError('local-handler-failure', frame.error?.message ?? 'Guest handler failed', {
-          targetId: pending.targetId,
-          requestId: frame.requestId,
-        }),
-      );
-      return;
-    }
-
-    if (frame.type === 'response-end') {
-      this.pendingRequests.delete(frame.requestId);
-      pending.stream.respond({
-        ':status': pending.statusCode ?? 200,
-        ...(pending.responseHeaders ?? {}),
-      });
-      pending.stream.end(Buffer.concat(pending.bodyChunks));
-    }
+    stream.once('finish', () => {
+      completed = true;
+    });
   }
 
   private removeSessionPeers(session: http2.ServerHttp2Session): void {
@@ -675,15 +615,7 @@ function parseRegistrationRequest(body: string): VerserHostRegistrationRequest {
 }
 
 function readRequestBody(stream: http2.ServerHttp2Stream): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => {
-      body += chunk;
-    });
-    stream.on('end', () => resolve(body));
-    stream.on('error', reject);
-  });
+  return readStreamText(stream);
 }
 
 function writeJsonLine(stream: http2.ServerHttp2Stream, value: unknown): void {
@@ -701,6 +633,9 @@ function sendJson(stream: http2.ServerHttp2Stream, value: unknown): void {
 }
 
 function sendError(stream: http2.ServerHttp2Stream, error: VerserError): void {
+  if (stream.closed || stream.destroyed) {
+    return;
+  }
   if (!stream.headersSent) {
     stream.respond({ ':status': 502, 'content-type': 'application/json' });
   }
@@ -725,37 +660,6 @@ function toVerserError(error: unknown): VerserError {
   return createVerserError('protocol-error', message);
 }
 
-function readRequestBuffer(stream: http2.ServerHttp2Stream): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    stream.on('data', (chunk: Buffer | string) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-    stream.on('error', reject);
-  });
-}
-
-function readJsonLines(
-  stream: http2.ServerHttp2Stream,
-  onFrame: (frame: GuestControlFrame) => void,
-): void {
-  let pending = '';
-  stream.setEncoding('utf8');
-  stream.on('data', (chunk: string) => {
-    pending += chunk;
-    let lineBreak = pending.indexOf('\n');
-    while (lineBreak !== -1) {
-      const line = pending.slice(0, lineBreak);
-      pending = pending.slice(lineBreak + 1);
-      if (line.length > 0) {
-        onFrame(JSON.parse(line) as GuestControlFrame);
-      }
-      lineBreak = pending.indexOf('\n');
-    }
-  });
-}
-
 function decodeHeaderMap(value: string): Record<string, string> {
   const parsed = JSON.parse(value) as Record<string, string>;
   return Object.fromEntries(
@@ -770,128 +674,4 @@ function parseLeaseAcquireTimeoutMs(headers: http2.IncomingHttpHeaders): number 
   }
 
   return value;
-}
-
-const DEFAULT_LEASE_METADATA_BYTES = 64 * 1024;
-
-function readLeaseResponseMetadata(
-  stream: http2.ServerHttp2Stream,
-  requestId: string,
-  targetId: string,
-  maxMetadataBytes: number,
-): Promise<VerserResponseEnvelopeMetadata> {
-  return readLeaseResponseMetadataFromStream(stream, requestId, targetId, maxMetadataBytes);
-}
-
-async function readLeaseResponseMetadataFromStream(
-  stream: http2.ServerHttp2Stream,
-  requestId: string,
-  targetId: string,
-  maxMetadataBytes: number,
-): Promise<VerserResponseEnvelopeMetadata> {
-  const parser = createVerserEnvelopeParser({ maxMetadataBytes });
-  const prefix = await readExactly(stream, 2, requestId, targetId);
-  const lengthBytes = await readExactly(stream, 4, requestId, targetId);
-  const metadataLength = lengthBytes.readUInt32BE(0);
-  const metadataBytes = await readExactly(stream, metadataLength, requestId, targetId);
-  const parsed = parser.push(Buffer.concat([prefix, lengthBytes, metadataBytes]));
-
-  if (parsed === undefined) {
-    throw createVerserError('protocol-error', 'Lease stream metadata parser did not complete', {
-      targetId,
-      requestId,
-    });
-  }
-
-  if (parsed.bodyRemainder.length > 0) {
-    stream.unshift(parsed.bodyRemainder);
-  }
-
-  if (parsed.type === 'response') {
-    return parsed.metadata as VerserResponseEnvelopeMetadata;
-  }
-
-  if (parsed.type === 'error') {
-    const errorMetadata = parsed.metadata as VerserErrorEnvelopeMetadata;
-    throw createVerserError(
-      errorMetadata.code === 'local-handler-failure' ? 'local-handler-failure' : 'protocol-error',
-      errorMetadata.message,
-      {
-        targetId,
-        requestId,
-        ...(errorMetadata.context ?? {}),
-      },
-    );
-  }
-
-  throw createVerserError('protocol-error', 'Lease stream returned a non-response envelope', {
-    targetId,
-    requestId,
-  });
-}
-
-async function readExactly(
-  stream: http2.ServerHttp2Stream,
-  byteCount: number,
-  requestId: string,
-  targetId: string,
-): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let remainingBytes = byteCount;
-
-  while (remainingBytes > 0) {
-    const chunk = stream.read(remainingBytes) as Buffer | string | null;
-    if (chunk === null) {
-      await waitForReadable(stream, requestId, targetId);
-      continue;
-    }
-
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    if (buffer.length > remainingBytes) {
-      chunks.push(buffer.subarray(0, remainingBytes));
-      stream.unshift(buffer.subarray(remainingBytes));
-      remainingBytes = 0;
-      continue;
-    }
-
-    chunks.push(buffer);
-    remainingBytes -= buffer.length;
-  }
-
-  return Buffer.concat(chunks, byteCount);
-}
-
-function waitForReadable(
-  stream: http2.ServerHttp2Stream,
-  requestId: string,
-  targetId: string,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const onReadable = (): void => {
-      cleanup();
-      resolve();
-    };
-    const onEnd = (): void => {
-      cleanup();
-      reject(
-        createVerserError('protocol-error', 'Lease stream ended before response metadata', {
-          targetId,
-          requestId,
-        }),
-      );
-    };
-    const onError = (error: Error): void => {
-      cleanup();
-      reject(toVerserError(error));
-    };
-    const cleanup = (): void => {
-      stream.off('readable', onReadable);
-      stream.off('end', onEnd);
-      stream.off('error', onError);
-    };
-
-    stream.once('readable', onReadable);
-    stream.once('end', onEnd);
-    stream.once('error', onError);
-  });
 }

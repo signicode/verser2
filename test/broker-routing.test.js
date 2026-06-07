@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const http2 = require('node:http2');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const common = require('../packages/verser-common/dist/index.js');
@@ -46,27 +47,41 @@ function openRawLease(session, peerId, leaseId, onRequest) {
       'x-verser-peer-id': peerId,
       'x-verser-lease-id': leaseId,
     });
-    const parser = common.createVerserEnvelopeParser();
     const bodyChunks = [];
-    let metadata;
-
-    lease.on('data', (chunk) => {
-      if (metadata === undefined) {
-        const parsed = parser.push(Buffer.from(chunk));
-        if (parsed !== undefined) {
-          metadata = parsed.metadata;
-          bodyChunks.push(parsed.bodyRemainder);
-        }
-        return;
-      }
-
-      bodyChunks.push(Buffer.from(chunk));
+    lease.once('response', () => {
+      common
+        .readLeaseRequestMetadataFromStream(lease, { guestId: peerId, leaseId })
+        .then((metadata) => {
+          lease.on('data', (chunk) => bodyChunks.push(Buffer.from(chunk)));
+          lease.on('end', () => {
+            onRequest(metadata, Buffer.concat(bodyChunks), lease);
+          });
+        })
+        .catch(reject);
+      resolve(lease);
     });
-    lease.on('end', () => {
-      onRequest(metadata, Buffer.concat(bodyChunks), lease);
-    });
-    lease.once('response', () => resolve(lease));
     lease.once('error', reject);
+  });
+}
+
+async function readNextChunk(stream) {
+  const existing = stream.read();
+  if (existing !== null) {
+    return Buffer.from(existing);
+  }
+
+  return new Promise((resolve, reject) => {
+    stream.once('data', (chunk) => resolve(Buffer.from(chunk)));
+    stream.once('error', reject);
+  });
+}
+
+function readBody(stream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
   });
 }
 
@@ -107,7 +122,10 @@ test('Broker connects, receives route advertisements, and forwards requests to a
 
     assert.equal(response.statusCode, 203);
     assert.equal(response.headers['x-routed'], 'yes');
-    assert.deepEqual(response.body, Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from('tail')]));
+    assert.deepEqual(
+      await readBody(response.body),
+      Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from('tail')]),
+    );
     assert.equal(broker.routedRequestCount, 1);
   } finally {
     if (broker !== undefined) await broker.close('test-complete');
@@ -185,7 +203,9 @@ test('Broker uses one session with separate concurrent routed request streams', 
     ]);
 
     assert.deepEqual(
-      responses.map((response) => response.body.toString('utf8')),
+      await Promise.all(
+        responses.map((response) => readBody(response.body).then((body) => body.toString('utf8'))),
+      ),
       ['handled /one', 'handled /two', 'handled /three'],
     );
     assert.equal(broker.sessionCount, 1);
@@ -278,7 +298,7 @@ test('Broker request routes over a raw leased HTTP/2 stream without a Guest cont
 
     assert.equal(response.statusCode, 206);
     assert.equal(response.headers['x-lease'], 'raw');
-    assert.deepEqual(response.body, Buffer.from([9, 8, 7, 0]));
+    assert.deepEqual(await readBody(response.body), Buffer.from([9, 8, 7, 0]));
     assert.deepEqual(requestBodies, [Buffer.from([0, 255, 1])]);
   } finally {
     await broker.close('test-complete');
@@ -455,10 +475,376 @@ test('Host reads split leased response metadata before piping body', async () =>
 
     assert.equal(response.statusCode, 207);
     assert.equal(response.headers['x-split'], 'yes');
-    assert.deepEqual(response.body, Buffer.from('split-body'));
+    assert.deepEqual(await readBody(response.body), Buffer.from('split-body'));
   } finally {
     await broker.close('test-complete');
     rawGuest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('leased Node Guest response body streams before the local response ends', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const rawBroker = await connectRawClient(host.address.port);
+  let guest;
+
+  try {
+    guest = createVerserNodeGuest({
+      hostUrl: `https://localhost:${host.address.port}`,
+      guestId: 'guest-streaming-response-1',
+    });
+    guest.attach((_request, response) => {
+      response.writeHead(200, { 'x-streaming': 'response' });
+      response.write(Buffer.from('first'));
+      setTimeout(() => response.end(Buffer.from('second')), 100);
+    }, 'streaming-response.local.test');
+    await guest.connect();
+
+    const brokerStream = rawBroker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-target-id': 'guest-streaming-response-1',
+      'x-verser-request-id': 'req-streaming-response-1',
+      'x-verser-source-id': 'broker-streaming-response-1',
+      'x-verser-method': 'GET',
+      'x-verser-path': '/stream-response',
+    });
+    const firstChunk = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Node Guest response was buffered')), 50);
+      brokerStream.once('data', (chunk) => {
+        clearTimeout(timeout);
+        resolve(Buffer.from(chunk));
+      });
+      brokerStream.once('error', reject);
+    });
+
+    brokerStream.end();
+
+    assert.deepEqual(await firstChunk, Buffer.from('first'));
+  } finally {
+    rawBroker.destroy();
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('leased upload dispatch starts before Broker request body ends', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const rawGuest = await connectRawClient(host.address.port);
+  const rawBroker = await connectRawClient(host.address.port);
+
+  try {
+    assert.equal(
+      (
+        await requestJson(rawGuest, {
+          peerId: 'guest-streaming-upload-1',
+          role: 'guest',
+          routedDomains: ['streaming-upload.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+
+    const firstBodyChunk = new Promise((resolve, reject) => {
+      const lease = rawGuest.request({
+        ':method': 'POST',
+        ':path': '/verser/guest/lease',
+        'x-verser-peer-id': 'guest-streaming-upload-1',
+        'x-verser-lease-id': 'raw-lease-streaming-upload-1',
+      });
+      lease.once('response', () => {
+        common
+          .readLeaseRequestMetadataFromStream(lease, {
+            guestId: 'guest-streaming-upload-1',
+            leaseId: 'raw-lease-streaming-upload-1',
+          })
+          .then(() => readNextChunk(lease))
+          .then(resolve)
+          .catch(reject);
+      });
+      lease.once('error', reject);
+      lease.once('response', (headers) => {
+        if (Number(headers[':status']) !== 200) {
+          reject(new Error(`lease failed with ${headers[':status']}`));
+        }
+      });
+    });
+
+    const brokerStream = rawBroker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-target-id': 'guest-streaming-upload-1',
+      'x-verser-request-id': 'req-streaming-upload-1',
+      'x-verser-source-id': 'broker-streaming-upload-1',
+      'x-verser-method': 'POST',
+      'x-verser-path': '/stream-upload',
+    });
+
+    brokerStream.write(Buffer.from('first'));
+
+    assert.deepEqual(
+      await Promise.race([
+        firstBodyChunk,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('leased upload was buffered')), 50),
+        ),
+      ]),
+      Buffer.from('first'),
+    );
+    brokerStream.end(Buffer.from('second'));
+  } finally {
+    rawBroker.destroy();
+    rawGuest.destroy();
+    await host.close('test-complete');
+  }
+});
+
+test('broker.request streams Readable upload bodies over leased routing', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-readable-upload-1' });
+  let guest;
+
+  try {
+    guest = createVerserNodeGuest({
+      hostUrl,
+      guestId: 'guest-readable-upload-1',
+    });
+    guest.attach((request, response) => {
+      request.once('data', (chunk) => {
+        response.writeHead(200, { 'x-readable-upload': 'streamed' });
+        response.end(Buffer.from(chunk));
+      });
+    }, 'readable-upload.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('readable-upload.local.test');
+
+    const body = new PassThrough();
+    const responsePromise = broker.request({
+      targetId: 'guest-readable-upload-1',
+      method: 'POST',
+      path: '/readable-upload',
+      body,
+    });
+
+    body.write(Buffer.from('first'));
+
+    const response = await Promise.race([
+      responsePromise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Readable upload was not streamed')), 50),
+      ),
+    ]);
+
+    assert.equal(response.headers['x-readable-upload'], 'streamed');
+    assert.deepEqual(await readBody(response.body), Buffer.from('first'));
+    body.end(Buffer.from('second'));
+  } finally {
+    await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker abort cancels the active leased stream', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const rawGuest = await connectRawClient(host.address.port);
+  const rawBroker = await connectRawClient(host.address.port);
+
+  try {
+    assert.equal(
+      (
+        await requestJson(rawGuest, {
+          peerId: 'guest-abort-lease-1',
+          role: 'guest',
+          routedDomains: ['abort-lease.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+
+    const leaseClosed = new Promise((resolve, reject) => {
+      const lease = rawGuest.request({
+        ':method': 'POST',
+        ':path': '/verser/guest/lease',
+        'x-verser-peer-id': 'guest-abort-lease-1',
+        'x-verser-lease-id': 'raw-lease-abort-1',
+      });
+      lease.once('response', () => {
+        common
+          .readLeaseRequestMetadataFromStream(lease, {
+            guestId: 'guest-abort-lease-1',
+            leaseId: 'raw-lease-abort-1',
+          })
+          .then(() => readNextChunk(lease))
+          .then(() => brokerStream.close(http2.constants.NGHTTP2_CANCEL))
+          .catch(reject);
+      });
+      lease.once('close', resolve);
+      lease.once('error', reject);
+    });
+
+    const brokerStream = rawBroker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-target-id': 'guest-abort-lease-1',
+      'x-verser-request-id': 'req-abort-lease-1',
+      'x-verser-source-id': 'broker-abort-lease-1',
+      'x-verser-method': 'POST',
+      'x-verser-path': '/abort',
+    });
+    brokerStream.write(Buffer.from('cancel-me'));
+
+    await Promise.race([
+      leaseClosed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('lease was not cancelled')), 500),
+      ),
+    ]);
+  } finally {
+    rawBroker.destroy();
+    rawGuest.destroy();
+    await host.close('test-complete');
+  }
+});
+
+test('Guest disconnect fails an active leased Broker request', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const rawBroker = await connectRawClient(host.address.port);
+  let guest;
+
+  try {
+    guest = createVerserNodeGuest({
+      hostUrl: `https://localhost:${host.address.port}`,
+      guestId: 'guest-active-disconnect-1',
+    });
+    guest.attach((request) => {
+      request.resume();
+    }, 'active-disconnect.local.test');
+    await guest.connect();
+
+    const brokerStream = rawBroker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-target-id': 'guest-active-disconnect-1',
+      'x-verser-request-id': 'req-active-disconnect-1',
+      'x-verser-source-id': 'broker-active-disconnect-1',
+      'x-verser-method': 'POST',
+      'x-verser-path': '/disconnect',
+    });
+    const failed = new Promise((resolve, reject) => {
+      brokerStream.once('response', resolve);
+      brokerStream.once('close', resolve);
+      brokerStream.once('error', resolve);
+      setTimeout(
+        () => reject(new Error('active request did not fail after Guest disconnect')),
+        500,
+      );
+    });
+    brokerStream.write(Buffer.from('start'));
+
+    await guest.close('active-disconnect-test');
+    await failed;
+  } finally {
+    rawBroker.destroy();
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Host maps lease reset before response metadata to a protocol error', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-lease-reset-1' });
+  const rawGuest = await connectRawClient(host.address.port);
+
+  try {
+    await broker.connect();
+    assert.equal(
+      (
+        await requestJson(rawGuest, {
+          peerId: 'guest-lease-reset-1',
+          role: 'guest',
+          routedDomains: ['lease-reset.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    await broker.waitForRoute('lease-reset.local.test');
+    await openRawLease(
+      rawGuest,
+      'guest-lease-reset-1',
+      'raw-lease-reset-1',
+      (_metadata, _body, lease) => {
+        lease.close(http2.constants.NGHTTP2_CANCEL);
+      },
+    );
+
+    await assert.rejects(
+      () => broker.request({ targetId: 'guest-lease-reset-1', method: 'GET', path: '/reset' }),
+      (error) => {
+        assert.equal(error.code, 'protocol-error');
+        assert.match(error.message, /response metadata|closed/i);
+        assert.equal(error.context.targetId, 'guest-lease-reset-1');
+        return true;
+      },
+    );
+  } finally {
+    await broker.close('test-complete');
+    rawGuest.destroy();
+    await host.close('test-complete');
+  }
+});
+
+test('Guest handler failure after response start cancels the Broker response stream', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const rawBroker = await connectRawClient(host.address.port);
+  let guest;
+
+  try {
+    guest = createVerserNodeGuest({
+      hostUrl: `https://localhost:${host.address.port}`,
+      guestId: 'guest-post-response-failure-1',
+    });
+    guest.attach((_request, response) => {
+      response.writeHead(200, { 'x-partial': 'yes' });
+      response.write(Buffer.from('partial'));
+      throw new Error('failed after partial response');
+    }, 'post-response-failure.local.test');
+    await guest.connect();
+
+    const brokerStream = rawBroker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-target-id': 'guest-post-response-failure-1',
+      'x-verser-request-id': 'req-post-response-failure-1',
+      'x-verser-source-id': 'broker-post-response-failure-1',
+      'x-verser-method': 'GET',
+      'x-verser-path': '/post-response-failure',
+    });
+    const firstChunk = new Promise((resolve, reject) => {
+      brokerStream.once('data', (chunk) => resolve(Buffer.from(chunk)));
+      brokerStream.once('error', reject);
+    });
+    const closed = new Promise((resolve, reject) => {
+      brokerStream.once('close', resolve);
+      setTimeout(() => reject(new Error('Broker response stream was not cancelled')), 500);
+    });
+    brokerStream.end();
+
+    assert.deepEqual(await firstChunk, Buffer.from('partial'));
+    await closed;
+  } finally {
+    rawBroker.destroy();
+    if (guest !== undefined) await guest.close('test-complete');
     await host.close('test-complete');
   }
 });

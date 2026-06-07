@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { PassThrough } = require('node:stream');
 const { test } = require('node:test');
 
 const common = require('../packages/verser-common/dist/index.js');
@@ -115,4 +116,70 @@ test('shared metadata validation rejects invalid and forbidden headers', () => {
   assert.throws(() => common.validateVerserHeaders({ connection: 'close' }), /forbidden header/i);
   assert.throws(() => common.validateVerserHeaders({ upgrade: 'websocket' }), /forbidden header/i);
   assert.throws(() => common.validateVerserHeaders({ 'keep-alive': '1' }), /forbidden header/i);
+});
+
+test('shared stream helpers read exact bytes and unshift envelope body remainder', async () => {
+  const stream = new PassThrough();
+  const envelope = common.encodeVerserEnvelope({
+    type: 'response',
+    metadata: {
+      requestId: 'req-stream-helper-1',
+      statusCode: 204,
+      headers: { 'x-stream': 'common' },
+    },
+  });
+  const body = Buffer.from('body-remainder');
+
+  stream.write(envelope.subarray(0, 2));
+  setTimeout(() => stream.write(Buffer.concat([envelope.subarray(2), body])), 10);
+
+  const parsed = await common.readLeaseResponseMetadataFromStream(stream, {
+    requestId: 'req-stream-helper-1',
+    targetId: 'guest-stream-helper-1',
+  });
+
+  assert.deepEqual(parsed, {
+    requestId: 'req-stream-helper-1',
+    statusCode: 204,
+    headers: { 'x-stream': 'common' },
+  });
+  assert.deepEqual(stream.read(body.length), body);
+});
+
+test('shared stream helpers read request metadata without consuming body bytes', async () => {
+  const stream = new PassThrough();
+  const envelope = common.encodeVerserEnvelope({
+    type: 'request',
+    metadata: {
+      requestId: 'req-stream-helper-2',
+      sourceId: 'broker-stream-helper-1',
+      targetId: 'guest-stream-helper-2',
+      method: 'POST',
+      path: '/common-stream',
+      headers: { 'x-common': 'request' },
+    },
+  });
+  const body = Buffer.from('request-body');
+
+  stream.end(Buffer.concat([envelope, body]));
+
+  const parsed = await common.readLeaseRequestMetadataFromStream(stream, {
+    guestId: 'guest-stream-helper-2',
+    leaseId: 'lease-stream-helper-2',
+  });
+
+  assert.equal(parsed.requestId, 'req-stream-helper-2');
+  assert.equal(parsed.method, 'POST');
+  assert.deepEqual(stream.read(body.length), body);
+});
+
+test('shared NDJSON parser uses data chunks and parses split lines', () => {
+  const stream = new PassThrough();
+  const frames = [];
+
+  common.readNdjsonLines(stream, (frame) => frames.push(frame));
+  stream.write('{"type":"one"}\n{"type"');
+  stream.write(':"two"}\n\n');
+
+  assert.deepEqual(frames, [{ type: 'one' }, { type: 'two' }]);
 });
