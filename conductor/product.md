@@ -26,13 +26,16 @@ The product uses the repo nomenclature:
 
 ## Initial Milestone
 
-The first milestone should establish the TypeScript/Node.js package foundation and then build the core Host/Guest path incrementally:
+The first milestone established the TypeScript/Node.js package foundation and a minimal Host/Guest/Broker request path:
 
 - A shared `@signicode/verser-common` package for reusable protocol-neutral primitives, types, constants, and helpers.
-- A host that accepts outbound guest connections and routes requests.
-- A Node guest that owns or receives a normal `http.Server` without calling `listen()`.
-- End-to-end request forwarding from a connected caller through the host into the guest's local HTTP/1 server.
-- Response forwarding back to the original caller while preserving HTTP semantics.
+- A TLS HTTP/2 Host that accepts outbound Guest and Broker connections, registers routed domains, and advertises route updates.
+- A Node Guest that owns or receives a normal `http.Server` or request listener without calling `listen()`.
+- A Broker that can route requests through the Host into a connected Guest's local HTTP/1 handler.
+- A minimal plain `node:http` Agent path for Host-advertised domains.
+- End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
+
+Current MVP limitations are documented in the README: HTTP/3, non-Node guests, full backpressure-aware streaming, advanced Agent behavior, authentication, authorization, and public gateway policy are future track work.
 
 ## Product Principles
 
@@ -54,7 +57,7 @@ The first milestone should establish the TypeScript/Node.js package foundation a
 ## Non-Goals
 
 - `verser2` is not a general-purpose public HTTP gateway by itself.
-- The first milestone does not need to implement every language guest.
+- The first milestone does not implement every language guest.
 - Scaffold tracks should not implement HTTP/2 multiplexing, request routing, or HTTP/3 behavior unless the active track explicitly asks for it.
 - Authentication, authorization, and routing policy can be designed as host-level capabilities in future tracks, but should not obscure the core Host/Guest request path.
 
