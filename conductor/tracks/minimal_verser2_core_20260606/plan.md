@@ -180,7 +180,7 @@
     - [x] Run `npm run lint` if Broker, Host, Guest, or tests changed formatting-sensitive areas.
     - [x] Record coverage status and any limitations.
     - [x] Perform a phase-end deduplication check and move reusable pieces to common if duplication appears.
-- [~] Task: Conductor - User Manual Verification 'Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Broker Request Forwarding, Streaming, Flow Control, and Concurrency' (Protocol in workflow.md)
 
 ### Phase 4 Validation Notes
 
@@ -190,6 +190,9 @@
 - Scope note: request and response bodies are forwarded as chunks through Broker HTTP/2 request streams and Guest control frames. The Guest leg uses logical base64 frames over a Guest-opened control stream as recommended by @oracle; this is MVP framing, not final binary length-prefix framing.
 - Failure behavior covered in focused tests includes missing guests and local handler failures; disconnected-target, timeout, and lower-level stream failures are represented in implementation error mapping but not exhaustively forced in tests due to the MVP control-stream harness.
 - Deduplication result: Broker/Guest/Host routing reuse shared common lifecycle names, development TLS helpers, routed-domain metadata, routed envelopes, and contextual errors. Host session/request registries, Broker API ergonomics, and Guest control-frame dispatch remain package-specific.
+- Manual verification completed after documenting leased HTTP/2 stream routing as a future-track handoff.
+- Phase 4 checkpoint commit: `189b184`.
+- Related handoff document: `leased-stream-routing-handoff.md` committed as `a7759c2`.
 
 ## Phase 5: Node `http.Agent` Integration and Domain-Based Routing
 
