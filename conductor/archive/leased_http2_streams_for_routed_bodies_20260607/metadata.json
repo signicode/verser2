@@ -1,0 +1,8 @@
+{
+  "track_id": "leased_http2_streams_for_routed_bodies_20260607",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-06-07T08:40:22Z",
+  "updated_at": "2026-06-07T08:40:22Z",
+  "description": "Leased HTTP/2 streams for routed bodies"
+}

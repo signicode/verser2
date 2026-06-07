@@ -33,6 +33,48 @@ function requestJson(session, payload, path = '/verser/register') {
   });
 }
 
+function requestJsonWithHeaders(session, headers, payload = '') {
+  return new Promise((resolve, reject) => {
+    const stream = session.request(headers);
+    let body = '';
+
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk) => {
+      body += chunk;
+    });
+    stream.on('end', () => {
+      resolve(body.length === 0 ? undefined : JSON.parse(body));
+    });
+    stream.on('error', reject);
+    stream.end(payload);
+  });
+}
+
+function openLeaseStream(session, peerId, leaseId) {
+  return new Promise((resolve, reject) => {
+    const stream = session.request({
+      ':method': 'POST',
+      ':path': '/verser/guest/lease',
+      'x-verser-peer-id': peerId,
+      'x-verser-lease-id': leaseId,
+    });
+    const timeout = setTimeout(() => {
+      stream.close();
+      reject(new Error('lease stream response timed out'));
+    }, 1000);
+
+    stream.once('response', (headers) => {
+      clearTimeout(timeout);
+      resolve({ stream, headers });
+    });
+    stream.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    stream.end();
+  });
+}
+
 function openBrokerRegistration(session, payload) {
   return new Promise((resolve, reject) => {
     const stream = session.request({ ':method': 'POST', ':path': '/verser/register' });
@@ -208,6 +250,112 @@ test('Host rejects duplicate and malformed registrations with contextual errors'
     first.close();
     duplicate.close();
     malformed.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host accepts Guest-opened lease streams for registered Guests', async () => {
+  const host = createVerserHost({ port: 0 });
+
+  await host.start();
+  const guest = await connectClient(host.address.port);
+
+  try {
+    assert.equal(
+      (await requestJson(guest, { peerId: 'guest-lease-accept', role: 'guest' })).status,
+      'registered',
+    );
+
+    const lease = await openLeaseStream(guest, 'guest-lease-accept', 'lease-1');
+
+    assert.equal(lease.headers[':status'], 200);
+    assert.equal(lease.stream.closed, false);
+  } finally {
+    guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host rejects lease streams for missing Guests', async () => {
+  const host = createVerserHost({ port: 0 });
+
+  await host.start();
+  const guest = await connectClient(host.address.port);
+
+  try {
+    const response = await requestJsonWithHeaders(guest, {
+      ':method': 'POST',
+      ':path': '/verser/guest/lease',
+      'x-verser-peer-id': 'missing-lease-guest',
+      'x-verser-lease-id': 'lease-missing',
+    });
+
+    assert.equal(response.error.code, 'disconnected-target');
+    assert.match(response.error.message, /registered peer/i);
+  } finally {
+    guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host rejects lease streams without lease ids', async () => {
+  const host = createVerserHost({ port: 0 });
+
+  await host.start();
+  const guest = await connectClient(host.address.port);
+
+  try {
+    assert.equal(
+      (await requestJson(guest, { peerId: 'guest-missing-lease-id', role: 'guest' })).status,
+      'registered',
+    );
+    const response = await requestJsonWithHeaders(guest, {
+      ':method': 'POST',
+      ':path': '/verser/guest/lease',
+      'x-verser-peer-id': 'guest-missing-lease-id',
+      'x-verser-lease-id': '',
+    });
+
+    assert.equal(response.error.code, 'protocol-error');
+    assert.match(response.error.message, /lease id/i);
+  } finally {
+    guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host queues Broker routed requests and times out when no lease is available', async () => {
+  const host = createVerserHost({ port: 0 });
+
+  await host.start();
+  const guest = await connectClient(host.address.port);
+  const broker = await connectClient(host.address.port);
+
+  try {
+    assert.equal(
+      (await requestJson(guest, { peerId: 'guest-lease-timeout', role: 'guest' })).status,
+      'registered',
+    );
+    const brokerControl = await openBrokerRegistration(broker, {
+      peerId: 'broker-lease-timeout',
+      role: 'broker',
+    });
+    assert.equal((await brokerControl.readNext()).status, 'registered');
+
+    const response = await requestJsonWithHeaders(broker, {
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-target-id': 'guest-lease-timeout',
+      'x-verser-request-id': 'req-lease-timeout',
+      'x-verser-lease-acquire-timeout-ms': '10',
+    });
+
+    assert.equal(response.error.code, 'timeout');
+    assert.equal(response.error.context.targetId, 'guest-lease-timeout');
+    assert.equal(response.error.context.requestId, 'req-lease-timeout');
+  } finally {
+    guest.close();
+    broker.close();
     await host.close('test-complete');
   }
 });
