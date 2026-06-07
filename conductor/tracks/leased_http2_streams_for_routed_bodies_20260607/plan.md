@@ -224,7 +224,7 @@
     - [x] Run `npm run build`.
     - [x] Run `npm run lint`.
     - [x] Record coverage and deduplication notes in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 6: Remove NDJSON Body Frames and Preserve Agent Compatibility' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 6: Remove NDJSON Body Frames and Preserve Agent Compatibility' (Protocol in workflow.md)
 
 ### Phase 6 Notes
 
@@ -235,26 +235,40 @@
 - Validation passed: `npm run build && node --test --test-timeout=15000 test/packages.test.js test/agent.test.js test/broker-routing.test.js test/end-to-end.test.js`, `npm run lint`, and `npm run test:coverage`.
 - Formatting failure during the first Phase 6 lint run was session-introduced in `test/packages.test.js`, fixed locally, and the rerun passed.
 - Coverage after Phase 6: all files 96.72% line coverage.
+- Manual verification: approved by user; checkpoint committed as `6b0fc79 chore(streams): Remove NDJSON body frame remnants` and pushed to PR branch.
 
 ## Phase 7: End-to-End Validation, Documentation, and Final Review
 
-- [ ] Task: Add or update final end-to-end coverage
-    - [ ] Add an end-to-end test covering Host start, Guest lease pool warmup, Broker routed request, binary body round-trip, Agent routing, and route advertisement preservation.
-    - [ ] Add concurrency end-to-end coverage for out-of-order completion over separate leases.
-    - [ ] Add cancellation or disconnect end-to-end coverage for active leased routing.
-- [ ] Task: Update documentation
-    - [ ] Update README with leased HTTP/2 stream routing behavior and Guest lease pool options.
-    - [ ] Document current limitations, including HTTP/3 exclusion and any remaining buffering in public APIs.
-    - [ ] Update Conductor product or tech-stack docs if the current transport model changes materially.
-- [ ] Task: Run full validation
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm test`.
-    - [ ] Run `npm run lint`.
-    - [ ] Run coverage measurement and confirm at least 95% meaningful coverage for changed behavior.
-- [ ] Task: Final code and Conductor review
-    - [ ] Re-read `AGENTS.md` and relevant Conductor documentation before completion.
-    - [ ] Confirm implementation matches `spec.md` acceptance criteria.
-    - [ ] Review edge cases, lifecycle behavior, error paths, streaming, backpressure, and concurrent leases.
-    - [ ] Confirm shared code was centralized in `@signicode/verser-common` where reuse emerged.
-    - [ ] Update `plan.md` with validation notes, deduplication results, and phase checkpoint commit SHAs.
-- [ ] Task: Conductor - User Manual Verification 'Phase 7: End-to-End Validation, Documentation, and Final Review' (Protocol in workflow.md)
+- [x] Task: Add or update final end-to-end coverage
+    - [x] Add an end-to-end test covering Host start, Guest lease pool warmup, Broker routed request, binary body round-trip, Agent routing, and route advertisement preservation.
+    - [x] Add concurrency end-to-end coverage for out-of-order completion over separate leases.
+    - [x] Add cancellation or disconnect end-to-end coverage for active leased routing.
+- [x] Task: Update documentation
+    - [x] Update README with leased HTTP/2 stream routing behavior and Guest lease pool options.
+    - [x] Document current limitations, including HTTP/3 exclusion and any remaining buffering in public APIs.
+    - [x] Update Conductor product or tech-stack docs if the current transport model changes materially.
+- [x] Task: Run full validation
+    - [x] Run `npm run build`.
+    - [x] Run `npm test`.
+    - [x] Run `npm run lint`.
+    - [x] Run coverage measurement and confirm at least 95% meaningful coverage for changed behavior.
+- [x] Task: Final code and Conductor review
+    - [x] Re-read `AGENTS.md` and relevant Conductor documentation before completion.
+    - [x] Confirm implementation matches `spec.md` acceptance criteria.
+    - [x] Review edge cases, lifecycle behavior, error paths, streaming, backpressure, and concurrent leases.
+    - [x] Confirm shared code was centralized in `@signicode/verser-common` where reuse emerged.
+    - [x] Update `plan.md` with validation notes, deduplication results, and phase checkpoint commit SHAs.
+- [x] Task: Conductor - User Manual Verification 'Phase 7: End-to-End Validation, Documentation, and Final Review' (Protocol in workflow.md)
+
+### Phase 7 Notes
+
+- Added final end-to-end coverage for binary Broker body round-trip over leased streams, Node Guest lease pool warmup with Agent compatibility, out-of-order concurrent responses over separate leases, and active Guest disconnect failure.
+- Updated README to remove stale leased-stream-as-future text and document current leased HTTP/2 body transport, streaming `broker.request()` bodies, route-advertisement control streams, lease pool options, HTTP/3 exclusion, Agent MVP limitations, and error-body buffering for diagnostics.
+- Final review initially found blockers: routed metadata headers were not validated on all translation paths, Broker lease acquire timeout configuration was not forwarded to Host, README had stale future-lease wording, and stream metadata length was checked after reading the declared payload.
+- Fixed review blockers: routed request/response metadata now uses `validateVerserHeaders`, Broker options include and forward `leaseAcquireTimeoutMs`, Guest lease streams use `leaseAcquireTimeoutMs` for lease-accept response timeout, `readVerserEnvelopeFromStream` rejects oversized metadata before reading the full payload, and README stale text was replaced.
+- Added regression coverage for Broker request header validation, Broker timeout option propagation to Host, Host leased response metadata header validation, early oversized stream metadata rejection, and final E2E leased routing behavior.
+- Validation passed after fixes: `npm run build`, `npm test`, `npm run lint`, and `npm run test:coverage`.
+- Coverage after Phase 7: all files 96.74% line coverage.
+- Oracle final re-review found no implementation blockers; remaining note is Conductor checkpoint/manual approval housekeeping.
+- Deduplication: reusable envelope encoding/parsing, exact stream reads, typed leased metadata readers, NDJSON line parsing, header validation, errors, lifecycle names, IDs, and development TLS helpers are centralized in `@signicode/verser-common`; Host/Broker/Guest retain package-specific lease lifecycle, routing, and Node HTTP adapter logic.
+- Manual verification: approved by user after full validation and final review passed.

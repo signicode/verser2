@@ -19,6 +19,7 @@ import {
   encodeVerserEnvelope,
   readLeaseRequestMetadataFromStream,
   readNdjsonLines,
+  validateVerserHeaders,
 } from '@signicode/verser-common';
 
 export const VERSER2_GUEST_NODE_PACKAGE_NAME = '@signicode/verser2-guest-node';
@@ -52,6 +53,7 @@ export interface VerserNodeGuestDispatchResponse extends RoutedResponseEnvelope 
 export interface VerserBrokerOptions {
   readonly hostUrl: string;
   readonly brokerId: string;
+  readonly leaseAcquireTimeoutMs?: number;
 }
 
 export interface VerserBrokerRequest {
@@ -218,7 +220,7 @@ export class MinimalServerResponse extends EventEmitter {
         metadata: {
           requestId: this.requestId ?? '',
           statusCode: this.statusCode,
-          headers: Object.fromEntries(this.headers),
+          headers: validateVerserHeaders(Object.fromEntries(this.headers)),
         },
       }),
     );
@@ -443,8 +445,23 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
     });
     const lease: GuestLeaseStream = { leaseId, stream, state: 'opening' };
     this.leaseStreams.set(leaseId, lease);
+    const timeout =
+      this.options.leaseAcquireTimeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            this.emitLifecycle({
+              name: VERSER_LIFECYCLE_EVENTS.error,
+              error: createVerserError('timeout', 'Lease stream was not accepted before timeout', {
+                guestId: this.options.guestId,
+                leaseId,
+                timeoutMs: this.options.leaseAcquireTimeoutMs ?? 0,
+              }),
+            });
+            stream.close();
+          }, this.options.leaseAcquireTimeoutMs);
 
     stream.once('response', (headers) => {
+      clearTimeout(timeout);
       if (Number(headers[':status']) === 200) {
         lease.state = 'waiting';
         this.maintainLeasePool();
@@ -454,12 +471,14 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
       stream.close();
     });
     stream.on('close', () => {
+      clearTimeout(timeout);
       this.leaseStreams.delete(leaseId);
       if (!this.closing) {
         this.maintainLeasePool();
       }
     });
     stream.on('error', (error) => {
+      clearTimeout(timeout);
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
     });
     this.handleLeaseStream(lease).catch((error: unknown) => {
@@ -507,7 +526,7 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
       targetId: metadata.targetId,
       method: metadata.method,
       path: metadata.path,
-      headers: flattenHeaders(metadata.headers),
+      headers: flattenHeaders(validateVerserHeaders(metadata.headers)),
       body: [],
     };
     const localRequest = new MinimalIncomingMessage(request, lease.stream);
@@ -663,7 +682,7 @@ class Http2VerserBroker implements VerserBroker {
 
     const requestId = `${this.options.brokerId}-${++this.requestCounter}`;
     return new Promise((resolve, reject) => {
-      const stream = session.request({
+      const requestHeaders: http2.OutgoingHttpHeaders = {
         ':method': 'POST',
         ':path': '/verser/request',
         'x-verser-request-id': requestId,
@@ -671,8 +690,15 @@ class Http2VerserBroker implements VerserBroker {
         'x-verser-target-id': request.targetId,
         'x-verser-method': request.method,
         'x-verser-path': request.path,
-        'x-verser-headers': JSON.stringify(request.headers ?? {}),
-      });
+        'x-verser-headers': JSON.stringify(validateVerserHeaders(request.headers ?? {})),
+      };
+      if (this.options.leaseAcquireTimeoutMs !== undefined) {
+        requestHeaders['x-verser-lease-acquire-timeout-ms'] = String(
+          this.options.leaseAcquireTimeoutMs,
+        );
+      }
+
+      const stream = session.request(requestHeaders);
       let statusCode = 200;
       let responseHeaders: Record<string, string> = {};
       stream.on('response', (headers) => {

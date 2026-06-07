@@ -178,6 +178,80 @@ test('Broker maps missing guests and Guest handler failures to actionable errors
   }
 });
 
+test('Broker validates routed request headers before forwarding metadata', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-header-validation-1' });
+
+  try {
+    await broker.connect();
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-header-validation-1',
+          method: 'GET',
+          path: '/invalid-header',
+          headers: { connection: 'close' },
+        }),
+      (error) => {
+        assert.equal(error.code, 'protocol-error');
+        assert.match(error.message, /forbidden header/i);
+        return true;
+      },
+    );
+  } finally {
+    await broker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker forwards configured lease acquire timeout to the Host', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({
+    hostUrl,
+    brokerId: 'broker-timeout-option-1',
+    leaseAcquireTimeoutMs: 25,
+  });
+  const rawGuest = await connectRawClient(host.address.port);
+
+  try {
+    await broker.connect();
+    assert.equal(
+      (
+        await requestJson(rawGuest, {
+          peerId: 'guest-timeout-option-1',
+          role: 'guest',
+          routedDomains: ['timeout-option.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    await broker.waitForRoute('timeout-option.local.test');
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-timeout-option-1',
+          method: 'GET',
+          path: '/timeout-option',
+        }),
+      (error) => {
+        assert.equal(error.code, 'timeout');
+        assert.equal(error.context.timeoutMs, 25);
+        return true;
+      },
+    );
+  } finally {
+    rawGuest.destroy();
+    await broker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Broker uses one session with separate concurrent routed request streams', async () => {
   const host = createVerserHost({ port: 0 });
   await host.start();
@@ -422,6 +496,64 @@ test('Host maps leased error envelopes to Broker request errors', async () => {
   } finally {
     await broker.close('test-complete');
     rawGuest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host validates leased response metadata headers before forwarding', async () => {
+  const host = createVerserHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://localhost:${host.address.port}`;
+  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-response-header-validation-1' });
+  const rawGuest = await connectRawClient(host.address.port);
+
+  try {
+    await broker.connect();
+    assert.equal(
+      (
+        await requestJson(rawGuest, {
+          peerId: 'guest-response-header-validation-1',
+          role: 'guest',
+          routedDomains: ['response-header-validation.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    await broker.waitForRoute('response-header-validation.local.test');
+    await openRawLease(
+      rawGuest,
+      'guest-response-header-validation-1',
+      'raw-lease-response-header-validation-1',
+      (metadata, _body, lease) => {
+        lease.end(
+          common.encodeVerserEnvelope({
+            type: 'response',
+            metadata: {
+              requestId: metadata.requestId,
+              statusCode: 200,
+              headers: { connection: 'close' },
+            },
+          }),
+        );
+      },
+    );
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-response-header-validation-1',
+          method: 'GET',
+          path: '/invalid-response-header',
+        }),
+      (error) => {
+        assert.equal(error.code, 'protocol-error');
+        assert.match(error.message, /forbidden header/i);
+        return true;
+      },
+    );
+  } finally {
+    await broker.close('test-complete');
+    rawGuest.destroy();
     await host.close('test-complete');
   }
 });
