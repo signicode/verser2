@@ -21,6 +21,10 @@ export interface VerserNodeGuestOptions {
   readonly hostUrl: string;
   readonly guestId: string;
   readonly routedDomains?: readonly string[];
+  readonly minWaitingStreams?: number;
+  readonly maxOpenStreams?: number;
+  readonly leaseAcquireTimeoutMs?: number;
+  readonly maxMetadataBytes?: number;
 }
 
 export interface VerserNodeGuestLifecycleEvent {
@@ -82,6 +86,14 @@ export type NodeRequestListener = (
   request: MinimalIncomingMessage,
   response: MinimalServerResponse,
 ) => void;
+
+type GuestLeaseState = 'opening' | 'waiting' | 'active';
+
+interface GuestLeaseStream {
+  readonly leaseId: string;
+  readonly stream: http2.ClientHttp2Stream;
+  state: GuestLeaseState;
+}
 
 export function createVerserNodeGuest(options: VerserNodeGuestOptions): VerserNodeGuest {
   return new Http2VerserNodeGuest(options);
@@ -177,6 +189,12 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
 
   private controlStream?: http2.ClientHttp2Stream;
 
+  private readonly leaseStreams = new Map<string, GuestLeaseStream>();
+
+  private leaseCounter = 0;
+
+  private closing = false;
+
   private listener?: NodeRequestListener;
 
   private attachedDomain?: string;
@@ -198,12 +216,14 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
     const certificate = createDevelopmentTlsCertificate();
     const session = http2.connect(this.options.hostUrl, { ca: certificate.cert });
     this.session = session;
+    this.closing = false;
 
     session.on('error', (error) => {
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
     });
     session.on('close', () => {
       this.session = undefined;
+      this.leaseStreams.clear();
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected });
     });
 
@@ -211,6 +231,7 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected });
     await this.register();
     this.openControlStream(session);
+    this.maintainLeasePool();
   }
 
   public async close(reason = 'guest-close'): Promise<void> {
@@ -219,7 +240,9 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
       return;
     }
 
+    this.closing = true;
     this.controlStream?.close();
+    this.closeLeaseStreams();
     session.close();
     await once(session, 'close');
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.closed, reason });
@@ -355,6 +378,72 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
         });
       }
     });
+  }
+
+  private maintainLeasePool(): void {
+    const session = this.session;
+    if (session === undefined || this.closing || session.closed || session.destroyed) {
+      return;
+    }
+
+    const minWaitingStreams = this.normalizedMinWaitingStreams();
+    const maxOpenStreams = this.normalizedMaxOpenStreams();
+    while (
+      this.countLeases('waiting') + this.countLeases('opening') < minWaitingStreams &&
+      this.leaseStreams.size < maxOpenStreams
+    ) {
+      this.openLeaseStream(session);
+    }
+  }
+
+  private openLeaseStream(session: http2.ClientHttp2Session): void {
+    const leaseId = `${this.options.guestId}-lease-${++this.leaseCounter}`;
+    const stream = session.request({
+      ':method': 'POST',
+      ':path': '/verser/guest/lease',
+      'x-verser-peer-id': this.options.guestId,
+      'x-verser-lease-id': leaseId,
+    });
+    const lease: GuestLeaseStream = { leaseId, stream, state: 'opening' };
+    this.leaseStreams.set(leaseId, lease);
+
+    stream.once('response', (headers) => {
+      if (Number(headers[':status']) === 200) {
+        lease.state = 'waiting';
+        this.maintainLeasePool();
+        return;
+      }
+
+      stream.close();
+    });
+    stream.on('close', () => {
+      this.leaseStreams.delete(leaseId);
+      if (!this.closing) {
+        this.maintainLeasePool();
+      }
+    });
+    stream.on('error', (error) => {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+    });
+  }
+
+  private closeLeaseStreams(): void {
+    for (const lease of this.leaseStreams.values()) {
+      lease.stream.close();
+    }
+    this.leaseStreams.clear();
+  }
+
+  private countLeases(state: GuestLeaseState): number {
+    return [...this.leaseStreams.values()].filter((lease) => lease.state === state).length;
+  }
+
+  private normalizedMinWaitingStreams(): number {
+    return Math.max(0, Math.floor(this.options.minWaitingStreams ?? 1));
+  }
+
+  private normalizedMaxOpenStreams(): number {
+    return Math.max(0, Math.floor(this.options.maxOpenStreams ?? 16));
   }
 
   private async handleControlRequest(
