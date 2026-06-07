@@ -120,7 +120,7 @@ console.log(await response.json());
 
 ## Current TypeScript MVP API
 
-The current workspace implementation exposes package-level APIs for the minimal Host, Node Guest, Broker, and plain HTTP Agent path.
+The current workspace implementation exposes package-level APIs for the minimal Host, Node Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
 
 ```ts
 import http from 'node:http';
@@ -159,6 +159,14 @@ const agent = broker.createAgent();
 http.get('http://client-a.local.test/health', { agent }, (response) => {
   response.pipe(process.stdout);
 });
+
+const dispatcher = broker.createDispatcher();
+const fetchResponse = await fetch('http://client-a.local.test/health', { dispatcher });
+console.log(await fetchResponse.text());
+
+const routedFetch = broker.createFetch();
+const helperResponse = await routedFetch('http://client-a.local.test/health');
+console.log(await helperResponse.text());
 ```
 
 ### Current MVP transport notes
@@ -172,9 +180,10 @@ http.get('http://client-a.local.test/health', { agent }, (response) => {
 - Node Guest lease pool options include `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and `maxMetadataBytes`.
 - Successful `broker.request()` calls expose `body` as a Node.js `Readable` stream. Error response bodies may be read internally so routed errors include actionable diagnostics.
 - The Agent MVP supports plain `http.request`/`http.get` for Host-advertised domains only. Non-advertised hostnames are rejected instead of falling back to DNS.
-- Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, and advanced socket features are outside the current MVP subset.
+- The Node Broker also exposes `createDispatcher()` for Undici `fetch(url, { dispatcher })` and `createFetch()` for a local fetch helper preconfigured with Verser routing.
+- Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, CONNECT, WebSocket, target TLS semantics, and advanced socket features are outside the current MVP subset.
 
-Requests can also be made using the current MVP `http.Agent` exposed by a connected Broker. An `undici` dispatcher remains future work:
+Requests can also be made using the current MVP `http.Agent` or Undici `Dispatcher` exposed by a connected Broker:
 
 ```ts
 import http from "node:http";
@@ -186,6 +195,10 @@ const client = await new Verser2Client({
 const agent = client.agent();
 const response = await http.get("http://client-a/health", { agent });
 console.log(await response.json());
+
+const dispatcher = client.dispatcher();
+const fetchResponse = await fetch("http://client-a/health", { dispatcher });
+console.log(await fetchResponse.json());
 ```
 
 
