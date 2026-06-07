@@ -8,6 +8,15 @@ const {
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
 
+function readBody(stream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
+
 function requestWithAgent(url, options) {
   return new Promise((resolve, reject) => {
     const request = http.request(url, options, (response) => {
@@ -50,7 +59,7 @@ test('Host, Node Guest, Broker, route advertisements, and Agent routing work end
       path: '/broker',
     });
     assert.equal(brokerResponse.statusCode, 200);
-    assert.deepEqual(brokerResponse.body, Buffer.from('Handled GET /broker'));
+    assert.deepEqual(await readBody(brokerResponse.body), Buffer.from('Handled GET /broker'));
 
     agent = broker.createAgent();
     const agentResponse = await requestWithAgent('http://e2e.local.test/agent', { agent });

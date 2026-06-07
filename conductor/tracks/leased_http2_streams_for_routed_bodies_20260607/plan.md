@@ -130,7 +130,7 @@
     - [x] Add tests that Guest response bodies stream raw bytes Guest-to-Host-to-Broker over the same lease.
     - [x] Add binary round-trip tests with null bytes and non-UTF-8 data.
     - [x] Add tests that multiple concurrent Broker requests use distinct leases and complete out of order.
-    - [x] Add tests that existing `broker.request()` behavior remains compatible.
+    - [x] Add tests that `broker.request()` remains compatible except for the planned streaming response body API change.
 - [x] Task: Implement Host leased routing
     - [x] Replace Host forwarding of routed request/response body frames with lease acquisition and raw stream piping.
     - [x] Write request metadata envelope before piping Broker request body bytes to the lease.
@@ -155,7 +155,7 @@
 - Review fix: Host response handling now parses only the response metadata envelope using strict `stream.read()`/`readable` reads, unshifts any over-read body bytes when needed, and pipes the rest of the lease response stream to the Broker stream. No `data` handler is used for Host response metadata parsing.
 - Added regression tests proving the Broker receives leased response body bytes before the lease stream ends, split response metadata is parsed correctly, and leased error envelopes map to Broker request errors.
 - Implemented Guest leased dispatch: parse request metadata envelope, collect raw body bytes, dispatch into the attached local handler, and write response or error envelope followed by raw response bytes.
-- Existing `broker.request()`, Agent, Host, Guest, Broker routing, and end-to-end tests continue to pass. Current public `broker.request()` still returns a buffered response while the internal routed transport uses leased streams when available.
+- Existing Agent, Host, Guest, Broker routing, and end-to-end tests continue to pass. Phase 5 later changes public `broker.request()` response bodies from aggregated buffers to streams to align the public API with leased streaming semantics.
 - Deduplication: Host and Guest both use shared `@signicode/verser-common` envelope helpers; transport coordination remains package-specific.
 - Validation passed: `npm run build`, focused Broker/Guest/Agent/Host/E2E tests, `npm run lint`, and `npm run test:coverage`.
 - Coverage after Phase 4: all files 95.10% line coverage; changed leased routing behavior is covered by focused raw-lease, split metadata, lease error, lease response piping, and existing Broker/Guest integration tests.
@@ -163,24 +163,49 @@
 
 ## Phase 5: Backpressure, Cancellation, and Error Semantics
 
-- [ ] Task: Write failing streaming and failure tests first
-    - [ ] Add slow Broker response consumer tests to verify backpressure throttles Guest response production.
-    - [ ] Add slow Guest request consumer tests to verify backpressure throttles Broker upload.
-    - [ ] Add Broker abort tests that cancel the active Guest lease.
-    - [ ] Add Guest disconnect tests that fail active and queued requests.
-    - [ ] Add lease timeout and lease stream reset/error tests.
-    - [ ] Add Guest handler failure tests before and after response metadata/body starts.
-- [ ] Task: Implement robust cancellation and error propagation
-    - [ ] Propagate Broker aborts to active leases and local Guest dispatch.
-    - [ ] Reset or close both legs consistently on lease stream errors.
-    - [ ] Fail queued requests on Guest disconnect with contextual diagnostics.
-    - [ ] Map pre-response Guest errors to actionable routed errors where possible.
-    - [ ] Reset/cancel streams and emit lifecycle/error diagnostics for post-response-start failures.
-- [ ] Task: Validate backpressure and failure behavior
-    - [ ] Run focused streaming/cancellation tests with timeouts that avoid hangs.
-    - [ ] Run `npm run build`.
-    - [ ] Record coverage and unresolved edge-case notes in `plan.md`.
+- [x] Task: Write failing streaming and failure tests first
+    - [x] Add slow Broker response consumer tests to verify backpressure throttles Guest response production.
+    - [x] Add slow Guest request consumer tests to verify backpressure throttles Broker upload.
+    - [x] Add Broker abort tests that cancel the active Guest lease.
+    - [x] Add Guest disconnect tests that fail active and queued requests.
+    - [x] Add lease timeout and lease stream reset/error tests.
+    - [x] Add Guest handler failure tests before and after response metadata/body starts.
+- [x] Task: Implement robust cancellation and error propagation
+    - [x] Propagate Broker aborts to active leases and local Guest dispatch.
+    - [x] Reset or close both legs consistently on lease stream errors.
+    - [x] Fail queued requests on Guest disconnect with contextual diagnostics.
+    - [x] Map pre-response Guest errors to actionable routed errors where possible.
+    - [x] Reset/cancel streams and emit lifecycle/error diagnostics for post-response-start failures.
+- [x] Task: Validate backpressure and failure behavior
+    - [x] Run focused streaming/cancellation tests with timeouts that avoid hangs.
+    - [x] Run `npm run build`.
+    - [x] Record coverage and unresolved edge-case notes in `plan.md`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Backpressure, Cancellation, and Error Semantics' (Protocol in workflow.md)
+
+### Phase 5 Notes
+
+- TDD check: focused Broker routing tests failed before implementation because leased Node Guest responses were buffered until `response.end()`, Broker uploads were not observable on the lease until Broker request end, and active Broker aborts did not cancel the lease cleanly. The expected failures were classified as session-introduced, in-scope TDD failures.
+- Added streaming/failure coverage for Node Guest response body chunks arriving before local response end, Broker upload bytes arriving on a raw lease before Broker request end, Broker abort cancellation of the active lease, active Guest disconnect failure, lease reset before response metadata, and Guest handler failure after response metadata/body start.
+- Added Agent chunked request body coverage to preserve plain `node:http` Agent behavior through leased routing and cover request body extraction paths.
+- Implemented Host leased upload streaming by writing the request envelope and piping the Broker request stream directly into the active lease instead of buffering with `readRequestBuffer`.
+- Preserved the Phase 4 Host response parser invariant: response metadata parsing still uses `stream.read()`/`readable` via `readExactly`, with no Host `data` handler, and the response body is piped from lease to Broker after metadata is parsed.
+- Implemented Guest leased streaming dispatch: request metadata is parsed first, body remainder is unshifted, the lease stream becomes the local request readable source, and `MinimalServerResponse` writes the response envelope on first response write/end and streams body chunks to the lease.
+- Implemented cancellation/error propagation for Broker aborts, lease closes before response metadata, active Guest disconnects, and post-response-start Guest handler failures. Broker error mapping now preserves Host error codes such as `protocol-error` instead of collapsing them to `local-handler-failure`.
+- Oracle review: confirmed the main risks were avoiding Host `data` parsing for response metadata, not buffering leased bodies, handling double-close races, and distinguishing pre-response from post-response failures.
+- Follow-up deduplication review: moved exact byte stream reads, leased envelope stream parsing, typed leased request/response metadata readers, and NDJSON line parsing into `@signicode/verser-common`.
+- Removed the redundant Host `readLeaseResponseMetadata` wrapper and Host-local `readExactly`/`waitForReadable`/response metadata parser implementation.
+- Replaced the Guest leased request metadata `data` parser with the common exact-read helper and replaced Host/Guest NDJSON parser duplicates with common `readNdjsonLines`, preserving performant `data` handlers for NDJSON control streams.
+- Updated raw lease tests to use common leased request metadata parsing instead of ad hoc `createVerserEnvelopeParser` `data` handlers.
+- Removed public `broker.request()` response aggregation: it now returns a streaming response body and accepts either chunk arrays or a `Readable` upload body. Error response bodies are still read only to construct actionable routed errors.
+- Refined `MinimalIncomingMessage` to extend `PassThrough` and pipe either the leased request stream or `Readable.from(request.body)` into the local request object, removing manual request-body `data`/`_read` flow.
+- Full Host/Guest/Broker stream-side review found two remaining routed body aggregation paths: Host's legacy control-frame body fallback and the Broker Agent's serialized HTTP/1 request aggregation.
+- Removed Host control-frame routed body fallback and obsolete Guest control-frame routed request handling; routed Broker requests now wait for/acquire a lease rather than falling back to NDJSON/base64 body frames.
+- Refactored the Broker Agent upload path to parse HTTP/1 headers incrementally, stream request bodies through a `PassThrough`, and decode chunked bodies incrementally instead of collecting `requestChunks` and `Buffer.concat`ing them.
+- Added Agent coverage proving request body bytes can reach the Guest and produce a response before the client request ends.
+- Reviewed remaining `on('data')` usage after streaming cleanup: converted Broker Agent response forwarding to pipe through a response sink, converted registration/error-body helpers to `node:stream/consumers`, and left only shared `readNdjsonLines` using `data` for control-stream NDJSON framing.
+- Deduplication: shared envelope, exact-read stream parsing, typed leased metadata readers, and NDJSON parsing are centralized in `@signicode/verser-common`; Phase 5 streaming/cancellation state remains Host/Node Guest-specific.
+- Validation passed: `npm run build`, focused common/package/Broker/Guest/Host/Agent/E2E tests, `npm run lint`, and `npm run test:coverage`. After the `data` handler review, `npm run build && node --test --test-timeout=15000 test/agent.test.js test/broker-routing.test.js test/guest-node.test.js test/host.test.js` and `npm run lint` also passed.
+- Coverage after Phase 5: all files 96.71% line coverage.
 
 ## Phase 6: Remove NDJSON Body Frames and Preserve Agent Compatibility
 

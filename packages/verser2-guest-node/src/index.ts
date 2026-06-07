@@ -1,21 +1,24 @@
 import { EventEmitter } from 'node:events';
 import * as http from 'node:http';
 import * as http2 from 'node:http2';
-import { Duplex, Readable } from 'node:stream';
+import { Duplex, PassThrough, Readable, Writable } from 'node:stream';
+import { buffer as readStreamBuffer, text as readStreamText } from 'node:stream/consumers';
 
 import {
   type RoutedRequestEnvelope,
   type RoutedResponseEnvelope,
   VERSER_LIFECYCLE_EVENTS,
   type VerserError,
+  type VerserErrorCode,
   type VerserRequestEnvelopeMetadata,
   createDevelopmentTlsCertificate,
   createGuestId,
   createRoutedRequestEnvelope,
   createRoutedResponseEnvelope,
-  createVerserEnvelopeParser,
   createVerserError,
   encodeVerserEnvelope,
+  readLeaseRequestMetadataFromStream,
+  readNdjsonLines,
 } from '@signicode/verser-common';
 
 export const VERSER2_GUEST_NODE_PACKAGE_NAME = '@signicode/verser2-guest-node';
@@ -56,11 +59,11 @@ export interface VerserBrokerRequest {
   readonly method: string;
   readonly path: string;
   readonly headers?: Record<string, string>;
-  readonly body?: readonly Buffer[];
+  readonly body?: readonly Buffer[] | Readable;
 }
 
 export interface VerserBrokerResponse extends RoutedResponseEnvelope {
-  readonly body: Buffer;
+  readonly body: Readable;
 }
 
 export interface VerserBroker {
@@ -106,28 +109,22 @@ export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
   return new Http2VerserBroker(options);
 }
 
-export class MinimalIncomingMessage extends Readable {
+export class MinimalIncomingMessage extends PassThrough {
   public readonly method: string;
 
   public readonly url: string;
 
   public readonly headers: Record<string, string>;
 
-  private readonly body: readonly (string | Buffer)[];
-
-  public constructor(request: VerserNodeGuestDispatchRequest) {
+  public constructor(request: VerserNodeGuestDispatchRequest, source?: Readable) {
     super();
     this.method = request.method;
     this.url = request.path;
     this.headers = request.headers;
-    this.body = request.body;
-  }
 
-  public override _read(): void {
-    for (const chunk of this.body) {
-      this.push(chunk);
-    }
-    this.push(null);
+    const bodySource = source ?? Readable.from(request.body);
+    bodySource.once('error', (error) => this.destroy(error));
+    bodySource.pipe(this);
   }
 }
 
@@ -137,6 +134,24 @@ export class MinimalServerResponse extends EventEmitter {
   private readonly headers = new Map<string, string>();
 
   private readonly chunks: Buffer[] = [];
+
+  private readonly requestId?: string;
+
+  private readonly output?: http2.ClientHttp2Stream;
+
+  private responseStarted = false;
+
+  public constructor(requestId?: string, output?: http2.ClientHttp2Stream) {
+    super();
+    this.requestId = requestId;
+    this.output = output;
+    output?.on('drain', () => this.emit('drain'));
+    output?.on('error', (error) => this.emit('error', error));
+  }
+
+  public get headersStarted(): boolean {
+    return this.responseStarted;
+  }
 
   public setHeader(name: string, value: string | number | boolean): this {
     this.headers.set(name.toLowerCase(), String(value));
@@ -159,14 +174,23 @@ export class MinimalServerResponse extends EventEmitter {
   }
 
   public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
-    this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
-    return true;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+    if (this.output === undefined) {
+      this.chunks.push(buffer);
+      return true;
+    }
+
+    this.startStreamingResponse();
+    return this.output.write(buffer);
   }
 
   public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
     if (chunk !== undefined) {
       this.write(chunk, encoding);
+    } else if (this.output !== undefined) {
+      this.startStreamingResponse();
     }
+    this.output?.end();
     this.emit('finish');
     return this;
   }
@@ -180,6 +204,24 @@ export class MinimalServerResponse extends EventEmitter {
       }),
       body: Buffer.concat(this.chunks),
     };
+  }
+
+  private startStreamingResponse(): void {
+    const output = this.output;
+    if (output === undefined || this.responseStarted) {
+      return;
+    }
+    this.responseStarted = true;
+    output.write(
+      encodeVerserEnvelope({
+        type: 'response',
+        metadata: {
+          requestId: this.requestId ?? '',
+          statusCode: this.statusCode,
+          headers: Object.fromEntries(this.headers),
+        },
+      }),
+    );
   }
 }
 
@@ -370,16 +412,8 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
       'x-verser-peer-id': this.options.guestId,
     });
     this.controlStream = stream;
-    readJsonLines<HostRequestFrame>(stream, (frame) => {
-      if (frame.type === 'request') {
-        this.handleControlRequest(frame, stream).catch((error: unknown) => {
-          writeJsonLine(stream, {
-            type: 'handler-error',
-            requestId: frame.requestId,
-            error: { code: 'local-handler-failure', message: getErrorMessage(error) },
-          });
-        });
-      }
+    readNdjsonLines<unknown>(stream, () => {
+      // Guest control stream body routing was removed; keep the stream open for coordination.
     });
   }
 
@@ -438,88 +472,95 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
   }
 
   private async handleLeaseStream(lease: GuestLeaseStream): Promise<void> {
-    const parser = createVerserEnvelopeParser({
+    const metadata = await readLeaseRequestMetadataFromStream(lease.stream, {
+      guestId: this.options.guestId,
+      leaseId: lease.leaseId,
       maxMetadataBytes: this.options.maxMetadataBytes,
     });
-    const bodyChunks: Buffer[] = [];
-    let metadata: VerserRequestEnvelopeMetadata | undefined;
-
-    lease.stream.on('data', (chunk: Buffer | string) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (metadata === undefined) {
-        const parsed = parser.push(buffer);
-        if (parsed === undefined) {
-          return;
-        }
-        if (parsed.type !== 'request') {
-          throw createVerserError(
-            'protocol-error',
-            'Lease stream received a non-request envelope',
-            {
-              guestId: this.options.guestId,
-              leaseId: lease.leaseId,
-            },
-          );
-        }
-        metadata = parsed.metadata as VerserRequestEnvelopeMetadata;
-        bodyChunks.push(parsed.bodyRemainder);
-        return;
-      }
-
-      bodyChunks.push(buffer);
-    });
-
-    await once(lease.stream, 'end');
-    if (metadata === undefined) {
-      if (this.closing) {
-        return;
-      }
-      throw createVerserError('protocol-error', 'Lease stream ended before request metadata', {
-        guestId: this.options.guestId,
-        leaseId: lease.leaseId,
-      });
-    }
-
     lease.state = 'active';
-    let response: VerserNodeGuestDispatchResponse;
-    try {
-      response = await this.dispatchRoutedRequest({
-        requestId: metadata.requestId,
-        sourceId: metadata.sourceId,
-        targetId: metadata.targetId,
-        method: metadata.method,
-        path: metadata.path,
-        headers: flattenHeaders(metadata.headers),
-        body: [Buffer.concat(bodyChunks)],
-      });
-    } catch (error) {
-      const verserError = error as VerserError;
-      lease.stream.write(
+    await this.dispatchLeasedRequest(metadata, lease);
+  }
+
+  private dispatchLeasedRequest(
+    metadata: VerserRequestEnvelopeMetadata,
+    lease: GuestLeaseStream,
+  ): Promise<void> {
+    const listener = this.listener;
+    if (listener === undefined) {
+      lease.stream.end(
         encodeVerserEnvelope({
           type: 'error',
           metadata: {
             requestId: metadata.requestId,
-            code: verserError.code ?? 'local-handler-failure',
-            message: getErrorMessage(error),
-            context: verserError.context,
+            code: 'local-handler-failure',
+            message: 'No local HTTP handler is attached',
+            context: { guestId: this.options.guestId, requestId: metadata.requestId },
           },
         }),
       );
-      lease.stream.end();
-      return;
+      return Promise.resolve();
     }
 
-    lease.stream.write(
-      encodeVerserEnvelope({
-        type: 'response',
-        metadata: {
-          requestId: response.requestId,
-          statusCode: response.statusCode,
-          headers: response.headers,
-        },
-      }),
-    );
-    lease.stream.end(response.body);
+    const request: VerserNodeGuestDispatchRequest = {
+      requestId: metadata.requestId,
+      sourceId: metadata.sourceId,
+      targetId: metadata.targetId,
+      method: metadata.method,
+      path: metadata.path,
+      headers: flattenHeaders(metadata.headers),
+      body: [],
+    };
+    const localRequest = new MinimalIncomingMessage(request, lease.stream);
+    const localResponse = new MinimalServerResponse(metadata.requestId, lease.stream);
+
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.requestStarted,
+      requestId: metadata.requestId,
+    });
+
+    return new Promise((resolve, reject) => {
+      localResponse.once('finish', () => {
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
+          requestId: metadata.requestId,
+        });
+        resolve();
+      });
+      localResponse.once('error', reject);
+      lease.stream.once('close', resolve);
+
+      try {
+        listener(localRequest, localResponse);
+      } catch (error) {
+        const verserError = createVerserError('local-handler-failure', getErrorMessage(error), {
+          guestId: this.options.guestId,
+          requestId: metadata.requestId,
+          path: metadata.path,
+        });
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.error,
+          requestId: metadata.requestId,
+          error: verserError,
+        });
+        if (localResponse.headersStarted) {
+          lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+          resolve();
+          return;
+        }
+        lease.stream.end(
+          encodeVerserEnvelope({
+            type: 'error',
+            metadata: {
+              requestId: metadata.requestId,
+              code: verserError.code,
+              message: verserError.message,
+              context: verserError.context,
+            },
+          }),
+        );
+        resolve();
+      }
+    });
   }
 
   private closeLeaseStreams(): void {
@@ -539,45 +580,6 @@ class Http2VerserNodeGuest implements VerserNodeGuest {
 
   private normalizedMaxOpenStreams(): number {
     return Math.max(0, Math.floor(this.options.maxOpenStreams ?? 16));
-  }
-
-  private async handleControlRequest(
-    frame: HostRequestFrame,
-    stream: http2.ClientHttp2Stream,
-  ): Promise<void> {
-    try {
-      const response = await this.dispatchRoutedRequest({
-        requestId: frame.requestId,
-        sourceId: frame.sourceId,
-        targetId: frame.targetId,
-        method: frame.method,
-        path: frame.path,
-        headers: frame.headers,
-        body: [Buffer.from(frame.bodyBase64, 'base64')],
-      });
-      writeJsonLine(stream, {
-        type: 'response-start',
-        requestId: response.requestId,
-        statusCode: response.statusCode,
-        headers: response.headers,
-      });
-      writeJsonLine(stream, {
-        type: 'response-body',
-        requestId: response.requestId,
-        bodyBase64: response.body.toString('base64'),
-      });
-      writeJsonLine(stream, { type: 'response-end', requestId: response.requestId });
-    } catch (error) {
-      const verserError = error as VerserError;
-      writeJsonLine(stream, {
-        type: 'handler-error',
-        requestId: frame.requestId,
-        error: {
-          code: verserError.code ?? 'local-handler-failure',
-          message: getErrorMessage(error),
-        },
-      });
-    }
   }
 
   private getRoutedDomains(): readonly string[] {
@@ -671,25 +673,31 @@ class Http2VerserBroker implements VerserBroker {
         'x-verser-path': request.path,
         'x-verser-headers': JSON.stringify(request.headers ?? {}),
       });
-      const bodyChunks: Buffer[] = [];
       let statusCode = 200;
       let responseHeaders: Record<string, string> = {};
       stream.on('response', (headers) => {
         statusCode = Number(headers[':status'] ?? 200);
         responseHeaders = normalHeaders(headers);
-      });
-      stream.on('data', (chunk: Buffer | string) => {
-        bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      });
-      stream.on('end', () => {
-        const body = Buffer.concat(bodyChunks);
-        if (statusCode >= 400) {
-          reject(errorFromBody(body, request.targetId));
+        if (statusCode < 400) {
+          resolve({ requestId, statusCode, headers: responseHeaders, body: stream });
           return;
         }
-        resolve({ requestId, statusCode, headers: responseHeaders, body });
+        readResponseBody(stream).then(
+          (body) => reject(errorFromBody(body, request.targetId)),
+          reject,
+        );
       });
       stream.on('error', reject);
+      stream.on('end', () => {
+        if (statusCode >= 400) {
+          return;
+        }
+      });
+      if (request.body instanceof Readable) {
+        request.body.once('error', reject);
+        request.body.pipe(stream);
+        return;
+      }
       for (const chunk of request.body ?? []) {
         stream.write(chunk);
       }
@@ -700,7 +708,7 @@ class Http2VerserBroker implements VerserBroker {
   private async register(session: http2.ClientHttp2Session): Promise<void> {
     const stream = session.request({ ':method': 'POST', ':path': '/verser/register' });
     this.controlStream = stream;
-    readJsonLines<BrokerControlFrame>(stream, (frame) => this.handleControlFrame(frame));
+    readNdjsonLines<BrokerControlFrame>(stream, (frame) => this.handleControlFrame(frame));
     stream.end(JSON.stringify({ peerId: this.options.brokerId, role: 'broker' }));
     await this.waitForRegistration();
   }
@@ -778,7 +786,15 @@ class VerserBrokerSocket extends Duplex {
 
   private readonly options: http.RequestOptions;
 
-  private readonly requestChunks: Buffer[] = [];
+  private requestBuffer = Buffer.alloc(0);
+
+  private bodyStream?: PassThrough;
+
+  private chunkDecoder?: ChunkedBodyDecoder;
+
+  private expectedBodyBytes = 0;
+
+  private receivedBodyBytes = 0;
 
   private forwardingStarted = false;
 
@@ -799,13 +815,18 @@ class VerserBrokerSocket extends Duplex {
     encoding: BufferEncoding,
     callback: () => void,
   ): void {
-    this.requestChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
-    this.forwardIfNoBodyRequest();
+    this.consumeRequestBytes(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
     callback();
   }
 
   public override _final(callback: () => void): void {
+    this.bodyStream?.end();
     callback();
+  }
+
+  public override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    this.bodyStream?.end();
+    callback(error);
   }
 
   public setTimeout(_timeout: number, callback?: () => void): this {
@@ -834,6 +855,8 @@ class VerserBrokerSocket extends Duplex {
   }
 
   private async forwardRequest(): Promise<void> {
+    const bodyStream = this.bodyStream ?? new PassThrough();
+    this.bodyStream = bodyStream;
     const requestHeaders = this.options.headers;
     const response = await this.broker.request({
       targetId: this.targetId,
@@ -844,38 +867,126 @@ class VerserBrokerSocket extends Duplex {
           ? undefined
           : (requestHeaders as http.OutgoingHttpHeaders | undefined),
       ),
-      body: [extractHttpRequestBody(Buffer.concat(this.requestChunks))],
+      body: bodyStream,
     });
-    this.push(serializeHttpResponse(response));
-    this.push(null);
-    process.nextTick(() => this.destroy());
+    this.push(serializeHttpResponseHead(response));
+    response.body.pipe(this.createResponseSink());
+    response.body.on('error', (error) => this.destroy(error));
   }
 
-  private forwardIfNoBodyRequest(): void {
-    const serializedRequest = Buffer.concat(this.requestChunks);
-    const separatorIndex = serializedRequest.indexOf('\r\n\r\n', 0, 'latin1');
+  private createResponseSink(): Writable {
+    return new Writable({
+      write: (chunk: Buffer | string, encoding, callback): void => {
+        this.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
+        callback();
+      },
+      final: (callback): void => {
+        this.bodyStream?.end();
+        this.push(null);
+        process.nextTick(() => this.destroy());
+        callback();
+      },
+    });
+  }
+
+  private consumeRequestBytes(chunk: Buffer): void {
+    if (this.bodyStream !== undefined) {
+      this.writeBodyBytes(chunk);
+      return;
+    }
+
+    this.requestBuffer = Buffer.concat([this.requestBuffer, chunk]);
+    const separatorIndex = this.requestBuffer.indexOf('\r\n\r\n', 0, 'latin1');
     if (separatorIndex === -1) {
       return;
     }
 
-    const headerText = serializedRequest.slice(0, separatorIndex).toString('latin1');
-    const expectsBody =
-      /content-length:\s*[1-9]/i.test(headerText) || /transfer-encoding:/i.test(headerText);
-    if (!expectsBody) {
-      this.forwardRequestOnce();
+    const headerText = this.requestBuffer.slice(0, separatorIndex).toString('latin1');
+    const bodyStart = separatorIndex + 4;
+    const firstBodyChunk = this.requestBuffer.subarray(bodyStart);
+    this.requestBuffer = Buffer.alloc(0);
+    this.bodyStream = new PassThrough();
+    this.expectedBodyBytes = parseContentLength(headerText);
+    const isChunked = /transfer-encoding:\s*chunked/i.test(headerText);
+    if (isChunked) {
+      this.chunkDecoder = new ChunkedBodyDecoder(this.bodyStream);
     }
+
+    this.forwardRequestOnce();
+    if (firstBodyChunk.length > 0) {
+      this.writeBodyBytes(firstBodyChunk);
+    }
+
+    const expectsBody = this.expectedBodyBytes > 0 || isChunked;
+    if (!expectsBody) {
+      this.bodyStream.end();
+    }
+  }
+
+  private writeBodyBytes(chunk: Buffer): void {
+    if (this.bodyStream === undefined) {
+      return;
+    }
+
+    if (this.chunkDecoder !== undefined) {
+      this.chunkDecoder.write(chunk);
+      return;
+    }
+
+    if (this.expectedBodyBytes > 0) {
+      const remaining = this.expectedBodyBytes - this.receivedBodyBytes;
+      const toWrite = chunk.subarray(0, remaining);
+      this.receivedBodyBytes += toWrite.length;
+      if (toWrite.length > 0) {
+        this.bodyStream.write(toWrite);
+      }
+      if (this.receivedBodyBytes >= this.expectedBodyBytes) {
+        this.bodyStream.end();
+      }
+      return;
+    }
+
+    this.bodyStream.write(chunk);
   }
 }
 
-interface HostRequestFrame {
-  readonly type: 'request';
-  readonly requestId: string;
-  readonly sourceId: string;
-  readonly targetId: string;
-  readonly method: string;
-  readonly path: string;
-  readonly headers: Record<string, string>;
-  readonly bodyBase64: string;
+class ChunkedBodyDecoder {
+  private pending = Buffer.alloc(0);
+
+  private expectedChunkBytes: number | undefined;
+
+  public constructor(private readonly output: PassThrough) {}
+
+  public write(chunk: Buffer): void {
+    this.pending = Buffer.concat([this.pending, chunk]);
+    this.flush();
+  }
+
+  private flush(): void {
+    while (this.pending.length > 0) {
+      if (this.expectedChunkBytes === undefined) {
+        const lineEnd = this.pending.indexOf('\r\n', 0, 'latin1');
+        if (lineEnd === -1) {
+          return;
+        }
+        const size = Number.parseInt(this.pending.subarray(0, lineEnd).toString('ascii'), 16);
+        this.pending = this.pending.subarray(lineEnd + 2);
+        if (size === 0 || !Number.isFinite(size)) {
+          this.output.end();
+          this.pending = Buffer.alloc(0);
+          return;
+        }
+        this.expectedChunkBytes = size;
+      }
+
+      if (this.pending.length < this.expectedChunkBytes + 2) {
+        return;
+      }
+      this.output.write(this.pending.subarray(0, this.expectedChunkBytes));
+      this.pending = this.pending.subarray(this.expectedChunkBytes + 2);
+      this.expectedChunkBytes = undefined;
+    }
+  }
 }
 
 interface BrokerControlFrame {
@@ -889,12 +1000,7 @@ function requestJson(
 ): Promise<{ status?: string }> {
   return new Promise((resolve, reject) => {
     const stream = session.request({ ':method': 'POST', ':path': '/verser/register' });
-    let body = '';
-    stream.setEncoding('utf8');
-    stream.on('data', (chunk: string) => {
-      body += chunk;
-    });
-    stream.on('end', () => {
+    readStreamText(stream).then((body) => {
       try {
         resolve(JSON.parse(body) as { status?: string });
       } catch (error) {
@@ -905,32 +1011,9 @@ function requestJson(
           }),
         );
       }
-    });
-    stream.on('error', reject);
+    }, reject);
     stream.end(JSON.stringify(payload));
   });
-}
-
-function readJsonLines<T>(stream: EventEmitter, onFrame: (frame: T) => void): void {
-  let pending = '';
-  const readable = stream as http2.ClientHttp2Stream;
-  readable.setEncoding('utf8');
-  readable.on('data', (chunk: string) => {
-    pending += chunk;
-    let lineBreak = pending.indexOf('\n');
-    while (lineBreak !== -1) {
-      const line = pending.slice(0, lineBreak);
-      pending = pending.slice(lineBreak + 1);
-      if (line.length > 0) {
-        onFrame(JSON.parse(line) as T);
-      }
-      lineBreak = pending.indexOf('\n');
-    }
-  });
-}
-
-function writeJsonLine(stream: http2.ClientHttp2Stream, value: unknown): void {
-  stream.write(`${JSON.stringify(value)}\n`);
 }
 
 function normalHeaders(headers: http2.IncomingHttpHeaders): Record<string, string> {
@@ -951,11 +1034,28 @@ function errorFromBody(body: Buffer, targetId: string): VerserError {
       context?: Record<string, string | number | boolean>;
     };
   };
-  const code = parsed.error?.code === 'missing-guest' ? 'missing-guest' : 'local-handler-failure';
+  const code = toVerserErrorCode(parsed.error?.code);
   return createVerserError(code, parsed.error?.message ?? 'Broker request failed', {
     targetId,
     ...(parsed.error?.context ?? {}),
   });
+}
+
+function toVerserErrorCode(code: string | undefined): VerserErrorCode {
+  if (
+    code === 'missing-guest' ||
+    code === 'disconnected-target' ||
+    code === 'timeout' ||
+    code === 'stream-failure' ||
+    code === 'protocol-error' ||
+    code === 'local-handler-failure' ||
+    code === 'invalid-registration' ||
+    code === 'certificate-verification-failure'
+  ) {
+    return code;
+  }
+
+  return 'local-handler-failure';
 }
 
 function normalizeRequestHeaders(
@@ -985,52 +1085,23 @@ function flattenHeaders(
   return flattenedHeaders;
 }
 
-function extractHttpRequestBody(serializedRequest: Buffer): Buffer {
-  const separator = Buffer.from('\r\n\r\n');
-  const separatorIndex = serializedRequest.indexOf(separator);
-  if (separatorIndex === -1) {
-    return Buffer.alloc(0);
+function parseContentLength(headerText: string): number {
+  const match = /content-length:\s*(\d+)/i.exec(headerText);
+  if (match === null) {
+    return 0;
   }
 
-  const headerText = serializedRequest.slice(0, separatorIndex).toString('latin1');
-  const body = serializedRequest.slice(separatorIndex + separator.length);
-  if (/transfer-encoding:\s*chunked/i.test(headerText)) {
-    return decodeChunkedBody(body);
-  }
-
-  return body;
+  return Number.parseInt(match[1], 10);
 }
 
-function decodeChunkedBody(body: Buffer): Buffer {
-  const chunks: Buffer[] = [];
-  let offset = 0;
-  while (offset < body.length) {
-    const lineEnd = body.indexOf('\r\n', offset, 'latin1');
-    if (lineEnd === -1) {
-      break;
-    }
-    const size = Number.parseInt(body.slice(offset, lineEnd).toString('ascii'), 16);
-    if (size === 0 || !Number.isFinite(size)) {
-      break;
-    }
-    const chunkStart = lineEnd + 2;
-    chunks.push(body.slice(chunkStart, chunkStart + size));
-    offset = chunkStart + size + 2;
-  }
-
-  return Buffer.concat(chunks);
-}
-
-function serializeHttpResponse(response: VerserBrokerResponse): Buffer {
-  const headers = {
-    ...response.headers,
-    'content-length': String(response.body.length),
-  };
+function serializeHttpResponseHead(response: VerserBrokerResponse): Buffer {
+  const headers = { ...response.headers };
   const headerLines = Object.entries(headers).map(([key, value]) => `${key}: ${value}`);
-  return Buffer.concat([
-    Buffer.from(`HTTP/1.1 ${response.statusCode} OK\r\n${headerLines.join('\r\n')}\r\n\r\n`),
-    response.body,
-  ]);
+  return Buffer.from(`HTTP/1.1 ${response.statusCode} OK\r\n${headerLines.join('\r\n')}\r\n\r\n`);
+}
+
+function readResponseBody(stream: http2.ClientHttp2Stream): Promise<Buffer> {
+  return readStreamBuffer(stream);
 }
 
 function once(emitter: EventEmitter, eventName: string): Promise<void> {
