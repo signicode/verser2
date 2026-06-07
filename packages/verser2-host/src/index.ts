@@ -6,11 +6,15 @@ import {
   type RoutedDomainRegistration,
   VERSER_LIFECYCLE_EVENTS,
   type VerserError,
+  type VerserErrorEnvelopeMetadata,
   type VerserPeerId,
+  type VerserResponseEnvelopeMetadata,
   createDevelopmentTlsCertificate,
   createPeerId,
   createRoutedDomainRegistration,
+  createVerserEnvelopeParser,
   createVerserError,
+  encodeVerserEnvelope,
 } from '@signicode/verser-common';
 
 export const VERSER2_HOST_PACKAGE_NAME = '@signicode/verser2-host';
@@ -389,16 +393,24 @@ class NodeHttp2VerserHost implements VerserHost {
     if (target === undefined) {
       throw createVerserError('missing-guest', 'Target Guest is not registered', { targetId });
     }
+    const lease = await this.tryAcquireLease(
+      createPeerId(targetId),
+      requestId,
+      parseLeaseAcquireTimeoutMs(headers),
+    );
+    if (lease !== undefined) {
+      await this.routeBrokerRequestOverLease(stream, headers, lease, requestId, targetId);
+      return;
+    }
+
     if (target.controlStream === undefined || target.controlStream.closed) {
-      await this.acquireLease(
+      const queuedLease = await this.acquireLease(
         createPeerId(targetId),
         requestId,
         parseLeaseAcquireTimeoutMs(headers),
       );
-      throw createVerserError('protocol-error', 'Leased routing is not active yet', {
-        targetId,
-        requestId,
-      });
+      await this.routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
+      return;
     }
 
     const body = await readRequestBuffer(stream);
@@ -413,6 +425,41 @@ class NodeHttp2VerserHost implements VerserHost {
       headers: decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}')),
       bodyBase64: body.toString('base64'),
     });
+  }
+
+  private async routeBrokerRequestOverLease(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+    lease: GuestLeaseStream,
+    requestId: string,
+    targetId: string,
+  ): Promise<void> {
+    const responsePromise = readLeaseResponseMetadata(
+      lease.stream,
+      requestId,
+      targetId,
+      DEFAULT_LEASE_METADATA_BYTES,
+    );
+    const body = await readRequestBuffer(stream);
+    lease.stream.write(
+      encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId,
+          sourceId: String(headers['x-verser-source-id'] ?? ''),
+          targetId,
+          method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
+          path: String(headers['x-verser-path'] ?? '/'),
+          headers: decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}')),
+          timeoutMs: parseLeaseAcquireTimeoutMs(headers),
+        },
+      }),
+    );
+    lease.stream.end(body);
+
+    const responseMetadata = await responsePromise;
+    stream.respond({ ':status': responseMetadata.statusCode, ...responseMetadata.headers });
+    lease.stream.pipe(stream);
   }
 
   private handleGuestControlFrame(frame: GuestControlFrame): void {
@@ -531,6 +578,19 @@ class NodeHttp2VerserHost implements VerserHost {
       queued.push(acquisition);
       this.queuedLeaseAcquisitions.set(guestId, queued);
     });
+  }
+
+  private async tryAcquireLease(
+    guestId: VerserPeerId,
+    requestId: string,
+    timeoutMs: number,
+  ): Promise<GuestLeaseStream | undefined> {
+    const idleLeases = this.idleLeases.get(guestId) ?? [];
+    if (idleLeases.length === 0) {
+      return undefined;
+    }
+
+    return this.acquireLease(guestId, requestId, timeoutMs);
   }
 
   private removeLease(lease: GuestLeaseStream): void {
@@ -710,4 +770,128 @@ function parseLeaseAcquireTimeoutMs(headers: http2.IncomingHttpHeaders): number 
   }
 
   return value;
+}
+
+const DEFAULT_LEASE_METADATA_BYTES = 64 * 1024;
+
+function readLeaseResponseMetadata(
+  stream: http2.ServerHttp2Stream,
+  requestId: string,
+  targetId: string,
+  maxMetadataBytes: number,
+): Promise<VerserResponseEnvelopeMetadata> {
+  return readLeaseResponseMetadataFromStream(stream, requestId, targetId, maxMetadataBytes);
+}
+
+async function readLeaseResponseMetadataFromStream(
+  stream: http2.ServerHttp2Stream,
+  requestId: string,
+  targetId: string,
+  maxMetadataBytes: number,
+): Promise<VerserResponseEnvelopeMetadata> {
+  const parser = createVerserEnvelopeParser({ maxMetadataBytes });
+  const prefix = await readExactly(stream, 2, requestId, targetId);
+  const lengthBytes = await readExactly(stream, 4, requestId, targetId);
+  const metadataLength = lengthBytes.readUInt32BE(0);
+  const metadataBytes = await readExactly(stream, metadataLength, requestId, targetId);
+  const parsed = parser.push(Buffer.concat([prefix, lengthBytes, metadataBytes]));
+
+  if (parsed === undefined) {
+    throw createVerserError('protocol-error', 'Lease stream metadata parser did not complete', {
+      targetId,
+      requestId,
+    });
+  }
+
+  if (parsed.bodyRemainder.length > 0) {
+    stream.unshift(parsed.bodyRemainder);
+  }
+
+  if (parsed.type === 'response') {
+    return parsed.metadata as VerserResponseEnvelopeMetadata;
+  }
+
+  if (parsed.type === 'error') {
+    const errorMetadata = parsed.metadata as VerserErrorEnvelopeMetadata;
+    throw createVerserError(
+      errorMetadata.code === 'local-handler-failure' ? 'local-handler-failure' : 'protocol-error',
+      errorMetadata.message,
+      {
+        targetId,
+        requestId,
+        ...(errorMetadata.context ?? {}),
+      },
+    );
+  }
+
+  throw createVerserError('protocol-error', 'Lease stream returned a non-response envelope', {
+    targetId,
+    requestId,
+  });
+}
+
+async function readExactly(
+  stream: http2.ServerHttp2Stream,
+  byteCount: number,
+  requestId: string,
+  targetId: string,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let remainingBytes = byteCount;
+
+  while (remainingBytes > 0) {
+    const chunk = stream.read(remainingBytes) as Buffer | string | null;
+    if (chunk === null) {
+      await waitForReadable(stream, requestId, targetId);
+      continue;
+    }
+
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (buffer.length > remainingBytes) {
+      chunks.push(buffer.subarray(0, remainingBytes));
+      stream.unshift(buffer.subarray(remainingBytes));
+      remainingBytes = 0;
+      continue;
+    }
+
+    chunks.push(buffer);
+    remainingBytes -= buffer.length;
+  }
+
+  return Buffer.concat(chunks, byteCount);
+}
+
+function waitForReadable(
+  stream: http2.ServerHttp2Stream,
+  requestId: string,
+  targetId: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onReadable = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onEnd = (): void => {
+      cleanup();
+      reject(
+        createVerserError('protocol-error', 'Lease stream ended before response metadata', {
+          targetId,
+          requestId,
+        }),
+      );
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(toVerserError(error));
+    };
+    const cleanup = (): void => {
+      stream.off('readable', onReadable);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+    };
+
+    stream.once('readable', onReadable);
+    stream.once('end', onEnd);
+    stream.once('error', onError);
+  });
 }

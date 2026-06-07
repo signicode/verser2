@@ -298,6 +298,32 @@ test('Host rejects lease streams for missing Guests', async () => {
   }
 });
 
+test('Host rejects lease streams without lease ids', async () => {
+  const host = createVerserHost({ port: 0 });
+
+  await host.start();
+  const guest = await connectClient(host.address.port);
+
+  try {
+    assert.equal(
+      (await requestJson(guest, { peerId: 'guest-missing-lease-id', role: 'guest' })).status,
+      'registered',
+    );
+    const response = await requestJsonWithHeaders(guest, {
+      ':method': 'POST',
+      ':path': '/verser/guest/lease',
+      'x-verser-peer-id': 'guest-missing-lease-id',
+      'x-verser-lease-id': '',
+    });
+
+    assert.equal(response.error.code, 'protocol-error');
+    assert.match(response.error.message, /lease id/i);
+  } finally {
+    guest.close();
+    await host.close('test-complete');
+  }
+});
+
 test('Host queues Broker routed requests and times out when no lease is available', async () => {
   const host = createVerserHost({ port: 0 });
 
