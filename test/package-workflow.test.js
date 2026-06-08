@@ -68,6 +68,15 @@ test('workflow applies package version policy and publishes to GitHub Packages',
   );
 });
 
+test('workflow never publishes packages from pull request runs', () => {
+  const content = loadWorkflow();
+  assert.match(
+    content,
+    /if:\s*github\.event_name\s*!=\s*'pull_request'\s*&&\s*github\.event_name\s*==\s*'push'/,
+  );
+  assert.match(content, /Confirm validation job never publishes packages/);
+});
+
 test('workflow uses NODE_AUTH_TOKEN from GitHub secret and no npmjs publish', () => {
   const content = loadWorkflow();
   assert.match(content, /NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/);
