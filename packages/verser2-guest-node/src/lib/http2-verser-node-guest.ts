@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import * as http from 'node:http';
 import * as http2 from 'node:http2';
 import type { Readable } from 'node:stream';
@@ -10,12 +10,13 @@ import {
   createRoutedRequestEnvelope,
   createVerserError,
   encodeVerserEnvelope,
+  flattenVerserHeaders,
+  getErrorMessage,
   readLeaseRequestMetadataFromStream,
   readNdjsonLines,
   validateVerserHeaders,
 } from '@signicode/verser-common';
-import { getErrorMessage, toVerserError } from './error-utils';
-import { flattenHeaders } from './header-utils';
+import { toVerserError } from './error-utils';
 import { requestJson } from './http2-client-utils';
 import { MinimalIncomingMessage, MinimalServerResponse } from './minimal-http';
 import type {
@@ -334,7 +335,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       targetId: metadata.targetId,
       method: metadata.method,
       path: metadata.path,
-      headers: flattenHeaders(validateVerserHeaders(metadata.headers)),
+      headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),
       body: [],
     } as VerserNodeGuestDispatchRequest;
     const localRequest = new MinimalIncomingMessage(request, lease.stream as Readable);
@@ -416,11 +417,4 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
 
     return this.options.routedDomains ?? [];
   }
-}
-
-function once(emitter: EventEmitter, eventName: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    emitter.once(eventName, () => resolve());
-    emitter.once('error', reject);
-  });
 }

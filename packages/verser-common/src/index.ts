@@ -10,6 +10,11 @@ export { DEFAULT_MAX_ENVELOPE_METADATA_BYTES, VERSER_LIFECYCLE_EVENTS } from './
 
 export type {
   DevelopmentTlsCertificate,
+  VerserPeerRole,
+  VerserRegistrationRequest,
+  VerserRegistrationResponse,
+  VerserBrokerRoutesControlFrame,
+  VerserBrokerControlFrame,
   LeaseRequestMetadataReadOptions,
   LeaseResponseMetadataReadOptions,
   ParsedVerserEnvelope,
@@ -24,7 +29,11 @@ export type {
   VerserErrorContext,
   VerserErrorEnvelopeMetadata,
   VerserHeaderValue,
+  VerserHeaderInput,
   VerserHeaders,
+  VerserCommonBroker,
+  VerserCommonBrokerRequest,
+  VerserCommonBrokerResponse,
   VerserPeerId,
   VerserRequestEnvelopeMetadata,
   VerserRequestId,
@@ -40,12 +49,25 @@ export {
   createRoutedDomainRegistration,
   createRoutedRequestEnvelope,
   createRoutedResponseEnvelope,
+  resolveRouteForHostname,
+  resolveRouteForUrl,
 } from './lib/routing';
+
+export { createCommonBrokerRequest } from './lib/broker-request';
+
+export {
+  createBrokerRoutesControlFrame,
+  parseRegistrationRequest,
+  parseRegistrationResponse,
+} from './lib/registration';
 
 export {
   VerserError,
   createVerserError,
+  toVerserError,
 } from './lib/errors';
+
+export { getErrorMessage } from './lib/utils';
 
 export {
   createVerserEnvelopeParser,
@@ -55,9 +77,38 @@ export {
   readVerserEnvelopeFromStream,
 } from './lib/envelope';
 
+export {
+  VerserHttpErrorResponse,
+  toVerserErrorCode,
+  toVerserHttpErrorResponse,
+  verserErrorFromResponseBody,
+} from './lib/error-response';
+
 export { readExactly } from './lib/stream-readers';
 
-export { readNdjsonLines } from './lib/ndjson';
+export {
+  isIterableBody,
+  isAsyncIterableBody,
+  normalizeBrokerRequestBody,
+} from './lib/body';
+
+export { encodeJsonLine, readNdjsonLines } from './lib/ndjson';
+
+export { decodeHeaderMap, flattenVerserHeaders } from './lib/header-serialization';
+
+export {
+  flattenHeaderValue,
+  isValidHeaderName,
+  isValidHeaderValue,
+  normalizeHeaders,
+  normalizeRequestHeaders,
+  validateRuntimeNeutralHeaders,
+} from './lib/headers';
+
+export {
+  VERSER_LEASE_ACQUIRE_TIMEOUT_HEADER,
+  parseLeaseAcquireTimeoutMs,
+} from './lib/protocol-headers';
 
 export { validateVerserHeaders } from './lib/headers';
 
@@ -66,6 +117,7 @@ export {
   fromHttp2RequestHeaders,
   toHttp2ResponseHeaders,
   fromHttp2ResponseHeaders,
+  stripHttp2PseudoHeaders,
 } from './lib/http2-headers';
 
 export {

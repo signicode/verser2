@@ -1,21 +1,21 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import type * as http from 'node:http';
 import * as http2 from 'node:http2';
 import * as nodeStream from 'node:stream';
+import { buffer } from 'node:stream/consumers';
 
 import {
   createDevelopmentTlsCertificate,
   createVerserError,
   readNdjsonLines,
+  stripHttp2PseudoHeaders,
   validateVerserHeaders,
+  verserErrorFromResponseBody,
 } from '@signicode/verser-common';
 import type { Dispatcher } from 'undici';
 import { fetch as undiciFetch } from 'undici';
 import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
-import { errorFromBody } from './error-utils';
-import { normalHeaders } from './header-utils';
-import { once, readResponseBody } from './http2-client-utils';
 import type {
   BrokerControlFrame,
   VerserBroker,
@@ -133,13 +133,13 @@ export class Http2VerserBroker implements VerserBroker {
       let responseHeaders: Record<string, string> = {};
       stream.on('response', (headers) => {
         statusCode = Number(headers[':status'] ?? 200);
-        responseHeaders = normalHeaders(headers);
+        responseHeaders = stripHttp2PseudoHeaders(headers);
         if (statusCode < 400) {
           resolve({ requestId, statusCode, headers: responseHeaders, body: stream });
           return;
         }
-        readResponseBody(stream).then(
-          (body) => reject(errorFromBody(body, request.targetId)),
+        buffer(stream).then(
+          (body) => reject(verserErrorFromResponseBody(body, request.targetId)),
           reject,
         );
       });
@@ -193,8 +193,8 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   private handleControlFrame(frame: BrokerControlFrame): void {
-    if ('routes' in frame) {
-      this.routes = frame.routes;
+    if (frame.type === 'routes') {
+      this.routes = [...frame.routes];
       for (const route of this.routes) {
         for (const resolve of this.routeWaiters.get(route.domain) ?? []) {
           resolve();

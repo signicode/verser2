@@ -1,5 +1,7 @@
 export type VerserPeerId = string;
 
+export type VerserPeerRole = 'broker' | 'guest';
+
 export type VerserGuestId = string;
 
 export type VerserRequestId = string;
@@ -25,7 +27,18 @@ export interface RoutedResponseEnvelope {
   readonly headers: Record<string, string>;
 }
 
-export type VerserHeaderValue = string | readonly string[];
+export type VerserHeaderValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly (string | number | boolean)[];
+
+export type VerserHeaderInput =
+  | Readonly<Record<string, VerserHeaderValue>>
+  | readonly string[]
+  | Iterable<readonly [string, VerserHeaderValue]>;
 
 export type VerserHeaders = Readonly<Record<string, VerserHeaderValue>>;
 
@@ -85,6 +98,29 @@ export interface VerserEnvelopeStreamReadOptions extends VerserEnvelopeParserOpt
   readonly context?: VerserStreamReadContext;
 }
 
+export interface VerserCommonBrokerRequest<TBody = unknown> {
+  readonly targetId: string;
+  readonly method: string;
+  readonly path: string;
+  readonly headers?: VerserHeaders;
+  readonly body?: TBody;
+}
+
+export interface VerserCommonBrokerResponse<TBody> {
+  readonly requestId: string;
+  readonly statusCode: number;
+  readonly headers: VerserHeaders;
+  readonly body: TBody;
+}
+
+export interface VerserCommonBroker<TRequestBody = unknown, TResponseBody = unknown> {
+  getRoutes(): { targetId: string; domain: string }[];
+  waitForRoute(domain: string): Promise<void>;
+  request(
+    request: VerserCommonBrokerRequest<TRequestBody>,
+  ): Promise<VerserCommonBrokerResponse<TResponseBody>>;
+}
+
 export interface LeaseResponseMetadataReadOptions extends VerserEnvelopeParserOptions {
   readonly requestId: string;
   readonly targetId: string;
@@ -99,6 +135,24 @@ export interface DevelopmentTlsCertificate {
   readonly cert: string;
   readonly key: string;
 }
+
+export interface VerserRegistrationRequest {
+  readonly peerId: string;
+  readonly role: VerserPeerRole;
+  readonly routedDomains?: readonly string[];
+}
+
+export interface VerserRegistrationResponse {
+  readonly status?: string;
+  readonly routes?: readonly RoutedDomainRegistration[];
+}
+
+export interface VerserBrokerRoutesControlFrame {
+  readonly type: 'routes';
+  readonly routes: readonly RoutedDomainRegistration[];
+}
+
+export type VerserBrokerControlFrame = VerserBrokerRoutesControlFrame;
 
 export type VerserErrorCode =
   | 'missing-guest'
