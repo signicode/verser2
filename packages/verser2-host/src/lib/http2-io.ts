@@ -1,25 +1,13 @@
 import type * as http2 from 'node:http2';
-import { text as readStreamText } from 'node:stream/consumers';
 
 import type { VerserError } from '@signicode/verser-common';
 import { encodeJsonLine, toVerserHttpErrorResponse } from '@signicode/verser-common';
-
-export function readRequestBody(stream: http2.ServerHttp2Stream): Promise<string> {
-  return readStreamText(stream);
-}
 
 export function writeJsonLine(stream: http2.ServerHttp2Stream, value: unknown): void {
   if (!stream.headersSent) {
     stream.respond({ ':status': 200, 'content-type': 'application/json' });
   }
   stream.write(encodeJsonLine(value));
-}
-
-export function sendJson(stream: http2.ServerHttp2Stream, value: unknown): void {
-  if (!stream.headersSent) {
-    stream.respond({ ':status': 200, 'content-type': 'application/json' });
-  }
-  stream.end(JSON.stringify(value));
 }
 
 export function sendError(stream: http2.ServerHttp2Stream, error: VerserError): void {

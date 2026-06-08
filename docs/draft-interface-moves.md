@@ -47,11 +47,11 @@ This draft tracks Host/Guest helpers that could move into `@signicode/verser-com
 
 ## Inline or keep local
 
-- [~] INLINE: source: `packages/verser2-host/src/lib/http2-io.ts#sendJson` dest: `packages/verser2-host/src/lib/http2-io.ts#sendJson` - kept local because it is a thin HTTP/2 response helper rather than a Verser protocol abstraction.
-- [~] INLINE: source: `packages/verser2-host/src/lib/http2-io.ts#readRequestBody` dest: `packages/verser2-host/src/lib/http2-io.ts#readRequestBody` - kept local because it is only a thin Node stream consumer wrapper.
-- [~] INLINE: source: `packages/verser2-guest-node/src/lib/http2-client-utils.ts#readResponseBody` dest: `packages/verser2-guest-node/src/lib/http2-client-utils.ts#readResponseBody` - kept local because it is only a thin Node stream consumer wrapper.
+- [x] INLINE: source: `packages/verser2-host/src/lib/http2-io.ts#sendJson` dest: `packages/verser2-host/src/lib/node-http2-verser-host.ts` - inlined because it was a thin HTTP/2 response helper rather than a Verser protocol abstraction.
+- [x] INLINE: source: `packages/verser2-host/src/lib/http2-io.ts#readRequestBody` dest: `packages/verser2-host/src/lib/node-http2-verser-host.ts` - inlined because it was only a thin Node stream consumer wrapper.
+- [x] INLINE: source: `packages/verser2-guest-node/src/lib/http2-client-utils.ts#readResponseBody` dest: `packages/verser2-guest-node/src/lib/http2-verser-broker.ts` - inlined because it was only a thin Node stream consumer wrapper.
 - [x] INLINE: source: `packages/verser2-guest-node/src/lib/http2-client-utils.ts#once` dest: `node:events#once` - replaced duplicate local event helpers with Node's built-in `once`.
-- [~] INLINE: source: `packages/verser2-host/src/lib/utils.ts#activeLeaseKey` dest: `packages/verser2-host/src/lib/node-http2-verser-host.ts#activeLeaseKey` - kept local because it is host lease bookkeeping, not a common protocol helper.
+- [x] INLINE: source: `packages/verser2-host/src/lib/utils.ts#activeLeaseKey` dest: `packages/verser2-host/src/lib/node-http2-verser-host.ts` - inlined because it is host lease bookkeeping, not a common protocol helper.
 - [~] INLINE: source: `packages/verser2-guest-node/src/lib/header-utils.ts#toRawHeaderList` dest: `packages/verser2-guest-node/src/lib/header-utils.ts#toRawHeaderList` - kept local because it adapts to Undici raw header list output.
 - [~] INLINE: source: `packages/verser2-guest-node/src/lib/utils.ts#serializeHttpResponseHead` dest: `packages/verser2-guest-node/src/lib/utils.ts#serializeHttpResponseHead` - kept local because it is HTTP/1 socket shim serialization.
 - [~] INLINE: source: `packages/verser2-guest-node/src/lib/chunked-body-decoder.ts#ChunkedBodyDecoder` dest: `packages/verser2-guest-node/src/lib/chunked-body-decoder.ts#ChunkedBodyDecoder` - kept local because it is a Node HTTP/1 adapter utility, not a Verser common protocol primitive.

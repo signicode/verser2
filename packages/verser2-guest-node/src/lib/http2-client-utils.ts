@@ -1,13 +1,9 @@
 import type * as http2 from 'node:http2';
-import { buffer, text } from 'node:stream/consumers';
+import { text } from 'node:stream/consumers';
 import {
   type VerserRegistrationResponse,
   parseRegistrationResponse,
 } from '@signicode/verser-common';
-
-export function readResponseBody(stream: http2.ClientHttp2Stream): Promise<Buffer> {
-  return buffer(stream);
-}
 
 export function requestJson(
   session: http2.ClientHttp2Session,
