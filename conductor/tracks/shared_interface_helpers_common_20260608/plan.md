@@ -174,3 +174,4 @@
     - `node --test --test-timeout=20000 test/common-protocol.test.js test/host.test.js test/guest-node.test.js test/broker-routing.test.js` passed with 48 tests after implementation.
     - Registration/control reusable helpers now live in `packages/verser-common/src/lib/registration.ts` and shared protocol types in `packages/verser-common/src/lib/types.ts`; Host and Guest Node only retain aliases/imports and transport/state-machine mechanics.
     - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
+    - Phase checkpoint commit: `935e694`.
