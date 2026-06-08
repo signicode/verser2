@@ -203,3 +203,4 @@
     - Deferred broker request normalization, URL-level route resolution, broad header input types, and shared body normalization until their common API policies are explicit.
     - Kept Node HTTP shims, stream readers/writers, active lease keys, dispatch controller state, content-length parsing, and raw header-list adaptation package-local as documented in `docs/draft-interface-moves.md`.
     - Coverage status: changed behavior is covered by new common route tests plus existing Agent/Dispatcher/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
+    - Phase checkpoint commit: `048a9f8`.
