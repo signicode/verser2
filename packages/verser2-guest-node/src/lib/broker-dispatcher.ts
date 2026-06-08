@@ -1,9 +1,9 @@
 import * as http from 'node:http';
 
+import { resolveRouteForUrl } from '@signicode/verser-common';
 import {
   appendQueryString,
   normalizeHeaders as normalizeCommonHeaders,
-  resolveRouteForHostname,
 } from '@signicode/verser2-guest-js-common';
 import { Dispatcher } from 'undici';
 
@@ -47,7 +47,7 @@ export class VerserBrokerDispatcher extends Dispatcher {
     const origin = new URL(String(options.origin ?? 'http://localhost'));
     const requestPath = appendQueryString(options.path, options.query);
     const requestUrl = new URL(requestPath, origin);
-    const route = resolveRouteForHostname(this.nodeBroker.getRoutes(), requestUrl.hostname);
+    const route = resolveRouteForUrl(this.nodeBroker.getRoutes(), requestUrl);
     if (route === undefined) {
       throw new Error(`No Verser route advertised for host ${requestUrl.hostname}`);
     }

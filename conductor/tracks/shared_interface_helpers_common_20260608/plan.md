@@ -210,8 +210,16 @@
     - Host consumes common registration parsing/response types, route frames, header decoding/flattening, lease timeout parsing, NDJSON encoding, and error serialization.
     - Guest Node consumes common registration response parsing, route-control frame types, HTTP/2 pseudo-header stripping, header flattening, error parsing/coercion, `getErrorMessage`, and NDJSON parsing.
     - Guest JS Common re-exports common exact hostname route resolution, aliases `VerserRoute` to common route registrations, and owns JS-specific `appendQueryString`.
-    - Remaining local helpers are intentionally package-specific: Host error coercion and HTTP/2 response/error mechanics, Guest Node body and HTTP adapter helpers, content-length parsing, raw header-list adaptation, and dispatcher state. Thin Host/Guest stream wrappers and Host active-lease key construction were inlined after final review feedback.
+    - Remaining local helpers are intentionally package-specific: HTTP/2 response/error mechanics, content-length parsing, raw header-list adaptation, dispatch progress reporting, and dispatcher state. Thin Host/Guest stream wrappers and Host active-lease key construction were inlined after final review feedback.
     - Corrective inline cleanup validation: `npm run build`, `node --test --test-timeout=20000 test/host.test.js test/broker-routing.test.js test/guest-node.test.js` (`41` tests), and `npm run lint` passed.
-    - Final validation: `npm run build`, `npm test` (`91` tests), and `npm run lint` passed.
+    - Follow-up combine cleanup after package-boundary clarification:
+        - `@signicode/verser-common` is treated as shared Node/TypeScript common for Host and Node Guest; `@signicode/verser2-guest-js-common` remains the JS guest/fetch-oriented compatibility layer.
+        - Header combine: broad `VerserHeaderInput`/`VerserHeaderValue`, `flattenHeaderValue`, `normalizeHeaders`, header name/value validation, `validateRuntimeNeutralHeaders`, and Node `normalizeRequestHeaders` moved into common; JS common re-exports the compatible header surface.
+        - Error combine: Host and Guest Node `toVerserError` variants now use common `toVerserError`, preserving `VerserError` identity and adding `guestId` context when provided.
+        - Body combine: iterable/async-iterable guards and body conversion moved into common `normalizeBrokerRequestBody`; Guest Node keeps dispatch progress reporting local.
+        - Broker/URL combine: broker request/response/common broker contract types, `createCommonBrokerRequest`, and `resolveRouteForUrl` moved into common, with JS common re-exporting compatible helpers.
+        - Still deferred/kept local: raw HTTP/1 content-length parsing and response-head serialization remain Node adapter/socket-shim details unless duplication appears on both sides.
+        - Follow-up validations: header focused tests (`34`), error focused tests (`37`), body focused tests (`37`), and broker/URL focused tests (`33`) passed with `npm run build` and `npm run lint` in their respective chunks.
+    - Final validation: `npm run build`, `npm test` (`100` tests), and `npm run lint` passed.
     - Coverage status: changed behavior is covered by common unit tests and Host/Guest/Broker/Agent/Dispatcher/end-to-end integration tests; no separate coverage reporter is configured for this repository.
     - Phase checkpoint commit: `18dd9b9`.

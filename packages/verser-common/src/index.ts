@@ -29,7 +29,11 @@ export type {
   VerserErrorContext,
   VerserErrorEnvelopeMetadata,
   VerserHeaderValue,
+  VerserHeaderInput,
   VerserHeaders,
+  VerserCommonBroker,
+  VerserCommonBrokerRequest,
+  VerserCommonBrokerResponse,
   VerserPeerId,
   VerserRequestEnvelopeMetadata,
   VerserRequestId,
@@ -46,7 +50,10 @@ export {
   createRoutedRequestEnvelope,
   createRoutedResponseEnvelope,
   resolveRouteForHostname,
+  resolveRouteForUrl,
 } from './lib/routing';
+
+export { createCommonBrokerRequest } from './lib/broker-request';
 
 export {
   createBrokerRoutesControlFrame,
@@ -57,6 +64,7 @@ export {
 export {
   VerserError,
   createVerserError,
+  toVerserError,
 } from './lib/errors';
 
 export { getErrorMessage } from './lib/utils';
@@ -78,9 +86,24 @@ export {
 
 export { readExactly } from './lib/stream-readers';
 
+export {
+  isIterableBody,
+  isAsyncIterableBody,
+  normalizeBrokerRequestBody,
+} from './lib/body';
+
 export { encodeJsonLine, readNdjsonLines } from './lib/ndjson';
 
 export { decodeHeaderMap, flattenVerserHeaders } from './lib/header-serialization';
+
+export {
+  flattenHeaderValue,
+  isValidHeaderName,
+  isValidHeaderValue,
+  normalizeHeaders,
+  normalizeRequestHeaders,
+  validateRuntimeNeutralHeaders,
+} from './lib/headers';
 
 export {
   VERSER_LEASE_ACQUIRE_TIMEOUT_HEADER,

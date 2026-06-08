@@ -1,6 +1,6 @@
-import { resolveRouteForHostname } from './routes';
+import { createCommonBrokerRequest } from '@signicode/verser-common';
+import { resolveRouteForUrl } from '@signicode/verser-common';
 import type { VerserCommonBroker, VerserCommonBrokerRequest, VerserRoute } from './types';
-import { createCommonBrokerRequest } from './utils';
 
 export abstract class AbstractVerserFetchDispatcher<TRequestBody, TResponseBody> {
   protected constructor(
@@ -8,7 +8,7 @@ export abstract class AbstractVerserFetchDispatcher<TRequestBody, TResponseBody>
   ) {}
 
   protected resolveRouteForUrl(url: URL): VerserRoute {
-    const route = resolveRouteForHostname(this.broker.getRoutes(), url.hostname);
+    const route = resolveRouteForUrl(this.broker.getRoutes(), url);
     if (route === undefined) {
       throw new Error(`No Verser route advertised for host ${url.hostname}`);
     }
