@@ -2,21 +2,30 @@
 
 ## Phase 1: Baseline package audit and failing staging tests
 
-- [ ] Task: Audit current package build and publish metadata
-    - [ ] Inspect root and workspace `package.json` files, TypeScript configs, tsup configs, package entrypoints, generated declaration paths, and `.gitignore` behavior.
-    - [ ] Record required publish fields for `@signicode/verser-common`, `@signicode/verser2-host`, and `@signicode/verser2-guest-node`.
-    - [ ] Confirm whether existing package names are compatible with GitHub Packages scoped npm publishing.
-    - [ ] Review existing common libraries and scripts before adding package-local release helpers.
-- [ ] Task: Write failing staging metadata tests
-    - [ ] Add tests that expect a central staged package tree under `dist/packages`.
-    - [ ] Add tests that verify staged package metadata keeps publish-critical fields and removes scripts, test commands, dev-only fields, and workspace-only settings.
-    - [ ] Add tests that fail when built JavaScript or declaration files are missing from a staged package.
-- [ ] Task: Write failing package packing tests
-    - [ ] Add focused tests or validation helpers that run `npm pack --dry-run` or equivalent against staged packages.
-    - [ ] Assert that packable contents include built entrypoints and declarations and exclude generated test/dev-only files.
-- [ ] Task: Run narrow failing validation
-    - [ ] Run the smallest relevant test command and confirm new tests fail for the expected missing staging behavior.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Baseline package audit and failing staging tests' (Protocol in workflow.md)
+- [x] Task: Audit current package build and publish metadata
+    - [x] Inspect root and workspace `package.json` files, TypeScript configs, tsup configs, package entrypoints, generated declaration paths, and `.gitignore` behavior.
+    - [x] Record required publish fields for `@signicode/verser-common`, `@signicode/verser2-host`, and `@signicode/verser2-guest-node`.
+    - [x] Confirm whether existing package names are compatible with GitHub Packages scoped npm publishing.
+    - [x] Review existing common libraries and scripts before adding package-local release helpers.
+- [x] Task: Write failing staging metadata tests
+    - [x] Add tests that expect a central staged package tree under `dist/packages`.
+    - [x] Add tests that verify staged package metadata keeps publish-critical fields and removes scripts, test commands, dev-only fields, and workspace-only settings.
+    - [x] Add tests that fail when built JavaScript or declaration files are missing from a staged package.
+- [x] Task: Write failing package packing tests
+    - [x] Add focused tests or validation helpers that run `npm pack --dry-run` or equivalent against staged packages.
+    - [x] Assert that packable contents include built entrypoints and declarations and exclude generated test/dev-only files.
+- [x] Task: Run narrow failing validation
+    - [x] Run the smallest relevant test command and confirm new tests fail for the expected missing staging behavior.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Baseline package audit and failing staging tests' (Protocol in workflow.md)
+
+### Phase 1 validation notes
+
+- Existing workspaces audited: `@signicode/verser-common`, `@signicode/verser2-guest-js-common`, `@signicode/verser2-host`, and `@signicode/verser2-guest-node` all build CommonJS `dist/index.js` and `dist/index.d.ts` artifacts with inline `tsup` plus `dts-bundle-generator` scripts.
+- Package names are scoped and compatible with GitHub Packages npm publishing, but source manifests are currently `private: true` and include development build scripts that must be omitted from staged publish manifests.
+- Phase-start common-code review: no reusable runtime common code is needed for Phase 1; package readiness checks are test-only release engineering scaffolding.
+- Failing validation command: `npm run build && node --test test/package-publish-readiness.test.js`.
+- Expected failure: `dist/packages/signicode-verser-common` and other staged package directories do not exist yet. This is the intended Phase 1 red test for Phase 2 implementation.
+- Coverage note: behavior is test scaffolding for missing release artifacts; meaningful coverage will be assessed after implementation phases make the tests pass.
 
 ## Phase 2: Central staging implementation
 
