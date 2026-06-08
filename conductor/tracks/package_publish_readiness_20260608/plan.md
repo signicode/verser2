@@ -29,23 +29,33 @@
 
 ## Phase 2: Central staging implementation
 
-- [ ] Task: Implement package staging command
-    - [ ] Add a low-dependency Node/npm staging script that builds or consumes existing package `dist/` output and writes staged packages to `dist/packages`.
-    - [ ] Preserve existing per-package build output and avoid committing generated staging artifacts.
-    - [ ] Fail with actionable errors when required build output, package metadata, README, LICENSE, or declaration files are missing.
-- [ ] Task: Implement publish-only `package.json` generation
-    - [ ] Generate staged metadata using a publish-field allowlist or equivalent publish-only transform.
-    - [ ] Preserve `name`, `version`, `description`, `license`, `repository`, `main`, `types`, `exports`, runtime dependencies, and package manager-compatible consumer metadata.
-    - [ ] Remove scripts, tests, development-only metadata, workspace-only configuration, and unnecessary local fields.
-    - [ ] Rewrite internal workspace dependencies to publishable package versions where needed.
-- [ ] Task: Align staged entrypoints and declaration paths
-    - [ ] Ensure `main`, `types`, and `exports` resolve correctly from each staged package directory.
-    - [ ] Preserve CommonJS package behavior while allowing ESM consumers to import the CommonJS entrypoint.
-    - [ ] Verify declaration files reference accessible paths after staging and packing.
-- [ ] Task: Pass staging and packing tests
-    - [ ] Run the narrowest staging and packing validation.
-    - [ ] Update docs or inline script help for staging command usage.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Central staging implementation' (Protocol in workflow.md)
+- [x] Task: Implement package staging command
+    - [x] Add a low-dependency Node/npm staging script that builds or consumes existing package `dist/` output and writes staged packages to `dist/packages`.
+    - [x] Preserve existing per-package build output and avoid committing generated staging artifacts.
+    - [x] Fail with actionable errors when required build output, package metadata, README, LICENSE, or declaration files are missing.
+- [x] Task: Implement publish-only `package.json` generation
+    - [x] Generate staged metadata using a publish-field allowlist or equivalent publish-only transform.
+    - [x] Preserve `name`, `version`, `description`, `license`, `repository`, `main`, `types`, `exports`, runtime dependencies, and package manager-compatible consumer metadata.
+    - [x] Remove scripts, tests, development-only metadata, workspace-only configuration, and unnecessary local fields.
+    - [x] Rewrite internal workspace dependencies to publishable package versions where needed.
+- [x] Task: Align staged entrypoints and declaration paths
+    - [x] Ensure `main`, `types`, and `exports` resolve correctly from each staged package directory.
+    - [x] Preserve CommonJS package behavior while allowing ESM consumers to import the CommonJS entrypoint.
+    - [x] Verify declaration files reference accessible paths after staging and packing.
+- [x] Task: Pass staging and packing tests
+    - [x] Run the narrowest staging and packing validation.
+    - [x] Update docs or inline script help for staging command usage.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Central staging implementation' (Protocol in workflow.md)
+
+### Phase 2 validation notes
+
+- Added `scripts/stage-packages.js` and root `npm run stage:packages` to stage publish-ready packages into `dist/packages/<safe-package-name>` after `npm run build`.
+- Staged manifests retain publish-critical consumer fields and omit source-only fields including `private`, `scripts`, `devDependencies`, and `workspaces`.
+- Staged package `exports` point CommonJS and type consumers to `./dist/index.js` and `./dist/index.d.ts`.
+- Phase common-code review and deduplication: no reusable runtime common code emerged; the staging script is release-engineering tooling and centralizes repeated package staging behavior in one script.
+- Validation passed: `npm run build && npm run stage:packages && node --test test/package-publish-readiness.test.js`.
+- Lint passed after formatting fix: `npm run lint`.
+- Coverage note: this phase adds script behavior covered by focused node:test checks; aggregate coverage is deferred to final validation.
 
 ## Phase 3: Consumer source selection and import compatibility tests
 

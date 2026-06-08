@@ -6,6 +6,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "stage:packages": "node ./scripts/stage-packages.js",
     "test": "npm run build && node --test test/*.test.js",
     "test:coverage": "npm run build && node --test --experimental-test-coverage test/*.test.js",
     "lint": "biome check ."
