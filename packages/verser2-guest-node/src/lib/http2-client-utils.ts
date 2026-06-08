@@ -1,4 +1,3 @@
-import type { EventEmitter } from 'node:events';
 import type * as http2 from 'node:http2';
 import { buffer, text } from 'node:stream/consumers';
 import {
@@ -30,12 +29,5 @@ export function requestJson(
       },
     );
     stream.end(JSON.stringify(payload));
-  });
-}
-
-export function once(emitter: EventEmitter, eventName: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    emitter.once(eventName, () => resolve());
-    emitter.once('error', reject);
   });
 }

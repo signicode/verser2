@@ -1,7 +1,6 @@
-export interface VerserRoute {
-  readonly targetId: string;
-  readonly domain: string;
-}
+import type { RoutedDomainRegistration } from '@signicode/verser-common';
+
+export type VerserRoute = RoutedDomainRegistration;
 
 export interface VerserCommonBrokerRequest<TBody> {
   readonly targetId: string;

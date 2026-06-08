@@ -15,5 +15,6 @@ export {
   flattenHeaderValue,
   normalizeHeaders,
   resolveRouteForHostname,
+  appendQueryString,
   createCommonBrokerRequest,
 } from './lib';

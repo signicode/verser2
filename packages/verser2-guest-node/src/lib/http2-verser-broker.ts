@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import type * as http from 'node:http';
 import * as http2 from 'node:http2';
 import * as nodeStream from 'node:stream';
@@ -15,7 +15,7 @@ import type { Dispatcher } from 'undici';
 import { fetch as undiciFetch } from 'undici';
 import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
-import { once, readResponseBody } from './http2-client-utils';
+import { readResponseBody } from './http2-client-utils';
 import type {
   BrokerControlFrame,
   VerserBroker,

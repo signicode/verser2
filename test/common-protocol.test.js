@@ -24,6 +24,33 @@ test('shared protocol helpers create identifiers and route registrations', () =>
   );
 });
 
+test('shared protocol resolves advertised routes by exact hostname', () => {
+  assert.deepEqual(
+    common.resolveRouteForHostname(
+      [
+        { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+        { targetId: 'guest-beta', domain: 'beta.verser.test' },
+      ],
+      'beta.verser.test',
+    ),
+    {
+      targetId: 'guest-beta',
+      domain: 'beta.verser.test',
+    },
+  );
+
+  assert.equal(
+    common.resolveRouteForHostname(
+      [
+        { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+        { targetId: 'guest-beta', domain: 'beta.verser.test' },
+      ],
+      'verser.test',
+    ),
+    undefined,
+  );
+});
+
 test('shared registration protocol helpers parse registration requests and responses', () => {
   assert.deepEqual(
     common.parseRegistrationRequest(
