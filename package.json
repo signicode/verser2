@@ -9,8 +9,8 @@
     "stage:packages": "node ./scripts/stage-packages.js",
     "package:version-policy": "node ./scripts/package-version-policy.js",
     "test:package-consumers": "node ./scripts/test-package-consumers.js",
-    "test": "npm run build && node --test test/*.test.js",
-    "test:coverage": "npm run build && node --test --experimental-test-coverage test/*.test.js",
+    "test": "npm run build && npm run stage:packages && node --test test/*.test.js",
+    "test:coverage": "npm run build && npm run stage:packages && node --test --experimental-test-coverage test/*.test.js",
     "lint": "biome check ."
   },
   "devDependencies": {

@@ -124,6 +124,11 @@ jobs:
         run: |
           npm run package:version-policy -- --version "${{ steps.publish-metadata.outputs.publish_version }}" --apply-staged
 
+      - name: Validate versioned staged and tarball consumers
+        run: |
+          npm run test:package-consumers -- --source=staging
+          npm run test:package-consumers -- --source=tarball
+
       - name: Pack staged packages
         run: |
           mkdir -p dist/tarballs

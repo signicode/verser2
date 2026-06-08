@@ -51,6 +51,36 @@ npm run package:version-policy -- --version 1.2.3 --main-build --sha abcdef12345
 
 This mutates only generated package manifests under `dist/packages`. It does not mutate source workspace `package.json` files.
 
+## Local staging, packing, and consumer tests
+
+Run the full local package-readiness flow before publishing:
+
+```sh
+npm run build
+npm run stage:packages
+node --test test/package-publish-readiness.test.js
+npm run test:package-consumers -- --source=source
+npm run test:package-consumers -- --source=staging
+npm run test:package-consumers -- --source=tarball
+```
+
+The default test command also stages packages before running the repository test suite:
+
+```sh
+npm test
+```
+
+Use GitHub Packages consumer validation only after packages have been published and credentials are available:
+
+```sh
+VERSER_RUN_GITHUB_CONSUMER_TESTS=1 \
+VERSER_GITHUB_PACKAGE_VERSION=1.2.3-sha.abcdef123456 \
+GITHUB_PACKAGES_TOKEN=<token> \
+npm run test:package-consumers -- --source=github
+```
+
+The GitHub mode exits successfully with a skip report unless `VERSER_RUN_GITHUB_CONSUMER_TESTS=1` is set. This keeps local and pull-request validation network-free.
+
 ## npmjs publishing boundary
 
 This track prepares the repository for future npmjs publishing, but npmjs publish execution is out of scope. The version-policy helper does not run `npm publish` and reports `npmJsPublishAllowed: false`.
@@ -69,7 +99,7 @@ A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
 Behavior summary:
 
 - Pull requests to `main`: build, stage, pack, and run local package-consumer tests; no publish.
-- Pushes to `main`: run the same validation flow, compute a deterministic main-build version, and publish with `next` dist-tag.
+- Pushes to `main`: run the same validation flow, compute a deterministic main-build version, and publish with `next` dist-tag. Pull-request commits do not publish; only accepted main updates publish SHA-labeled package versions.
 - Pushes for tags matching `v*`: run the same flow, publish the tag-decoded version using stable/pre-release dist-tags from policy.
 
 For both publish paths, the workflow:
@@ -77,6 +107,7 @@ For both publish paths, the workflow:
 - Uses `actions/setup-node` with `registry-url: https://npm.pkg.github.com` and `scope: @signicode`.
 - Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for publish.
 - Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
+- Re-runs staged and tarball consumer validation after applying the publish version so internal package dependencies point at the same published version.
 - Optionally runs GitHub Packages consumer validation with `VERSER_RUN_GITHUB_CONSUMER_TESTS=1`.
 - Avoids `npm publish` to npmjs.org.
 

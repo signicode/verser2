@@ -140,21 +140,31 @@
 
 ## Phase 6: Documentation, final validation, and review
 
-- [ ] Task: Update release engineering documentation
-    - [ ] Document local build, central staging, `npm pack`, source/staging/tarball/GitHub Packages consumer tests, versioning, dist-tags, and GitHub Packages authentication.
-    - [ ] Keep documentation tutorial-friendly and precise, without implying runtime Host/Guest/Broker API or protocol behavior changes.
-- [ ] Task: Run final validation
-    - [ ] Run `npm run build`.
-    - [ ] Run focused package staging, packing, versioning, and consumer matrix tests.
-    - [ ] Run `npm test` if the changed behavior warrants full test coverage confirmation.
-    - [ ] Run `npm run lint`.
-    - [ ] Record coverage status for changed behavior or explain why coverage cannot be measured meaningfully for script/workflow changes.
-- [ ] Task: Perform release-readiness review
-    - [ ] Confirm common libraries were scanned and no reusable runtime code was duplicated.
-    - [ ] Confirm package metadata, declarations, registry configuration, and docs are aligned.
-    - [ ] Confirm npmjs publish remains out of scope and no secrets or generated artifacts are committed.
-    - [ ] Request code review for maintainability, YAGNI, and workflow risk if needed.
-- [ ] Task: Conductor - User Manual Verification 'Phase 6: Documentation, final validation, and review' (Protocol in workflow.md)
+- [x] Task: Update release engineering documentation
+    - [x] Document local build, central staging, `npm pack`, source/staging/tarball/GitHub Packages consumer tests, versioning, dist-tags, and GitHub Packages authentication.
+    - [x] Keep documentation tutorial-friendly and precise, without implying runtime Host/Guest/Broker API or protocol behavior changes.
+- [x] Task: Run final validation
+    - [x] Run `npm run build`.
+    - [x] Run focused package staging, packing, versioning, and consumer matrix tests.
+    - [x] Run `npm test` if the changed behavior warrants full test coverage confirmation.
+    - [x] Run `npm run lint`.
+    - [x] Record coverage status for changed behavior or explain why coverage cannot be measured meaningfully for script/workflow changes.
+- [x] Task: Perform release-readiness review
+    - [x] Confirm common libraries were scanned and no reusable runtime code was duplicated.
+    - [x] Confirm package metadata, declarations, registry configuration, and docs are aligned.
+    - [x] Confirm npmjs publish remains out of scope and no secrets or generated artifacts are committed.
+    - [x] Request code review for maintainability, YAGNI, and workflow risk if needed.
+- [x] Task: Conductor - User Manual Verification 'Phase 6: Documentation, final validation, and review' (Protocol in workflow.md)
+
+### Phase 6 validation notes
+
+- Updated `docs/package-publishing.md` with local staging, packing, source/staging/tarball/GitHub Packages consumer test commands, versioning, dist-tags, and authentication behavior.
+- Updated default `npm test` and `npm run test:coverage` to run `npm run stage:packages` after build so package-readiness tests are clean-checkout safe.
+- Fixed release-readiness review blockers by rewriting internal staged dependency versions during `--apply-staged` and validating versioned staged/tarball consumers before publish.
+- Validation passed: `npm run build && npm run stage:packages && node --test test/package-publish-readiness.test.js test/package-version-policy.test.js test/package-workflow.test.js && npm run test:package-consumers -- --source=source && npm run test:package-consumers -- --source=staging && npm run test:package-consumers -- --source=tarball && npm test && npm run lint`.
+- Coverage command passed: `npm run test:coverage`. Aggregate coverage is not meaningful for this release-engineering track because Node's report includes generated `dist/` artifacts and subprocess-driven helper scripts; focused changed-behavior tests cover staging, pack dry-run readiness, consumer import modes, version policy, workflow safety, and docs/workspace script expectations.
+- Final @oracle review found no remaining blockers and confirmed Phase 6 can reasonably complete after validation.
+- Phase common-code review and deduplication: no reusable runtime common code was added or duplicated; release-engineering behavior is centralized in `scripts/` helpers and static tests.
 
 ## Phase Checkpoint Policy
 

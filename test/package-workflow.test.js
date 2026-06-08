@@ -90,3 +90,10 @@ test('workflow validates GitHub Packages installs when possible', () => {
     'Expected github source consumer validation to install the just-published package version.',
   );
 });
+
+test('workflow validates staged consumers after publish version is applied', () => {
+  assertHas(
+    /Apply publish version to staged packages[\s\S]*?Validate versioned staged and tarball consumers[\s\S]*?--source=staging[\s\S]*?--source=tarball/,
+    'Expected versioned staged and tarball consumers to be validated before publish.',
+  );
+});

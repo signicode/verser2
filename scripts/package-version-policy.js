@@ -184,6 +184,14 @@ function applyVersionToStagedPackages({ stagingRoot = getStagingRootDirectory(),
 
   const stagedPackageDirectories = listStagedPackageDirectories(stagingRoot);
   let updatedCount = 0;
+  const internalPackageNames = new Set();
+  for (const directory of stagedPackageDirectories) {
+    const manifestPath = path.join(directory, 'package.json');
+    if (fs.existsSync(manifestPath)) {
+      internalPackageNames.add(readJson(manifestPath).name);
+    }
+  }
+
   for (const directory of stagedPackageDirectories) {
     const manifestPath = path.join(directory, 'package.json');
     if (!fs.existsSync(manifestPath)) {
@@ -192,6 +200,7 @@ function applyVersionToStagedPackages({ stagingRoot = getStagingRootDirectory(),
 
     const manifest = readJson(manifestPath);
     manifest.version = version;
+    rewriteInternalDependencies(manifest, internalPackageNames, version);
     writeJson(manifestPath, manifest);
     updatedCount += 1;
   }
@@ -200,6 +209,18 @@ function applyVersionToStagedPackages({ stagingRoot = getStagingRootDirectory(),
     updatedCount,
     stagedPackages: stagedPackageDirectories.map((directory) => path.basename(directory)),
   };
+}
+
+function rewriteInternalDependencies(manifest, internalPackageNames, version) {
+  if (!manifest.dependencies) {
+    return;
+  }
+
+  for (const packageName of Object.keys(manifest.dependencies)) {
+    if (internalPackageNames.has(packageName)) {
+      manifest.dependencies[packageName] = version;
+    }
+  }
 }
 
 function getPolicySummary({ version, sha, mainBuild }) {
@@ -282,6 +303,7 @@ module.exports = {
   normalizeShortSha,
   getPolicySummary,
   applyVersionToStagedPackages,
+  rewriteInternalDependencies,
   parseArgs,
   isValidSemver,
   hasPrerelease,
