@@ -6,7 +6,7 @@
 
 Implemented TypeScript/Node package targets:
 
-- `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, lifecycle names, contextual errors, HTTP/2 helpers, and development TLS helpers for Verser packages.
+- `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, and development TLS helpers for Verser packages.
 - `@signicode/verser2-host` in `packages/verser2-host`: Minimal TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, routed-domain advertisements, route cleanup, and Broker request forwarding.
 - `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, and minimal plain `node:http` Agent implementation.
 
