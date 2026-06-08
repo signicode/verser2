@@ -2,6 +2,7 @@ import { EventEmitter, once } from 'node:events';
 import type * as http from 'node:http';
 import * as http2 from 'node:http2';
 import * as nodeStream from 'node:stream';
+import { buffer } from 'node:stream/consumers';
 
 import {
   createDevelopmentTlsCertificate,
@@ -15,7 +16,6 @@ import type { Dispatcher } from 'undici';
 import { fetch as undiciFetch } from 'undici';
 import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
-import { readResponseBody } from './http2-client-utils';
 import type {
   BrokerControlFrame,
   VerserBroker,
@@ -138,7 +138,7 @@ export class Http2VerserBroker implements VerserBroker {
           resolve({ requestId, statusCode, headers: responseHeaders, body: stream });
           return;
         }
-        readResponseBody(stream).then(
+        buffer(stream).then(
           (body) => reject(verserErrorFromResponseBody(body, request.targetId)),
           reject,
         );

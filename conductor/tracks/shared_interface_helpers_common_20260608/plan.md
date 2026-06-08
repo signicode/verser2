@@ -201,7 +201,7 @@
     - Moved `appendQueryString` from Guest Node to JS guest common because it is JS URL/query adaptation rather than core protocol common; validation passed with `npm run build`, dispatcher tests (`6` tests), and `npm run lint`.
     - Replaced duplicate Guest Node local `once` helpers with Node `events.once`; validation passed with `npm run build`, guest-node and broker-routing tests (`33` tests), and `npm run lint`.
     - Deferred broker request normalization, URL-level route resolution, broad header input types, and shared body normalization until their common API policies are explicit.
-    - Kept Node HTTP shims, stream readers/writers, active lease keys, dispatch controller state, content-length parsing, and raw header-list adaptation package-local as documented in `docs/draft-interface-moves.md`.
+    - Kept Node HTTP shims, dispatch controller state, content-length parsing, and raw header-list adaptation package-local as documented in `docs/draft-interface-moves.md`; thin Host/Guest stream wrappers and Host active-lease key construction were later inlined as corrective cleanup.
     - Coverage status: changed behavior is covered by new common route tests plus existing Agent/Dispatcher/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
     - Phase checkpoint commit: `048a9f8`.
 - Phase 6 final structure and validation notes:
@@ -210,7 +210,8 @@
     - Host consumes common registration parsing/response types, route frames, header decoding/flattening, lease timeout parsing, NDJSON encoding, and error serialization.
     - Guest Node consumes common registration response parsing, route-control frame types, HTTP/2 pseudo-header stripping, header flattening, error parsing/coercion, `getErrorMessage`, and NDJSON parsing.
     - Guest JS Common re-exports common exact hostname route resolution, aliases `VerserRoute` to common route registrations, and owns JS-specific `appendQueryString`.
-    - Remaining local helpers are intentionally package-specific: Host error coercion/lease bookkeeping/HTTP2 send-read mechanics, Guest Node body and HTTP adapter helpers, content-length parsing, raw header-list adaptation, and dispatcher state.
+    - Remaining local helpers are intentionally package-specific: Host error coercion and HTTP/2 response/error mechanics, Guest Node body and HTTP adapter helpers, content-length parsing, raw header-list adaptation, and dispatcher state. Thin Host/Guest stream wrappers and Host active-lease key construction were inlined after final review feedback.
+    - Corrective inline cleanup validation: `npm run build`, `node --test --test-timeout=20000 test/host.test.js test/broker-routing.test.js test/guest-node.test.js` (`41` tests), and `npm run lint` passed.
     - Final validation: `npm run build`, `npm test` (`91` tests), and `npm run lint` passed.
     - Coverage status: changed behavior is covered by common unit tests and Host/Guest/Broker/Agent/Dispatcher/end-to-end integration tests; no separate coverage reporter is configured for this repository.
     - Phase checkpoint commit: `18dd9b9`.

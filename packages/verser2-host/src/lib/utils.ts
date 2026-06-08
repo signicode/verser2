@@ -9,7 +9,3 @@ export function toVerserError(error: unknown): VerserError {
   const message = error instanceof Error ? error.message : String(error);
   return createVerserError('protocol-error', message);
 }
-
-export function activeLeaseKey(guestId: string, leaseId: string): string {
-  return `${guestId}:${leaseId}`;
-}
