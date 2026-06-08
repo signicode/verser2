@@ -87,20 +87,31 @@
 
 ## Phase 4: Versioning and dist-tag scripts
 
-- [ ] Task: Write failing version policy tests
-    - [ ] Add tests for stable vs prerelease dist-tag selection.
-    - [ ] Add tests for deterministic main-merge `<current-version>-sha` package version derivation.
-    - [ ] Add tests or dry-run checks that prevent accidental npmjs publishing during this track.
-- [ ] Task: Implement version helper scripts
-    - [ ] Add low-dependency npm/Node scripts for determining publish tag (`latest` or `next`) from package version.
-    - [ ] Add deterministic main-build version handling for GitHub Packages using the current version and commit SHA.
-    - [ ] Keep package version mutation scoped to staging or CI-safe generated artifacts unless an explicit version bump command is run.
-- [ ] Task: Document version bump and tag usage
-    - [ ] Document stable version, prerelease version, `latest`, `next`, and main-build GitHub Packages behavior.
-    - [ ] Explain the future npmjs publish path without executing npmjs publish in this track.
-- [ ] Task: Pass versioning validation
-    - [ ] Run the narrowest version helper tests and staging validation.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Versioning and dist-tag scripts' (Protocol in workflow.md)
+- [x] Task: Write failing version policy tests
+    - [x] Add tests for stable vs prerelease dist-tag selection.
+    - [x] Add tests for deterministic main-merge `<current-version>-sha` package version derivation.
+    - [x] Add tests or dry-run checks that prevent accidental npmjs publishing during this track.
+- [x] Task: Implement version helper scripts
+    - [x] Add low-dependency npm/Node scripts for determining publish tag (`latest` or `next`) from package version.
+    - [x] Add deterministic main-build version handling for GitHub Packages using the current version and commit SHA.
+    - [x] Keep package version mutation scoped to staging or CI-safe generated artifacts unless an explicit version bump command is run.
+- [x] Task: Document version bump and tag usage
+    - [x] Document stable version, prerelease version, `latest`, `next`, and main-build GitHub Packages behavior.
+    - [x] Explain the future npmjs publish path without executing npmjs publish in this track.
+- [x] Task: Pass versioning validation
+    - [x] Run the narrowest version helper tests and staging validation.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Versioning and dist-tag scripts' (Protocol in workflow.md)
+
+### Phase 4 validation notes
+
+- Added `scripts/package-version-policy.js` and `npm run package:version-policy` with a `--version` CLI,
+  optional `--main-build/--sha`, `--apply-staged`, and `--json` output.
+- Added `test/package-version-policy.test.js` for stable/latest, prerelease/next, deterministic SHA versions,
+  invalid inputs, staged manifest updates, and npmjs publish prohibition checks.
+- Documented stable/prerelease dist-tag behavior, main-build SHA versions, staged-only version mutation, and the npmjs publishing boundary in `docs/package-publishing.md`.
+- Validation passed: `node --test test/package-version-policy.test.js && npm run build && npm run stage:packages && npm run package:version-policy -- --version 1.2.3 --json && npm run package:version-policy -- --version 1.2.3-next.0 --json && npm run lint`.
+- Phase common-code review and deduplication: no runtime common code reuse was needed; versioning behavior is centralized in one release-engineering helper.
+- Coverage note: version policy behavior is covered by focused unit tests; aggregate coverage remains deferred to final validation.
 
 ## Phase 5: GitHub Actions package workflow
 
