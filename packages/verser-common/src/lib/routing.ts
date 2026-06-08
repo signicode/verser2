@@ -31,6 +31,13 @@ export function resolveRouteForHostname(
   return routes.find((route) => route.domain === hostname);
 }
 
+export function resolveRouteForUrl(
+  routes: readonly RoutedDomainRegistration[],
+  url: URL,
+): RoutedDomainRegistration | undefined {
+  return resolveRouteForHostname(routes, url.hostname);
+}
+
 export function createRoutedRequestEnvelope(
   envelope: RoutedRequestEnvelope,
 ): RoutedRequestEnvelope {

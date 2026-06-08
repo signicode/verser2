@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
+const { Readable } = require('node:stream');
 
 const common = require('../packages/verser-common/dist/index.js');
 
@@ -49,6 +50,64 @@ test('shared protocol resolves advertised routes by exact hostname', () => {
     ),
     undefined,
   );
+});
+
+test('shared protocol resolves routes by URL', () => {
+  const routes = [
+    { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+    { targetId: 'guest-beta', domain: 'beta.verser.test' },
+  ];
+
+  assert.deepEqual(common.resolveRouteForUrl(routes, new URL('https://beta.verser.test/items')), {
+    targetId: 'guest-beta',
+    domain: 'beta.verser.test',
+  });
+
+  assert.equal(
+    common.resolveRouteForUrl(routes, new URL('https://missing.verser.test/items')),
+    undefined,
+  );
+});
+
+test('shared broker request normalization normalizes method, path, headers, and body', () => {
+  const request = common.createCommonBrokerRequest({
+    targetId: 'guest-alpha',
+    method: ' post ',
+    path: 'api/items?sort=asc',
+    headers: {
+      'X-Input': 'value',
+      uppercase: 2,
+    },
+    body: 'hello',
+  });
+
+  assert.equal(request.targetId, 'guest-alpha');
+  assert.equal(request.method, 'POST');
+  assert.equal(request.path, '/api/items?sort=asc');
+  assert.deepEqual(request.headers, {
+    'x-input': 'value',
+    uppercase: '2',
+  });
+  assert.deepEqual(request.body, [Buffer.from('hello')]);
+
+  assert.equal(
+    common.createCommonBrokerRequest({
+      targetId: 'guest-alpha',
+      method: 'GET',
+      path: '/',
+      body: undefined,
+    }).body,
+    undefined,
+  );
+
+  assert.throws(() => {
+    common.createCommonBrokerRequest({
+      targetId: 'guest-alpha',
+      method: 'GET',
+      path: '/',
+      headers: { 'bad header': 'x' },
+    });
+  }, /VerserError/);
 });
 
 test('shared registration protocol helpers parse registration requests and responses', () => {
@@ -219,6 +278,72 @@ test('shared header helpers flatten and decode routed metadata', () => {
   });
 });
 
+test('shared broad headers normalize array joins and validates names/values', () => {
+  const normalized = common.normalizeHeaders({
+    'X-Array': ['a', 'b', 1, false],
+    plain: 'value',
+    omitted: undefined,
+    keepNull: null,
+    pairs: ['x', '1'],
+  });
+
+  assert.deepEqual(normalized, {
+    'x-array': 'a,b,1,false',
+    plain: 'value',
+    pairs: 'x,1',
+  });
+
+  assert.equal(common.flattenHeaderValue(['a', 'b', 1]), 'a,b,1');
+  assert.equal(common.flattenHeaderValue(undefined), undefined);
+
+  assert.throws(() => {
+    common.normalizeHeaders({ 'bad header': 'value' });
+  }, /VerserError/);
+
+  assert.deepStrictEqual(common.validateRuntimeNeutralHeaders({ 'x-good': 'value' }), {
+    'x-good': 'value',
+  });
+  assert.equal(common.isValidHeaderName('x-good'), true);
+  assert.equal(common.isValidHeaderName('bad header'), false);
+  assert.equal(common.isValidHeaderValue('safe\u0000value'), false);
+  assert.equal(common.isValidHeaderValue('safe-value'), true);
+  assert.equal(common.isValidHeaderValue(''), true);
+});
+
+test('shared Node OutgoingHttpHeaders normalization uses comma joining', () => {
+  assert.deepEqual(
+    common.normalizeRequestHeaders({
+      'x-a': ['one', 'two'],
+      'x-b': 2,
+      'x-c': 'three',
+    }),
+    {
+      'x-a': 'one,two',
+      'x-b': '2',
+      'x-c': 'three',
+    },
+  );
+});
+
+test('shared toVerserError coerces unknown errors and preserves VerserError identity', () => {
+  const source = common.createVerserError('protocol-error', 'Source failure', {
+    requestId: 'req-coerce',
+  });
+  const passthrough = common.toVerserError(source);
+  assert.equal(passthrough, source);
+
+  const passthroughWithGuest = common.toVerserError(source, { guestId: 'guest-1' });
+  assert.equal(passthroughWithGuest, source);
+  assert.equal(passthroughWithGuest.code, 'protocol-error');
+  assert.equal(passthroughWithGuest.context.requestId, 'req-coerce');
+  assert.equal(passthroughWithGuest.context.guestId, 'guest-1');
+
+  const coerced = common.toVerserError(new Error('boom'), { guestId: 'guest-2' });
+  assert.equal(coerced.code, 'protocol-error');
+  assert.equal(coerced.context.guestId, 'guest-2');
+  assert.match(coerced.message, /boom/);
+});
+
 test('shared protocol helpers parse lease-acquire timeout header', () => {
   assert.equal(
     common.parseLeaseAcquireTimeoutMs({ 'x-verser-lease-acquire-timeout-ms': '250' }),
@@ -243,6 +368,59 @@ test('shared HTTP/2 pseudo-header stripping removes :headers', () => {
   assert.deepEqual(common.stripHttp2PseudoHeaders({ ':status': 200, 'x-a': '1' }), {
     'x-a': '1',
   });
+});
+
+test('shared body helper identifies iterable request bodies', () => {
+  assert.equal(common.isIterableBody('not-iterable'), false);
+  assert.equal(common.isIterableBody({}), false);
+  assert.equal(common.isIterableBody([]), true);
+  assert.equal(common.isIterableBody('abc'), false);
+
+  const asyncIterable = {
+    async *[Symbol.asyncIterator]() {
+      yield 'value';
+    },
+  };
+
+  assert.equal(common.isAsyncIterableBody(asyncIterable), true);
+  assert.equal(common.isAsyncIterableBody({}), false);
+});
+
+test('shared body normalization converts string and buffers', () => {
+  const stringBody = common.normalizeBrokerRequestBody('payload');
+  assert.deepEqual(stringBody, [Buffer.from('payload')]);
+
+  const bufferBody = Buffer.from('binary');
+  const normalizedBuffer = common.normalizeBrokerRequestBody(bufferBody);
+  assert.deepEqual(normalizedBuffer, [bufferBody]);
+
+  const uint8Body = new Uint8Array([104, 105]);
+  const normalizedUint8 = common.normalizeBrokerRequestBody(uint8Body);
+  assert.deepEqual(normalizedUint8, [Buffer.from('hi')]);
+});
+
+test('shared body normalization converts iterables to Readable', async () => {
+  const normalized = common.normalizeBrokerRequestBody(['first', 'second']);
+  assert.ok(normalized instanceof Readable);
+
+  const normalizedChunks = await new Promise((resolve, reject) => {
+    const bufferChunks = [];
+    normalized.on('data', (chunk) => {
+      bufferChunks.push(Buffer.from(chunk));
+    });
+    normalized.once('end', () => resolve(Buffer.concat(bufferChunks)));
+    normalized.once('error', reject);
+  });
+
+  assert.deepEqual(normalizedChunks, Buffer.from('firstsecond'));
+});
+
+test('shared body normalization rejects unsupported bodies', () => {
+  assert.equal(common.normalizeBrokerRequestBody(null), undefined);
+  assert.throws(
+    () => common.normalizeBrokerRequestBody({ foo: 'bar' }),
+    /Verser Dispatcher does not support this request body type/,
+  );
 });
 
 test('shared development certificate helpers expose and verify a pinned self-signed certificate', () => {
