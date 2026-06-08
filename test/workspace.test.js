@@ -13,7 +13,7 @@ test('root package declares npm workspace commands', () => {
   const packageManifest = readJson('package.json');
 
   assert.deepEqual(packageManifest.workspaces, ['packages/*']);
-  assert.equal(packageManifest.scripts.build, 'tsc -b packages/*');
+  assert.equal(packageManifest.scripts.build, 'npm run build --workspaces --if-present');
   assert.equal(packageManifest.scripts.test, 'npm run build && node --test test/*.test.js');
   assert.equal(packageManifest.scripts.lint, 'biome check .');
 });

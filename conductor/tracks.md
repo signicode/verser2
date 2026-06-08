@@ -11,3 +11,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: Leased HTTP/2 streams for routed bodies**
 *Link: [./archive/leased_http2_streams_for_routed_bodies_20260607/](./archive/leased_http2_streams_for_routed_bodies_20260607/)*
+
+---
+
+- [ ] **Track: Split package sources while preserving single-file dist artifacts**
+*Link: [./tracks/split_package_sources_single_file_dist_20260608/](./tracks/split_package_sources_single_file_dist_20260608/)*

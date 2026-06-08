@@ -9,6 +9,6 @@
     "@signicode/verser-common": "0.0.0"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts"
   }
 }

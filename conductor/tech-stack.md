@@ -44,6 +44,7 @@ Future package targets:
 - Test runner: Node.js built-in `node:test` smoke tests.
 - TypeScript compiler: `typescript` with per-package composite builds.
 - Type declarations: generated during package builds.
+- Package bundling: `tsup` bundles each TypeScript package entrypoint to a single CommonJS `dist/index.js` and rolled-up `dist/index.d.ts` artifact after sources are split into internal modules.
 
 ## Implementation Priorities
 

@@ -13,6 +13,35 @@ function readText(relativePath) {
   return fs.readFileSync(path.join(rootDirectory, relativePath), 'utf8');
 }
 
+function listFiles(relativePath) {
+  const directoryPath = path.join(rootDirectory, relativePath);
+  return fs.readdirSync(directoryPath, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(relativePath, entry.name);
+    if (entry.isDirectory()) {
+      return listFiles(entryPath);
+    }
+    return entryPath;
+  });
+}
+
+function assertSingleFileDist(packageDirectory) {
+  const distFiles = listFiles(path.join(packageDirectory, 'dist')).filter(
+    (filePath) => !filePath.endsWith('.map') && !filePath.endsWith('.tsbuildinfo'),
+  );
+
+  assert.deepEqual(distFiles.sort(), [
+    path.join(packageDirectory, 'dist/index.d.ts'),
+    path.join(packageDirectory, 'dist/index.js'),
+  ]);
+}
+
+function assertDeclarationOmits(packageDirectory, patterns) {
+  const declaration = readText(path.join(packageDirectory, 'dist/index.d.ts'));
+  for (const pattern of patterns) {
+    assert.doesNotMatch(declaration, pattern);
+  }
+}
+
 test('@signicode/verser-common package exposes common foundations', () => {
   const packageManifest = readJson('packages/verser-common/package.json');
   const commonPackage = require('../packages/verser-common/dist/index.js');
@@ -51,6 +80,7 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'verifyPinnedCertificate',
   ]);
   assert.equal(commonPackage.VERSER_COMMON_PACKAGE_NAME, '@signicode/verser-common');
+  assertSingleFileDist('packages/verser-common');
 });
 
 test('@signicode/verser2-host package exposes Host API', () => {
@@ -66,6 +96,8 @@ test('@signicode/verser2-host package exposes Host API', () => {
   ]);
   assert.equal(hostPackage.VERSER2_HOST_PACKAGE_NAME, '@signicode/verser2-host');
   assert.equal(typeof hostPackage.createVerserHost, 'function');
+  assertSingleFileDist('packages/verser2-host');
+  assertDeclarationOmits('packages/verser2-host', [/NodeHttp2VerserHost/]);
 });
 
 test('@signicode/verser2-guest-js-common package exposes JS Guest foundations', () => {
@@ -87,6 +119,7 @@ test('@signicode/verser2-guest-js-common package exposes JS Guest foundations', 
     jsCommonPackage.VERSER2_GUEST_JS_COMMON_PACKAGE_NAME,
     '@signicode/verser2-guest-js-common',
   );
+  assertSingleFileDist('packages/verser2-guest-js-common');
 });
 
 test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
@@ -113,13 +146,26 @@ test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   });
   assert.equal(typeof broker.createDispatcher, 'function');
   assert.equal(typeof broker.createFetch, 'function');
+  assertSingleFileDist('packages/verser2-guest-node');
+  assertDeclarationOmits('packages/verser2-guest-node', [
+    /BrokerControlFrame/,
+    /BrokerRequestRouter/,
+    /DispatcherHandler/,
+    /Http2VerserBroker/,
+    /Http2VerserNodeGuest/,
+    /NodeRequestListenerResponse/,
+  ]);
+  assert.match(
+    readText('packages/verser2-guest-node/dist/index.d.ts'),
+    /createVerserBroker\(options: VerserBrokerOptions\): VerserBroker/,
+  );
 });
 
 test('routed body transport no longer contains bodyBase64 control-frame paths', () => {
   const routedSources = [
-    'packages/verser2-host/src/index.ts',
-    'packages/verser2-guest-node/src/index.ts',
-  ];
+    ...listFiles('packages/verser2-host/src'),
+    ...listFiles('packages/verser2-guest-node/src'),
+  ].filter((filePath) => filePath.endsWith('.ts'));
 
   for (const sourcePath of routedSources) {
     assert.doesNotMatch(
