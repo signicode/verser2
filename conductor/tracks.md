@@ -21,3 +21,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: Move shared interface helpers into common using docs/draft-interface-moves.md as the implementation todo list**
 *Link: [./archive/shared_interface_helpers_common_20260608/](./archive/shared_interface_helpers_common_20260608/)*
+
+---
+
+- [ ] **Track: package buildability and ability to publish**
+*Link: [./tracks/package_publish_readiness_20260608/](./tracks/package_publish_readiness_20260608/)*
