@@ -25,34 +25,11 @@ export function normalizeRequestHeaders(
   return normalizedHeaders;
 }
 
-export function normalHeaders(
-  headers: import('node:http2').IncomingHttpHeaders,
-): Record<string, string> {
-  const normalizedHeaders: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (!key.startsWith(':') && typeof value === 'string') {
-      normalizedHeaders[key] = value;
-    }
-  }
-  return normalizedHeaders;
-}
-
 export function toRawHeaderList(headers: Record<string, string>): Buffer[] {
   return Object.entries(headers).flatMap(([name, value]) => [
     Buffer.from(name),
     Buffer.from(value),
   ]);
-}
-
-export function flattenHeaders(
-  headers: Readonly<Record<string, string | readonly string[]>>,
-): Record<string, string> {
-  const flattenedHeaders: Record<string, string> = {};
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    flattenedHeaders[headerName] =
-      typeof headerValue === 'string' ? headerValue : headerValue.join(',');
-  }
-  return flattenedHeaders;
 }
 
 export function appendQueryString(

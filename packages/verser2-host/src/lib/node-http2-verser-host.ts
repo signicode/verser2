@@ -13,18 +13,15 @@ import {
   createPeerId,
   createRoutedDomainRegistration,
   createVerserError,
+  decodeHeaderMap,
   encodeVerserEnvelope,
+  flattenVerserHeaders,
+  parseLeaseAcquireTimeoutMs,
   parseRegistrationRequest,
   readLeaseResponseMetadataFromStream,
   readNdjsonLines,
   validateVerserHeaders,
 } from '@signicode/verser-common';
-
-import {
-  decodeHeaderMap,
-  flattenValidatedHeaders,
-  parseLeaseAcquireTimeoutMs,
-} from './host-protocol';
 import { readRequestBody, sendError, sendJson, writeJsonLine } from './http2-io';
 import type {
   VerserHost,
@@ -391,7 +388,7 @@ export class NodeHttp2VerserHost implements VerserHost {
           targetId,
           method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
           path: String(headers['x-verser-path'] ?? '/'),
-          headers: flattenValidatedHeaders(
+          headers: flattenVerserHeaders(
             validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
           ),
         },

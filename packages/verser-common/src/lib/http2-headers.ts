@@ -31,3 +31,17 @@ export function fromHttp2ResponseHeaders(headers: Record<string, string | number
 } {
   return { statusCode: requireValidStatusCode(Number(headers[':status'])) };
 }
+
+export function stripHttp2PseudoHeaders(
+  headers: Readonly<Record<string, unknown>>,
+): Record<string, string> {
+  const normalizedHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.startsWith(':') || value === undefined) {
+      continue;
+    }
+    normalizedHeaders[key] = String(value);
+  }
+
+  return normalizedHeaders;
+}
