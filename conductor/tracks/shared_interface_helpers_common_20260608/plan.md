@@ -120,26 +120,26 @@
 
 ## Phase 6: Final draft completion and solution structure
 
-- [ ] Task: Verify `docs/draft-interface-moves.md` completion status
-    - [ ] Fixer guidance: do not delegate final approval, but a fixer may perform read-only checks for unchecked draft items and mismatches.
-    - [ ] Check every item in `docs/draft-interface-moves.md` is marked completed, deferred, or kept local with enough context to understand the final decision.
-    - [ ] Confirm no draft move remains ambiguous or unreviewed.
-- [ ] Task: List final common structure in the solution
-    - [ ] Fixer guidance: delegate only read-only collection of common exports/modules if useful; the orchestrator must verify and record the final structure.
-    - [ ] List final `packages/verser-common/src/lib/*` modules that contain moved or generalized helpers.
-    - [ ] List new or changed common exports and the Host/Guest packages that consume them.
-    - [ ] Record any intentionally deferred candidates and why they remain outside common.
-- [ ] Task: Final helper placement and deduplication check
-    - [ ] Fixer guidance: delegate only bounded read-only scans for newly introduced helpers under Host and Guest Node packages.
-    - [ ] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for new reusable helpers introduced during the track.
-    - [ ] Move any in-scope reusable helpers into common or record why they remain package-local.
-- [ ] Task: Final validation
-    - [ ] Fixer guidance: validation command execution may be delegated, but failure classification and final acceptance remain with the orchestrator.
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm test`.
-    - [ ] Run `npm run lint`.
-    - [ ] Record coverage status or why coverage could not be measured separately.
-- [ ] Task: Conductor - User Manual Verification 'Phase 6: Final draft completion and solution structure' (Protocol in workflow.md)
+- [x] Task: Verify `docs/draft-interface-moves.md` completion status
+    - [x] Fixer guidance: do not delegate final approval, but a fixer may perform read-only checks for unchecked draft items and mismatches.
+    - [x] Check every item in `docs/draft-interface-moves.md` is marked completed, deferred, or kept local with enough context to understand the final decision.
+    - [x] Confirm no draft move remains ambiguous or unreviewed.
+- [x] Task: List final common structure in the solution
+    - [x] Fixer guidance: delegate only read-only collection of common exports/modules if useful; the orchestrator must verify and record the final structure.
+    - [x] List final `packages/verser-common/src/lib/*` modules that contain moved or generalized helpers.
+    - [x] List new or changed common exports and the Host/Guest packages that consume them.
+    - [x] Record any intentionally deferred candidates and why they remain outside common.
+- [x] Task: Final helper placement and deduplication check
+    - [x] Fixer guidance: delegate only bounded read-only scans for newly introduced helpers under Host and Guest Node packages.
+    - [x] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for new reusable helpers introduced during the track.
+    - [x] Move any in-scope reusable helpers into common or record why they remain package-local.
+- [x] Task: Final validation
+    - [x] Fixer guidance: validation command execution may be delegated, but failure classification and final acceptance remain with the orchestrator.
+    - [x] Run `npm run build`.
+    - [x] Run `npm test`.
+    - [x] Run `npm run lint`.
+    - [x] Record coverage status or why coverage could not be measured separately.
+- [x] Task: Conductor - User Manual Verification 'Phase 6: Final draft completion and solution structure' (Protocol in workflow.md)
 
 ## Notes
 
@@ -204,3 +204,12 @@
     - Kept Node HTTP shims, stream readers/writers, active lease keys, dispatch controller state, content-length parsing, and raw header-list adaptation package-local as documented in `docs/draft-interface-moves.md`.
     - Coverage status: changed behavior is covered by new common route tests plus existing Agent/Dispatcher/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
     - Phase checkpoint commit: `048a9f8`.
+- Phase 6 final structure and validation notes:
+    - Final draft scan found no remaining unchecked `[ ]` items in `docs/draft-interface-moves.md` and no clear draft/implementation mismatches.
+    - Final common modules/exports added or changed: `registration.ts` (`parseRegistrationRequest`, `parseRegistrationResponse`, `createBrokerRoutesControlFrame`), `header-serialization.ts` (`flattenVerserHeaders`, `decodeHeaderMap`), `protocol-headers.ts` (`VERSER_LEASE_ACQUIRE_TIMEOUT_HEADER`, `parseLeaseAcquireTimeoutMs`), `error-response.ts` (`VerserHttpErrorResponse`, `toVerserHttpErrorResponse`, `toVerserErrorCode`, `verserErrorFromResponseBody`), `routing.ts` (`resolveRouteForHostname`), `http2-headers.ts` (`stripHttp2PseudoHeaders`), `ndjson.ts` (`encodeJsonLine`), and `utils.ts` (`getErrorMessage` exported publicly).
+    - Host consumes common registration parsing/response types, route frames, header decoding/flattening, lease timeout parsing, NDJSON encoding, and error serialization.
+    - Guest Node consumes common registration response parsing, route-control frame types, HTTP/2 pseudo-header stripping, header flattening, error parsing/coercion, `getErrorMessage`, and NDJSON parsing.
+    - Guest JS Common re-exports common exact hostname route resolution, aliases `VerserRoute` to common route registrations, and owns JS-specific `appendQueryString`.
+    - Remaining local helpers are intentionally package-specific: Host error coercion/lease bookkeeping/HTTP2 send-read mechanics, Guest Node body and HTTP adapter helpers, content-length parsing, raw header-list adaptation, and dispatcher state.
+    - Final validation: `npm run build`, `npm test` (`91` tests), and `npm run lint` passed.
+    - Coverage status: changed behavior is covered by common unit tests and Host/Guest/Broker/Agent/Dispatcher/end-to-end integration tests; no separate coverage reporter is configured for this repository.
