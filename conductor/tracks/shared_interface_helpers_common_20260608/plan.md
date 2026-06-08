@@ -184,3 +184,4 @@
     - Deferred broad JS common header input normalization/value validation and Node-specific header adapters as documented in `docs/draft-interface-moves.md`.
     - `npm run build`, focused header/protocol tests (`60` tests), and `npm run lint` passed after implementation.
     - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
+    - Phase checkpoint commit: `fc16bfc`.
