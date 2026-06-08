@@ -1,0 +1,8 @@
+{
+  "track_id": "package_publish_readiness_20260608",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-06-08T14:07:30Z",
+  "updated_at": "2026-06-08T14:07:30Z",
+  "description": "package buildability and ability to publish"
+}
