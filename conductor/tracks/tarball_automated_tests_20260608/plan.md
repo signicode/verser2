@@ -2,22 +2,28 @@
 
 ## Phase 1: Baseline audit and red tests for tarball automated testing
 
-- [ ] Task: Audit existing package tests and tarball harnesses
-    - [ ] Inspect existing package-readiness scripts, consumer import harnesses, package workflow tests, and GitHub Actions publish workflow.
-    - [ ] Classify current tests by feasibility for tarball mode: package export/API shape, common protocol/envelope, consumer import compatibility, lightweight Host/Guest/Broker behavior, and source-internal/end-to-end tests.
-    - [ ] Record which tests should run from tarball-installed package names and which remain source-only with reasons.
-    - [ ] Review existing common libraries and release-engineering scripts before adding new helpers.
-- [ ] Task: Write failing tests for tarball automated test command
-    - [ ] Add focused tests that expect a local tarball automated test command/script to exist.
-    - [ ] Assert the command packs staged packages, installs tarballs into a temp consumer, and runs automated behavior tests from package names.
-    - [ ] Assert the harness reports included and excluded tarball-mode test groups.
-- [ ] Task: Write failing workflow tests for tarball automated testing
-    - [ ] Assert pull-request validation runs tarball automated tests without publishing.
-    - [ ] Assert main/tag publish jobs run tarball automated tests after version mutation and before `npm publish`.
-    - [ ] Assert no npmjs publish behavior is introduced.
-- [ ] Task: Run narrow failing validation
-    - [ ] Run the focused new tests and confirm they fail for the expected missing tarball automated test harness or workflow integration.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Baseline audit and red tests for tarball automated testing' (Protocol in workflow.md)
+- [x] Task: Audit existing package tests and tarball harnesses
+    - [x] Inspect existing package-readiness scripts, consumer import harnesses, package workflow tests, and GitHub Actions publish workflow.
+    - [x] Classify current tests by feasibility for tarball mode: package export/API shape, common protocol/envelope, consumer import compatibility, lightweight Host/Guest/Broker behavior, and source-internal/end-to-end tests.
+    - [x] Record which tests should run from tarball-installed package names and which remain source-only with reasons.
+    - [x] Review existing common libraries and release-engineering scripts before adding new helpers.
+
+      Audit notes: `scripts/test-package-consumers.js` already packs staged packages for import-only checks and can be reused as a model, but it does not run behavior tests. Feasible tarball-mode groups are package import/export shape, selected `@signicode/verser-common` protocol/envelope helpers, and lightweight Host/Guest/Broker behavior through public package entrypoints. Workflow, publish-readiness, version-policy, docs, workspace metadata, source-internal, and full end-to-end/streaming suites remain source-only because they inspect repository files, staged metadata, workflow YAML, or broad integration behavior rather than installed package entrypoints. Common libraries were reviewed; this release-engineering harness is package/test-specific and does not need new common runtime exports.
+- [x] Task: Write failing tests for tarball automated test command
+    - [x] Add focused tests that expect a local tarball automated test command/script to exist.
+    - [x] Assert the command packs staged packages, installs tarballs into a temp consumer, and runs automated behavior tests from package names.
+    - [x] Assert the harness reports included and excluded tarball-mode test groups.
+- [x] Task: Write failing workflow tests for tarball automated testing
+    - [x] Assert pull-request validation runs tarball automated tests without publishing.
+    - [x] Assert main/tag publish jobs run tarball automated tests after version mutation and before `npm publish`.
+    - [x] Assert no npmjs publish behavior is introduced.
+- [x] Task: Run narrow failing validation
+    - [x] Run the focused new tests and confirm they fail for the expected missing tarball automated test harness or workflow integration.
+
+      Red validation: `node --test test/package-tarball-tests.test.js test/package-workflow.test.js` failed as expected because `test:package-tarballs` and `scripts/test-package-tarballs.js` do not exist yet, and the workflow does not yet run `npm run test:package-tarballs` before no-publish confirmation or before `npm publish`.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Baseline audit and red tests for tarball automated testing' (Protocol in workflow.md)
+
+  Manual verification: user approved moving to Phase 2 after the expected red test failures.
 
 ## Phase 2: Tarball automated test harness
 
