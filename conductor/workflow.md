@@ -7,7 +7,7 @@ Use a test-driven, incremental workflow for every track. Prefer small, reviewabl
 ## Guiding Principles
 
 1. **The Plan is the Source of Truth:** All work must be tracked in `plan.md`.
-2. **Tracks Start on Reviewable Branches:** Each new track must begin on a dedicated branch with a GitHub pull request created using `gh`; use the PR as the review and checkpoint surface until the track is complete.
+2. **Tracks Start on Reviewable Branches:** Each new track must begin on a dedicated branch with a GitHub pull request created using `gh`; use the PR as the review and checkpoint surface until the track is complete. The PR title and description must describe the track's intended TO-BE state, not only the initial plan, specification, or documentation artifact.
 3. **The Tech Stack is Deliberate:** Changes to the tech stack must be documented in `tech-stack.md` before implementation.
 4. **Test-Driven Development:** Write failing tests before implementing feature behavior.
 5. **High Code Coverage:** Maintain at least 95% meaningful test coverage for changed behavior.
@@ -84,6 +84,13 @@ At the end of each phase:
 - Do not commit unrelated working tree changes.
 - Include a concise phase summary in the commit message body.
 - Do not use Git notes for routine task or phase summaries.
+
+## Pull Request Policy
+
+- Every Conductor track PR title must describe the intended TO-BE state of the implemented track.
+- Every Conductor track PR description must include the intended TO-BE state, including the behavior, structure, or workflow that should exist when the track is complete.
+- Do not title or describe a Conductor track PR as only a plan/spec/docs PR when the branch is the review surface for the full track implementation.
+- It is acceptable for the first commit in a track PR to add only Conductor planning artifacts, but the PR itself must still communicate the final target state for the complete track.
 
 ## Testing Requirements
 
