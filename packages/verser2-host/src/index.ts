@@ -4,12 +4,13 @@ import { NodeHttp2VerserHost } from './lib/node-http2-verser-host';
 import type { VerserHost, VerserHostOptions } from './lib/types';
 
 export type {
-  VerserPeerRole,
   VerserHost,
   VerserHostLifecycleEvent,
   VerserHostOptions,
   VerserHostRegistrationRequest,
 } from './lib/types';
+
+export type { VerserPeerRole } from '@signicode/verser-common';
 
 export function createVerserHost(options: VerserHostOptions = {}): VerserHost {
   return new NodeHttp2VerserHost(options);

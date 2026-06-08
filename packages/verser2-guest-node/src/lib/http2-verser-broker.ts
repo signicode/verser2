@@ -193,8 +193,8 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   private handleControlFrame(frame: BrokerControlFrame): void {
-    if ('routes' in frame) {
-      this.routes = frame.routes;
+    if (frame.type === 'routes') {
+      this.routes = [...frame.routes];
       for (const route of this.routes) {
         for (const resolve of this.routeWaiters.get(route.domain) ?? []) {
           resolve();

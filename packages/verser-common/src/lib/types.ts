@@ -1,5 +1,7 @@
 export type VerserPeerId = string;
 
+export type VerserPeerRole = 'broker' | 'guest';
+
 export type VerserGuestId = string;
 
 export type VerserRequestId = string;
@@ -99,6 +101,24 @@ export interface DevelopmentTlsCertificate {
   readonly cert: string;
   readonly key: string;
 }
+
+export interface VerserRegistrationRequest {
+  readonly peerId: string;
+  readonly role: VerserPeerRole;
+  readonly routedDomains?: readonly string[];
+}
+
+export interface VerserRegistrationResponse {
+  readonly status?: string;
+  readonly routes?: readonly RoutedDomainRegistration[];
+}
+
+export interface VerserBrokerRoutesControlFrame {
+  readonly type: 'routes';
+  readonly routes: readonly RoutedDomainRegistration[];
+}
+
+export type VerserBrokerControlFrame = VerserBrokerRoutesControlFrame;
 
 export type VerserErrorCode =
   | 'missing-guest'

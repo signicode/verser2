@@ -24,6 +24,53 @@ test('shared protocol helpers create identifiers and route registrations', () =>
   );
 });
 
+test('shared registration protocol helpers parse registration requests and responses', () => {
+  assert.deepEqual(
+    common.parseRegistrationRequest(
+      JSON.stringify({
+        peerId: 'guest-alpha',
+        role: 'guest',
+        routedDomains: ['alpha.verser.test'],
+      }),
+    ),
+    {
+      peerId: 'guest-alpha',
+      role: 'guest',
+      routedDomains: ['alpha.verser.test'],
+    },
+  );
+  assert.deepEqual(
+    common.parseRegistrationRequest(JSON.stringify({ peerId: 'broker-alpha', role: 'broker' })),
+    {
+      peerId: 'broker-alpha',
+      role: 'broker',
+      routedDomains: [],
+    },
+  );
+  assert.throws(
+    () => common.parseRegistrationRequest(JSON.stringify({ peerId: 'peer-alpha', role: 'admin' })),
+    /Registration role must be broker or guest/,
+  );
+  assert.deepEqual(common.parseRegistrationResponse('{"status":"ok"}', 'guest-alpha'), {
+    status: 'ok',
+  });
+  assert.throws(
+    () => common.parseRegistrationResponse('not-json', 'guest-alpha'),
+    /Host returned invalid registration JSON/,
+  );
+});
+
+test('shared broker control frames preserve route advertisements', () => {
+  const frame = common.createBrokerRoutesControlFrame([
+    { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+  ]);
+
+  assert.deepEqual(frame, {
+    type: 'routes',
+    routes: [{ targetId: 'guest-alpha', domain: 'alpha.verser.test' }],
+  });
+});
+
 test('shared request and response envelopes preserve HTTP semantics', () => {
   const request = common.createRoutedRequestEnvelope({
     requestId: 'req-1',

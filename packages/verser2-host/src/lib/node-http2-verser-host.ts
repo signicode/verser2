@@ -6,11 +6,15 @@ import {
   VERSER_LIFECYCLE_EVENTS,
   type VerserError,
   type VerserPeerId,
+  type VerserPeerRole,
+  type VerserRegistrationResponse,
+  createBrokerRoutesControlFrame,
   createDevelopmentTlsCertificate,
   createPeerId,
   createRoutedDomainRegistration,
   createVerserError,
   encodeVerserEnvelope,
+  parseRegistrationRequest,
   readLeaseResponseMetadataFromStream,
   readNdjsonLines,
   validateVerserHeaders,
@@ -20,7 +24,6 @@ import {
   decodeHeaderMap,
   flattenValidatedHeaders,
   parseLeaseAcquireTimeoutMs,
-  parseRegistrationRequest,
 } from './host-protocol';
 import { readRequestBody, sendError, sendJson, writeJsonLine } from './http2-io';
 import type {
@@ -33,14 +36,9 @@ import { activeLeaseKey, toVerserError } from './utils';
 
 interface RegisteredPeer {
   readonly peerId: VerserPeerId;
-  readonly role: 'broker' | 'guest';
+  readonly role: VerserPeerRole;
   readonly session: http2.Http2Session;
   readonly controlStream?: http2.ServerHttp2Stream;
-}
-
-interface RegistrationResponse {
-  readonly status: 'registered';
-  readonly routes: RoutedDomainRegistration[];
 }
 
 interface GuestLeaseStream {
@@ -245,13 +243,13 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (registration.role === 'guest') {
       this.guestRegistrations.set(
         peerId,
-        (registration.routedDomains ?? []).map((domain) =>
+        (registration.routedDomains ?? []).map((domain: string) =>
           createRoutedDomainRegistration({ targetId: peerId, domain }),
         ),
       );
     }
 
-    const response: RegistrationResponse = {
+    const response: VerserRegistrationResponse = {
       status: 'registered',
       routes: this.getRoutedDomains(),
     };
@@ -272,7 +270,7 @@ export class NodeHttp2VerserHost implements VerserHost {
         peer.controlStream !== undefined &&
         !peer.controlStream.closed
       ) {
-        writeJsonLine(peer.controlStream, { type: 'routes', routes });
+        writeJsonLine(peer.controlStream, createBrokerRoutesControlFrame(routes));
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
           peerId: peer.peerId,

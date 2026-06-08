@@ -1,21 +1,3 @@
-import { createVerserError } from '@signicode/verser-common';
-import type { VerserHostRegistrationRequest } from './types';
-
-export function parseRegistrationRequest(body: string): VerserHostRegistrationRequest {
-  const parsed = JSON.parse(body) as Partial<VerserHostRegistrationRequest>;
-  if (parsed.role !== 'broker' && parsed.role !== 'guest') {
-    throw createVerserError('invalid-registration', 'Registration role must be broker or guest', {
-      role: String(parsed.role ?? ''),
-    });
-  }
-
-  return {
-    peerId: String(parsed.peerId ?? ''),
-    role: parsed.role,
-    routedDomains: parsed.routedDomains ?? [],
-  };
-}
-
 export function decodeHeaderMap(value: string): Record<string, string> {
   const parsed = JSON.parse(value) as Record<string, string>;
   return Object.fromEntries(
