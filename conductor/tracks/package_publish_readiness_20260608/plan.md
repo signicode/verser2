@@ -59,22 +59,31 @@
 
 ## Phase 3: Consumer source selection and import compatibility tests
 
-- [ ] Task: Write failing consumer matrix tests
-    - [ ] Add test fixtures or generated temporary consumers for CommonJS `require`, ESM `.mjs` import, and TypeScript import/type-check.
-    - [ ] Cover all current packages: `@signicode/verser-common`, `@signicode/verser2-host`, and `@signicode/verser2-guest-node`.
-    - [ ] Add source-target selection for workspace source, central staged directories, packed tarballs, and GitHub Packages installs.
-- [ ] Task: Implement source-targeted test harness
-    - [ ] Add npm scripts or test helpers to select package source via documented environment variable or CLI argument.
-    - [ ] Install or link packages into an isolated temporary consumer project for staged, tarball, and GitHub Packages modes.
-    - [ ] Keep tests deterministic and avoid requiring network access except for explicit GitHub Packages mode.
-- [ ] Task: Implement TypeScript consumer validation
-    - [ ] Add a minimal TypeScript consumer compile/type-check path using the repo's npm/TypeScript tooling.
-    - [ ] Confirm emitted declarations are usable by TypeScript consumers.
-- [ ] Task: Pass consumer import matrix validation
-    - [ ] Run local source, staging, and tarball modes.
-    - [ ] Document how to run GitHub Packages mode when authenticated packages are available.
-    - [ ] Record any network/auth-dependent validation as skipped unless credentials are present.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Consumer source selection and import compatibility tests' (Protocol in workflow.md)
+- [x] Task: Write failing consumer matrix tests
+    - [x] Add test fixtures or generated temporary consumers for CommonJS `require`, ESM `.mjs` import, and TypeScript import/type-check.
+    - [x] Cover all current packages: `@signicode/verser-common`, `@signicode/verser2-host`, and `@signicode/verser2-guest-node`.
+    - [x] Add source-target selection for workspace source, central staged directories, packed tarballs, and GitHub Packages installs.
+- [x] Task: Implement source-targeted test harness
+    - [x] Add npm scripts or test helpers to select package source via documented environment variable or CLI argument.
+    - [x] Install or link packages into an isolated temporary consumer project for staged, tarball, and GitHub Packages modes.
+    - [x] Keep tests deterministic and avoid requiring network access except for explicit GitHub Packages mode.
+- [x] Task: Implement TypeScript consumer validation
+    - [x] Add a minimal TypeScript consumer compile/type-check path using the repo's npm/TypeScript tooling.
+    - [x] Confirm emitted declarations are usable by TypeScript consumers.
+- [x] Task: Pass consumer import matrix validation
+    - [x] Run local source, staging, and tarball modes.
+    - [x] Document how to run GitHub Packages mode when authenticated packages are available.
+    - [x] Record any network/auth-dependent validation as skipped unless credentials are present.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Consumer source selection and import compatibility tests' (Protocol in workflow.md)
+
+### Phase 3 validation notes
+
+- Added `scripts/test-package-consumers.js` and root `npm run test:package-consumers` to validate package consumption from `source`, `staging`, `tarball`, and optional `github` modes.
+- Added `test/package-consumer-imports.test.js` to cover CommonJS `require`, ESM `.mjs` import, and TypeScript import/type-check for all current packages.
+- GitHub Packages mode is intentionally gated by `VERSER_RUN_GITHUB_CONSUMER_TESTS=1` and a package token; without that explicit opt-in it exits successfully with a skip report, keeping default tests network-free.
+- Phase common-code review and deduplication: no runtime common code reuse was needed; repeated consumer setup is centralized in one release-engineering harness script.
+- Validation passed: `npm run build && npm run stage:packages && npm run test:package-consumers -- --source=source && npm run test:package-consumers -- --source=staging && npm run test:package-consumers -- --source=tarball && node --test test/package-consumer-imports.test.js && npm run lint`.
+- Coverage note: consumer import and type-check behavior is covered by focused node:test checks; aggregate coverage remains deferred to final validation.
 
 ## Phase 4: Versioning and dist-tag scripts
 
