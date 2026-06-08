@@ -12,12 +12,7 @@ const packageDirectories = [
   'packages/verser2-host',
   'packages/verser2-guest-node',
 ];
-const forbiddenPublishFields = [
-  'private',
-  'scripts',
-  'devDependencies',
-  'workspaces',
-];
+const forbiddenPublishFields = ['private', 'scripts', 'devDependencies', 'workspaces'];
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
