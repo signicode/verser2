@@ -106,3 +106,17 @@ test('workflow validates staged consumers after publish version is applied', () 
     'Expected versioned staged and tarball consumers to be validated before publish.',
   );
 });
+
+test('workflow runs tarball automated tests during pull request validation', () => {
+  assertHas(
+    /package-validation:[\s\S]*?npm run test:package-tarballs[\s\S]*?Confirm validation job never publishes packages/,
+    'Expected pull request validation job to run tarball automated tests before the no-publish confirmation.',
+  );
+});
+
+test('workflow runs tarball automated tests after publish versioning and before publishing', () => {
+  assertHas(
+    /Apply publish version to staged packages[\s\S]*?npm run test:package-tarballs[\s\S]*?npm publish --access restricted/,
+    'Expected publish flow to run tarball automated tests after version mutation and before npm publish.',
+  );
+});
