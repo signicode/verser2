@@ -5,7 +5,7 @@
   "description": "Reverse HTTP connectivity packages for exposing HTTP servers from client-side processes.",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "tsc -b packages/*",
+    "build": "npm run build --workspaces --if-present",
     "test": "npm run build && node --test test/*.test.js",
     "test:coverage": "npm run build && node --test --experimental-test-coverage test/*.test.js",
     "lint": "biome check ."
@@ -13,6 +13,8 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^20.14.0",
+    "dts-bundle-generator": "^9.5.1",
+    "tsup": "^8.5.0",
     "typescript": "^5.4.5",
     "undici": "^6.26.0"
   },
