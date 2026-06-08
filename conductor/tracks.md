@@ -26,3 +26,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: package buildability and ability to publish**
 *Link: [./tracks/package_publish_readiness_20260608/](./tracks/package_publish_readiness_20260608/)*
+
+---
+
+- [ ] **Track: Run automated tests against built package tarballs**
+*Link: [./tracks/tarball_automated_tests_20260608/](./tracks/tarball_automated_tests_20260608/)*
