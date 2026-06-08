@@ -224,6 +224,7 @@ function withGithubSource(projectRoot) {
   const token =
     process.env.GITHUB_PACKAGES_TOKEN ||
     process.env.GITHUB_TOKEN ||
+    process.env.NODE_AUTH_TOKEN ||
     process.env.NPM_TOKEN ||
     process.env.NPM_AUTH_TOKEN;
 
@@ -242,7 +243,7 @@ function withGithubSource(projectRoot) {
     '--no-fund',
     '--package-lock=false',
     '--prefer-offline',
-    ...sourcePackages.map((entry) => entry.name),
+    ...sourcePackages.map((entry) => getGithubPackageInstallSpec(entry.name)),
   ];
 
   fs.writeFileSync(
@@ -261,6 +262,15 @@ function withGithubSource(projectRoot) {
   });
 
   return { skipped: false };
+}
+
+function getGithubPackageInstallSpec(packageName) {
+  const version = process.env.VERSER_GITHUB_PACKAGE_VERSION;
+  if (!version) {
+    return packageName;
+  }
+
+  return `${packageName}@${version}`;
 }
 
 function writeProbeScripts(projectRoot, packageName) {
