@@ -14,7 +14,10 @@ test('root package declares npm workspace commands', () => {
 
   assert.deepEqual(packageManifest.workspaces, ['packages/*']);
   assert.equal(packageManifest.scripts.build, 'npm run build --workspaces --if-present');
-  assert.equal(packageManifest.scripts.test, 'npm run build && node --test test/*.test.js');
+  assert.equal(
+    packageManifest.scripts.test,
+    'npm run build && npm run stage:packages && node --test test/*.test.js',
+  );
   assert.equal(packageManifest.scripts.lint, 'biome check .');
 });
 

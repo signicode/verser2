@@ -14,10 +14,14 @@ function createTempDirectory(prefix) {
 }
 
 function writeStagedPackage(root, name, version) {
-  const packageDirectory = path.join(root, name);
+  return writeNamedStagedPackage(root, name, `@signicode/${name}`, version);
+}
+
+function writeNamedStagedPackage(root, directoryName, packageName, version) {
+  const packageDirectory = path.join(root, directoryName);
   fs.mkdirSync(packageDirectory, { recursive: true });
   const manifest = {
-    name: `@signicode/${name}`,
+    name: packageName,
     version,
     description: 'test package',
   };
@@ -92,6 +96,45 @@ test('script helper can write computed version to staged manifests', () => {
       readStagedVersion(stagingRoot, 'signicode-verser2-host'),
       '2.5.0-sha.deadbeefcafebabe',
     );
+  } finally {
+    fs.rmSync(stagingRoot, { recursive: true, force: true });
+  }
+});
+
+test('script helper rewrites staged internal dependency versions', () => {
+  const stagingRoot = createTempDirectory('verser-staged-dependency-policy');
+  try {
+    writeNamedStagedPackage(
+      stagingRoot,
+      'signicode-verser-common',
+      '@signicode/verser-common',
+      '1.0.0',
+    );
+    const hostDirectory = writeNamedStagedPackage(
+      stagingRoot,
+      'signicode-verser2-host',
+      '@signicode/verser2-host',
+      '1.0.0',
+    );
+    const hostManifestPath = path.join(hostDirectory, 'package.json');
+    const hostManifest = JSON.parse(fs.readFileSync(hostManifestPath, 'utf8'));
+    hostManifest.dependencies = {
+      '@signicode/verser-common': '1.0.0',
+      undici: '^6.26.0',
+    };
+    fs.writeFileSync(hostManifestPath, `${JSON.stringify(hostManifest, null, 2)}\n`, 'utf8');
+
+    policy.applyVersionToStagedPackages({
+      stagingRoot,
+      version: '2.5.0-sha.deadbeefcafe',
+    });
+
+    const updatedManifest = JSON.parse(fs.readFileSync(hostManifestPath, 'utf8'));
+    assert.equal(
+      updatedManifest.dependencies['@signicode/verser-common'],
+      '2.5.0-sha.deadbeefcafe',
+    );
+    assert.equal(updatedManifest.dependencies.undici, '^6.26.0');
   } finally {
     fs.rmSync(stagingRoot, { recursive: true, force: true });
   }
