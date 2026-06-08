@@ -59,3 +59,32 @@ Future npmjs release work should reuse the same stable/prerelease tag policy:
 
 - stable versions publish with `latest`;
 - prerelease versions publish with `next`.
+
+## GitHub Actions package publish workflow
+
+A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
+
+- `.github/workflows/package-publish.yml`
+
+Behavior summary:
+
+- Pull requests to `main`: build, stage, pack, and run local package-consumer tests; no publish.
+- Pushes to `main`: run the same validation flow, compute a deterministic main-build version, and publish with `next` dist-tag.
+- Pushes for tags matching `v*`: run the same flow, publish the tag-decoded version using stable/pre-release dist-tags from policy.
+
+For both publish paths, the workflow:
+
+- Uses `actions/setup-node` with `registry-url: https://npm.pkg.github.com` and `scope: @signicode`.
+- Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for publish.
+- Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
+- Optionally runs GitHub Packages consumer validation with `VERSER_RUN_GITHUB_CONSUMER_TESTS=1`.
+- Avoids `npm publish` to npmjs.org.
+
+Manual validation steps (first-time publish):
+
+1. Push a normal commit to `main` and confirm publish job uses the SHA build version.
+2. Push a release-style tag like `v1.2.3` and confirm stable publish metadata.
+3. Push a prerelease tag like `v1.2.3-next.0` and confirm the `next` dist-tag behavior.
+4. Set `VERSER_RUN_GITHUB_CONSUMER_TESTS=1` and verify GitHub Packages install checks pass from the workflow logs.
+
+If GitHub Packages validation is intentionally disabled, confirm the step logs a skip reason instead of failing.

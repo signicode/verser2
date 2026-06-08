@@ -1,0 +1,151 @@
+name: Package publish readiness
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+jobs:
+  package-validation:
+    name: Build, stage, pack, and consume
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node for GitHub Packages
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: '@signicode'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and stage packages
+        run: |
+          npm run build
+          npm run stage:packages
+
+      - name: Pack staged packages
+        run: |
+          mkdir -p dist/tarballs
+          for packageDirectory in dist/packages/*;
+          do
+            (cd "$packageDirectory" && npm pack --silent --pack-destination "$GITHUB_WORKSPACE/dist/tarballs")
+          done
+
+      - name: Validate consumers from staged and tarball sources
+        run: |
+          npm run test:package-consumers -- --source=staging
+          npm run test:package-consumers -- --source=tarball
+
+  package-publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    needs: package-validation
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node for GitHub Packages
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: '@signicode'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and stage packages
+        run: |
+          npm run build
+          npm run stage:packages
+
+      - name: Resolve publish version and dist-tag
+        id: publish-metadata
+        run: |
+          node <<'NODE' > "$GITHUB_OUTPUT"
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const policy = require('./scripts/package-version-policy');
+
+          const refType = process.env.GITHUB_REF_TYPE;
+          const refName = process.env.GITHUB_REF_NAME;
+          const sourceVersion = JSON.parse(
+            fs.readFileSync(
+              path.join(process.cwd(), 'packages', 'verser-common', 'package.json'),
+              'utf8',
+            ),
+          ).version;
+
+          let publishVersion;
+          let distTag = 'next';
+
+          if (refType === 'tag') {
+            const inputVersion = refName.startsWith('v') ? refName.slice(1) : refName;
+            const summary = policy.getPolicySummary({ version: inputVersion });
+            publishVersion = summary.computedVersion;
+            distTag = summary.distTag;
+          } else {
+            const summary = policy.getPolicySummary({
+              version: sourceVersion,
+              mainBuild: true,
+              sha: process.env.GITHUB_SHA,
+            });
+            publishVersion = summary.computedVersion;
+          }
+
+          console.log(`publish_version=${publishVersion}`);
+          console.log(`dist_tag=${distTag}`);
+          NODE
+          
+        env:
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+
+      - name: Apply publish version to staged packages
+        run: |
+          npm run package:version-policy -- --version "${{ steps.publish-metadata.outputs.publish_version }}" --apply-staged
+
+      - name: Pack staged packages
+        run: |
+          mkdir -p dist/tarballs
+          for packageDirectory in dist/packages/*;
+          do
+            (cd "$packageDirectory" && npm pack --silent --pack-destination "$GITHUB_WORKSPACE/dist/tarballs")
+          done
+
+      - name: Publish staged packages to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for packageDirectory in dist/packages/*;
+          do
+            (cd "$packageDirectory" && npm publish --access restricted --tag "${{ steps.publish-metadata.outputs.dist_tag }}" --registry https://npm.pkg.github.com)
+          done
+
+      - name: Validate GitHub Packages installation
+        if: github.event_name == 'push'
+        env:
+          VERSER_RUN_GITHUB_CONSUMER_TESTS: 1
+          VERSER_GITHUB_PACKAGE_VERSION: ${{ steps.publish-metadata.outputs.publish_version }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm run test:package-consumers -- --source=github
