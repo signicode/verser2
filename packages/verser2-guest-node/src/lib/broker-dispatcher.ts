@@ -1,13 +1,14 @@
 import * as http from 'node:http';
 
 import {
+  appendQueryString,
   normalizeHeaders as normalizeCommonHeaders,
   resolveRouteForHostname,
 } from '@signicode/verser2-guest-js-common';
 import { Dispatcher } from 'undici';
 
 import { VerserDispatchController } from './dispatch-controller';
-import { appendQueryString, toRawHeaderList } from './header-utils';
+import { toRawHeaderList } from './header-utils';
 import type { BrokerRequestRouter } from './types';
 import { toBrokerRequestBody } from './utils';
 

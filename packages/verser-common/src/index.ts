@@ -45,6 +45,7 @@ export {
   createRoutedDomainRegistration,
   createRoutedRequestEnvelope,
   createRoutedResponseEnvelope,
+  resolveRouteForHostname,
 } from './lib/routing';
 
 export {

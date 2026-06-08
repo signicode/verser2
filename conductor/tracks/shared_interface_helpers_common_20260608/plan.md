@@ -97,26 +97,26 @@
 
 ## Phase 5: Isolated non-strong candidates
 
-- [ ] Task: Evaluate non-strong candidates as isolated reversible tasks
-    - [ ] Fixer guidance: delegate each non-strong candidate independently with one candidate group, allowed files, and rollback expectations per delegated task.
-    - [ ] Consider route alias/resolution moves, broker request normalization, body guards, content-length parsing, and query string utilities independently.
-    - [ ] Implement only candidates that clearly improve shared interfaces without pulling runtime-specific adapters into common.
-    - [ ] Leave package-specific transport, Undici, Node HTTP shim, and state-machine helpers local or inline as documented.
-- [ ] Task: Delegate bounded refactors to fixer where useful
-    - [ ] Fixer guidance: use fixer for scoped implementation or test moves only after candidate scope, expected behavior, allowed files, and validation commands are written down.
-    - [ ] Provide each delegated fixer task with the specific candidate group, expected tests, allowed files, and validation command.
-    - [ ] Review delegated changes before marking tasks complete.
-    - [ ] Record delegated findings and any intentionally deferred candidates in the plan notes.
-- [ ] Task: Record phase decisions and helper placement check
-    - [ ] Mark completed, deferred, or kept-local non-strong candidate items in `docs/draft-interface-moves.md`.
-    - [ ] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable helpers that should have gone to common.
-    - [ ] Record the helper placement result before phase checkpointing.
-- [ ] Task: Phase deduplication and documentation pass
-    - [ ] Fixer guidance: delegate only read-only search support or tightly scoped documentation/export updates; keep final decisions with the orchestrator.
-    - [ ] Re-scan affected Host, Guest Node, Guest JS Common, and Common modules for remaining duplicated helpers.
-    - [ ] Update package exports and documentation comments where public API changed.
-    - [ ] Ensure `docs/draft-interface-moves.md` is reflected by implemented, deferred, or kept-local decisions.
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Isolated non-strong candidates' (Protocol in workflow.md)
+- [x] Task: Evaluate non-strong candidates as isolated reversible tasks
+    - [x] Fixer guidance: delegate each non-strong candidate independently with one candidate group, allowed files, and rollback expectations per delegated task.
+    - [x] Consider route alias/resolution moves, broker request normalization, body guards, content-length parsing, and query string utilities independently.
+    - [x] Implement only candidates that clearly improve shared interfaces without pulling runtime-specific adapters into common.
+    - [x] Leave package-specific transport, Undici, Node HTTP shim, and state-machine helpers local or inline as documented.
+- [x] Task: Delegate bounded refactors to fixer where useful
+    - [x] Fixer guidance: use fixer for scoped implementation or test moves only after candidate scope, expected behavior, allowed files, and validation commands are written down.
+    - [x] Provide each delegated fixer task with the specific candidate group, expected tests, allowed files, and validation command.
+    - [x] Review delegated changes before marking tasks complete.
+    - [x] Record delegated findings and any intentionally deferred candidates in the plan notes.
+- [x] Task: Record phase decisions and helper placement check
+    - [x] Mark completed, deferred, or kept-local non-strong candidate items in `docs/draft-interface-moves.md`.
+    - [x] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable helpers that should have gone to common.
+    - [x] Record the helper placement result before phase checkpointing.
+- [x] Task: Phase deduplication and documentation pass
+    - [x] Fixer guidance: delegate only read-only search support or tightly scoped documentation/export updates; keep final decisions with the orchestrator.
+    - [x] Re-scan affected Host, Guest Node, Guest JS Common, and Common modules for remaining duplicated helpers.
+    - [x] Update package exports and documentation comments where public API changed.
+    - [x] Ensure `docs/draft-interface-moves.md` is reflected by implemented, deferred, or kept-local decisions.
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Isolated non-strong candidates' (Protocol in workflow.md)
 
 ## Phase 6: Final draft completion and solution structure
 
@@ -195,3 +195,11 @@
     - `npm run build`, focused error/NDJSON tests (`64` tests), and `npm run lint` passed after implementation.
     - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
     - Phase checkpoint commit: `87f3ac2`.
+- Phase 5 validation and placement notes:
+    - Used read-only exploration to evaluate isolated non-strong candidates before implementation.
+    - Implemented exact hostname route resolution in common and made JS common `VerserRoute` alias common `RoutedDomainRegistration`; validation passed with `npm run build`, route/dispatcher/agent focused tests (`24` tests), and `npm run lint`.
+    - Moved `appendQueryString` from Guest Node to JS guest common because it is JS URL/query adaptation rather than core protocol common; validation passed with `npm run build`, dispatcher tests (`6` tests), and `npm run lint`.
+    - Replaced duplicate Guest Node local `once` helpers with Node `events.once`; validation passed with `npm run build`, guest-node and broker-routing tests (`33` tests), and `npm run lint`.
+    - Deferred broker request normalization, URL-level route resolution, broad header input types, and shared body normalization until their common API policies are explicit.
+    - Kept Node HTTP shims, stream readers/writers, active lease keys, dispatch controller state, content-length parsing, and raw header-list adaptation package-local as documented in `docs/draft-interface-moves.md`.
+    - Coverage status: changed behavior is covered by new common route tests plus existing Agent/Dispatcher/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
