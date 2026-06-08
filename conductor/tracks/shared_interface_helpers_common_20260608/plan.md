@@ -159,6 +159,7 @@
     - `npm run build` passed before implementation changes.
     - `node --test test/common-protocol.test.js test/common-envelope.test.js test/host.test.js test/guest-node.test.js test/broker-routing.test.js` passed with 55 tests before implementation changes.
     - No preexisting validation failures were observed in the baseline commands.
+    - Phase checkpoint commit: `44813bf`.
 - Phase 1 TDD coverage map:
     - Move or add common tests first in `test/common-protocol.test.js` and `test/common-envelope.test.js` for common registration/control contracts, header serialization/protocol header parsing, error response serialization/parsing, and NDJSON encoding.
     - Keep `test/host.test.js`, `test/guest-node.test.js`, and `test/broker-routing.test.js` as adapter/integration coverage for Host/Guest/Broker behavior after imports are rewired.
