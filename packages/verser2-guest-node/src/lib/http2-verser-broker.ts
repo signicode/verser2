@@ -9,12 +9,12 @@ import {
   readNdjsonLines,
   stripHttp2PseudoHeaders,
   validateVerserHeaders,
+  verserErrorFromResponseBody,
 } from '@signicode/verser-common';
 import type { Dispatcher } from 'undici';
 import { fetch as undiciFetch } from 'undici';
 import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
-import { errorFromBody } from './error-utils';
 import { once, readResponseBody } from './http2-client-utils';
 import type {
   BrokerControlFrame,
@@ -139,7 +139,7 @@ export class Http2VerserBroker implements VerserBroker {
           return;
         }
         readResponseBody(stream).then(
-          (body) => reject(errorFromBody(body, request.targetId)),
+          (body) => reject(verserErrorFromResponseBody(body, request.targetId)),
           reject,
         );
       });
