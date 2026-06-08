@@ -175,10 +175,10 @@
 - Phase 5 checkpoint commit: `6f7ca2f`
 - Phase 6 checkpoint commit: `8651421`
 
-- [ ] Task: Commit only after completing each phase.
-    - [ ] Use scoped conventional commit messages.
-    - [ ] Include a concise phase summary in commit bodies when useful.
-    - [ ] Update this `plan.md` with checkpoint commit SHAs after each phase.
-- [ ] Task: Keep the Conductor PR as the review surface for the full track.
-    - [ ] Create the track branch and PR before implementation starts.
-    - [ ] Ensure the PR title and description describe the intended fully implemented package publish-readiness state, not only planning artifacts.
+- [x] Task: Commit only after completing each phase.
+    - [x] Use scoped conventional commit messages.
+    - [x] Include a concise phase summary in commit bodies when useful.
+    - [x] Update this `plan.md` with checkpoint commit SHAs after each phase.
+- [x] Task: Keep the Conductor PR as the review surface for the full track.
+    - [x] Create the track branch and PR before implementation starts.
+    - [x] Ensure the PR title and description describe the intended fully implemented package publish-readiness state, not only planning artifacts.
