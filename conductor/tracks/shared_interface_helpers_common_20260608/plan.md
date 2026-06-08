@@ -213,3 +213,4 @@
     - Remaining local helpers are intentionally package-specific: Host error coercion/lease bookkeeping/HTTP2 send-read mechanics, Guest Node body and HTTP adapter helpers, content-length parsing, raw header-list adaptation, and dispatcher state.
     - Final validation: `npm run build`, `npm test` (`91` tests), and `npm run lint` passed.
     - Coverage status: changed behavior is covered by common unit tests and Host/Guest/Broker/Agent/Dispatcher/end-to-end integration tests; no separate coverage reporter is configured for this repository.
+    - Phase checkpoint commit: `18dd9b9`.
