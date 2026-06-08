@@ -19,5 +19,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: Move shared interface helpers into common using docs/draft-interface-moves.md as the implementation todo list**
+- [~] **Track: Move shared interface helpers into common using docs/draft-interface-moves.md as the implementation todo list**
 *Link: [./tracks/shared_interface_helpers_common_20260608/](./tracks/shared_interface_helpers_common_20260608/)*

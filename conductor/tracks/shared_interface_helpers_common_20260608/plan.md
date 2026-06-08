@@ -2,20 +2,20 @@
 
 ## Phase 1: Inventory, grouping, and test baseline
 
-- [ ] Task: Review common library and draft move inventory
-    - [ ] Read `docs/draft-interface-moves.md` and group items by functional area.
-    - [ ] Review existing `packages/verser-common/src/lib/*` exports before adding new package-local or common code.
-    - [ ] Identify which existing modules should receive new exports and which areas justify new modules.
-    - [ ] Record deferred or kept-local candidates in this plan before implementation begins.
-- [ ] Task: Establish current validation baseline
-    - [ ] Run the narrowest relevant existing tests for common, host, guest-node, and guest-js-common behavior if available.
-    - [ ] Run `npm run build` to confirm the starting build state.
-    - [ ] Record any preexisting validation failures before making implementation changes.
-- [ ] Task: Prepare TDD coverage map
-    - [ ] Locate tests covering registration, headers, errors, NDJSON/control frames, and routing behavior.
-    - [ ] Decide which tests should move to common with unchanged assertions and which package tests should remain adapter-level.
-    - [ ] Add failing or relocated tests first for helpers that will move into common.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Inventory, grouping, and test baseline' (Protocol in workflow.md)
+- [x] Task: Review common library and draft move inventory
+    - [x] Read `docs/draft-interface-moves.md` and group items by functional area.
+    - [x] Review existing `packages/verser-common/src/lib/*` exports before adding new package-local or common code.
+    - [x] Identify which existing modules should receive new exports and which areas justify new modules.
+    - [x] Record deferred or kept-local candidates in this plan before implementation begins.
+- [x] Task: Establish current validation baseline
+    - [x] Run the narrowest relevant existing tests for common, host, guest-node, and guest-js-common behavior if available.
+    - [x] Run `npm run build` to confirm the starting build state.
+    - [x] Record any preexisting validation failures before making implementation changes.
+- [x] Task: Prepare TDD coverage map
+    - [x] Locate tests covering registration, headers, errors, NDJSON/control frames, and routing behavior.
+    - [x] Decide which tests should move to common with unchanged assertions and which package tests should remain adapter-level.
+    - [x] Add failing or relocated tests first for helpers that will move into common.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Inventory, grouping, and test baseline' (Protocol in workflow.md)
 
 ## Phase 2: Registration and route/control protocol moves
 
@@ -149,3 +149,19 @@
 - Phase 1 has no required fixer guidance; fixer may still be used for bounded read-only or implementation support when appropriate.
 - Every task after Phase 1 includes fixer guidance so delegated refactors remain bounded and reviewable.
 - Each phase must update `docs/draft-interface-moves.md` for the items evaluated in that phase.
+- Phase 1 inventory grouping:
+    - Strong/common candidates: registration/control protocol contracts (`VerserPeerRole`, `VerserRegistrationRequest`, registration parsing/response parsing, broker route-control frames), header serialization/protocol-header helpers (`decodeHeaderMap`, `flattenVerserHeaders`, lease acquire timeout parsing, HTTP/2 pseudo-header stripping), serialized HTTP error response helpers, `toVerserErrorCode`, response-body error parsing, existing common `getErrorMessage`, pure NDJSON line encoding, and exact hostname route resolution.
+    - Existing common modules to extend where fitting: `types.ts`, `routing.ts`, `headers.ts`, `http2-headers.ts`, `errors.ts`, `utils.ts`, and `ndjson.ts`.
+    - New common modules likely justified for clarity: `registration.ts`, `header-serialization.ts`, `protocol-headers.ts`, and `error-response.ts`.
+    - Deferred candidates: broad JS `VerserHeaderInput` policy and runtime-neutral header input normalization, broker request/body normalization, `parseContentLength`, `appendQueryString`, URL-to-route resolution, generic `coerceVerserError`, and route type reconciliation until naming/API policy is fixed.
+    - Kept local candidates: HTTP/2 send/read mechanics, Node/Undici adapters, local HTTP shim classes, lease bookkeeping keys, dispatcher state, and stream consumers.
+- Phase 1 validation baseline:
+    - `npm run build` passed before implementation changes.
+    - `node --test test/common-protocol.test.js test/common-envelope.test.js test/host.test.js test/guest-node.test.js test/broker-routing.test.js` passed with 55 tests before implementation changes.
+    - No preexisting validation failures were observed in the baseline commands.
+- Phase 1 TDD coverage map:
+    - Move or add common tests first in `test/common-protocol.test.js` and `test/common-envelope.test.js` for common registration/control contracts, header serialization/protocol header parsing, error response serialization/parsing, and NDJSON encoding.
+    - Keep `test/host.test.js`, `test/guest-node.test.js`, and `test/broker-routing.test.js` as adapter/integration coverage for Host/Guest/Broker behavior after imports are rewired.
+    - Keep route behavior integration coverage in `test/dispatcher.test.js`, `test/agent.test.js`, and `test/end-to-end.test.js`; add common exact-hostname route selection tests only if `resolveRouteForHostname` moves to common.
+    - Run moved common tests first and confirm they fail for missing common exports before implementing each helper group.
+    - The first failing/relocated tests for each helper group will be added at the start of the corresponding implementation phase before common exports are implemented.
