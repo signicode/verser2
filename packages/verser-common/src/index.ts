@@ -10,6 +10,11 @@ export { DEFAULT_MAX_ENVELOPE_METADATA_BYTES, VERSER_LIFECYCLE_EVENTS } from './
 
 export type {
   DevelopmentTlsCertificate,
+  VerserPeerRole,
+  VerserRegistrationRequest,
+  VerserRegistrationResponse,
+  VerserBrokerRoutesControlFrame,
+  VerserBrokerControlFrame,
   LeaseRequestMetadataReadOptions,
   LeaseResponseMetadataReadOptions,
   ParsedVerserEnvelope,
@@ -41,6 +46,12 @@ export {
   createRoutedRequestEnvelope,
   createRoutedResponseEnvelope,
 } from './lib/routing';
+
+export {
+  createBrokerRoutesControlFrame,
+  parseRegistrationRequest,
+  parseRegistrationResponse,
+} from './lib/registration';
 
 export {
   VerserError,

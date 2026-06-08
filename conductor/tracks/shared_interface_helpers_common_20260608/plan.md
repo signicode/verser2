@@ -19,27 +19,27 @@
 
 ## Phase 2: Registration and route/control protocol moves
 
-- [ ] Task: Write or move registration/control-frame tests first
-    - [ ] Fixer guidance: delegate this task only after listing the exact tests to move or add and requiring unchanged assertions except import/source updates.
-    - [ ] Add or relocate tests for peer role, registration request parsing, registration response shape/parsing, and broker route-control frames.
-    - [ ] Preserve test assertions where tests are moved; change only imports/source locations when possible.
-    - [ ] Confirm the tests fail for missing common exports before implementation.
-- [ ] Task: Move registration/control-frame contracts into common
-    - [ ] Fixer guidance: delegate as one bounded refactor after tests fail, limited to common registration/control-frame exports and corresponding Host/Guest import updates.
-    - [ ] Move `VerserPeerRole` into common.
-    - [ ] Move and rename `VerserHostRegistrationRequest` to `VerserRegistrationRequest` in common.
-    - [ ] Move `parseRegistrationRequest` into common, strengthening validation only where compatible with current behavior.
-    - [ ] Move registration response and broker control frame protocol types into common.
-- [ ] Task: Update package usage
-    - [ ] Fixer guidance: delegate only with explicit allowed files and focused validation commands for the registration/control-frame area.
-    - [ ] Update Host and Guest package imports to use common registration/control-frame contracts.
-    - [ ] Keep Host/Guest transport mechanics and state machines package-local.
-    - [ ] Run focused tests and build for affected packages.
-- [ ] Task: Record phase decisions and helper placement check
-    - [ ] Mark completed, deferred, or kept-local registration/control-frame items in `docs/draft-interface-moves.md`.
-    - [ ] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable registration/control helpers that should have gone to common.
-    - [ ] Record the helper placement result before phase checkpointing.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Registration and route/control protocol moves' (Protocol in workflow.md)
+- [x] Task: Write or move registration/control-frame tests first
+    - [x] Fixer guidance: delegate this task only after listing the exact tests to move or add and requiring unchanged assertions except import/source updates.
+    - [x] Add or relocate tests for peer role, registration request parsing, registration response shape/parsing, and broker route-control frames.
+    - [x] Preserve test assertions where tests are moved; change only imports/source locations when possible.
+    - [x] Confirm the tests fail for missing common exports before implementation.
+- [x] Task: Move registration/control-frame contracts into common
+    - [x] Fixer guidance: delegate as one bounded refactor after tests fail, limited to common registration/control-frame exports and corresponding Host/Guest import updates.
+    - [x] Move `VerserPeerRole` into common.
+    - [x] Move and rename `VerserHostRegistrationRequest` to `VerserRegistrationRequest` in common.
+    - [x] Move `parseRegistrationRequest` into common, strengthening validation only where compatible with current behavior.
+    - [x] Move registration response and broker control frame protocol types into common.
+- [x] Task: Update package usage
+    - [x] Fixer guidance: delegate only with explicit allowed files and focused validation commands for the registration/control-frame area.
+    - [x] Update Host and Guest package imports to use common registration/control-frame contracts.
+    - [x] Keep Host/Guest transport mechanics and state machines package-local.
+    - [x] Run focused tests and build for affected packages.
+- [x] Task: Record phase decisions and helper placement check
+    - [x] Mark completed, deferred, or kept-local registration/control-frame items in `docs/draft-interface-moves.md`.
+    - [x] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable registration/control helpers that should have gone to common.
+    - [x] Record the helper placement result before phase checkpointing.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Registration and route/control protocol moves' (Protocol in workflow.md)
 
 ## Phase 3: Header and protocol-header commonization
 
@@ -166,3 +166,11 @@
     - Keep route behavior integration coverage in `test/dispatcher.test.js`, `test/agent.test.js`, and `test/end-to-end.test.js`; add common exact-hostname route selection tests only if `resolveRouteForHostname` moves to common.
     - Run moved common tests first and confirm they fail for missing common exports before implementing each helper group.
     - The first failing/relocated tests for each helper group will be added at the start of the corresponding implementation phase before common exports are implemented.
+- Phase 2 validation and placement notes:
+    - Added common registration/control-frame tests to `test/common-protocol.test.js`; confirmed they failed for missing common exports before implementation.
+    - Delegated registration/control-frame commonization and cleanup to fixer with explicit allowed files and timeout guidance.
+    - `npm run build` passed after implementation.
+    - `npm run lint` initially reported session-introduced import ordering issues; imports were sorted and `npm run build && npm run lint` then passed.
+    - `node --test --test-timeout=20000 test/common-protocol.test.js test/host.test.js test/guest-node.test.js test/broker-routing.test.js` passed with 48 tests after implementation.
+    - Registration/control reusable helpers now live in `packages/verser-common/src/lib/registration.ts` and shared protocol types in `packages/verser-common/src/lib/types.ts`; Host and Guest Node only retain aliases/imports and transport/state-machine mechanics.
+    - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
