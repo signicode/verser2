@@ -18,11 +18,14 @@ This is a refactor/chore track, not a product behavior expansion. The implementa
 3. Prefer adding exports to existing `packages/verser-common/src/lib/*` modules when they fit the current structure.
 4. Create new common modules only when existing modules would become unclear or overloaded.
 5. Keep non-strong candidates as isolated implementation tasks that can be reverted independently.
-6. Delegate bounded refactor implementation work to `fixer` after the relevant tests, scope, and expected behavior are clear.
-7. Move or adapt tests as needed when helpers move into common, but preserve test intent and test contents wherever possible.
-8. Update Host, Guest Node, and Guest JS Common package imports to use the new common helpers when common helpers are introduced.
-9. Keep package-specific transport helpers local when only a lower-level pure helper belongs in common.
-10. Preserve existing public runtime behavior, wire protocol semantics, and generated package entrypoint expectations.
+6. Each implementation phase must mark completed, deferred, or kept-local items in `docs/draft-interface-moves.md` before the phase checkpoint.
+7. Each implementation phase must check that new reusable helpers were not introduced under `packages/verser2-guest-node/` or `packages/verser2-host/` instead of common.
+8. Delegate bounded refactor implementation work to `fixer` after the relevant tests, scope, and expected behavior are clear; every implementation task after Phase 1 should include explicit fixer-delegation guidance.
+9. Move or adapt tests as needed when helpers move into common, but preserve test intent and test contents wherever possible.
+10. Update Host, Guest Node, and Guest JS Common package imports to use the new common helpers when common helpers are introduced.
+11. Keep package-specific transport helpers local when only a lower-level pure helper belongs in common.
+12. Preserve existing public runtime behavior, wire protocol semantics, and generated package entrypoint expectations.
+13. Add a final solution-check phase that verifies `docs/draft-interface-moves.md` completion status and records the final common module/export structure.
 
 ## Non-Functional Requirements
 
@@ -39,6 +42,9 @@ This is a refactor/chore track, not a product behavior expansion. The implementa
 - Non-strong candidates are implemented only as isolated, reversible tasks.
 - Tests covering moved helpers exist in the appropriate package, preferably common when behavior moves to common.
 - Existing test behavior is preserved; moved tests should not change assertions except for import/source-location updates required by the move.
+- Every completed or intentionally deferred draft move is reflected in `docs/draft-interface-moves.md` by the end of the phase that evaluated it.
+- Each implementation phase records that no new reusable helpers were left in `packages/verser2-guest-node/` or `packages/verser2-host/` when they belong in common.
+- The final track output lists the resulting common module/export structure.
 - `npm run build` passes.
 - `npm test` passes.
 - `npm run lint` passes.
