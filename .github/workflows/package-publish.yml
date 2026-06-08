@@ -12,7 +12,7 @@ on:
 
 jobs:
   package-validation:
-    name: Build, stage, pack, and consume
+    name: Build, stage, pack, and consume without publishing
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,11 +49,15 @@ jobs:
           npm run test:package-consumers -- --source=staging
           npm run test:package-consumers -- --source=tarball
 
+      - name: Confirm validation job never publishes packages
+        run: |
+          echo "Pull requests and validation-only runs stop after build, staging, packing, and tests."
+
   package-publish:
     name: Publish to GitHub Packages
     runs-on: ubuntu-latest
     needs: package-validation
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name != 'pull_request' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
       packages: write

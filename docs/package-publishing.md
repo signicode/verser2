@@ -98,7 +98,7 @@ A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
 
 Behavior summary:
 
-- Pull requests to `main`: build, stage, pack, and run local package-consumer tests; no publish.
+- Pull requests to `main`: build, stage, pack, and run local package-consumer tests only. Pull-request workflow runs must never publish packages to GitHub Packages.
 - Pushes to `main`: run the same validation flow, compute a deterministic main-build version, and publish with `next` dist-tag. Pull-request commits do not publish; only accepted main updates publish SHA-labeled package versions.
 - Pushes for tags matching `v*`: run the same flow, publish the tag-decoded version using stable/pre-release dist-tags from policy.
 
