@@ -118,6 +118,8 @@
 
 ## Phase Checkpoint Policy
 
+- Phase 1 checkpoint commit: `5635fd0`
+
 - [ ] Task: Commit only after completing each phase.
     - [ ] Use scoped conventional commit messages.
     - [ ] Include a concise phase summary in commit bodies when useful.
