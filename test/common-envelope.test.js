@@ -223,3 +223,27 @@ test('shared NDJSON parser reports invalid JSON without throwing from data handl
   assert.match(reportedError.message, /invalid ndjson/i);
   assert.equal(stream.destroyed, true);
 });
+
+test('shared NDJSON serialization writes JSON text lines with newline', () => {
+  const encoded = common.encodeJsonLine({ type: 'routes', routes: [] });
+  const serialized = Buffer.isBuffer(encoded) ? encoded.toString('utf8') : String(encoded);
+
+  assert.equal(serialized, '{"type":"routes","routes":[]}\n');
+});
+
+test('shared Verser error body parser extracts known error metadata', () => {
+  const body = Buffer.from(
+    JSON.stringify({
+      error: {
+        code: 'missing-guest',
+        message: 'Missing',
+        context: { targetId: 'guest-1' },
+      },
+    }),
+  );
+  const parsed = common.verserErrorFromResponseBody(body, 'guest-1');
+
+  assert.equal(parsed.code, 'missing-guest');
+  assert.match(parsed.message, /\[missing-guest\] Missing \(targetId=guest-1/);
+  assert.equal(parsed.context.targetId, 'guest-1');
+});

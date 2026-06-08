@@ -3,8 +3,10 @@ import type { Readable } from 'node:stream';
 import type { Dispatcher, fetch as undiciFetch } from 'undici';
 
 import type {
+  RoutedDomainRegistration,
   RoutedRequestEnvelope,
   RoutedResponseEnvelope,
+  VerserBrokerControlFrame,
   VerserError,
 } from '@signicode/verser-common';
 
@@ -99,6 +101,6 @@ export interface BrokerRequestRouter {
   getRoutes(): { targetId: string; domain: string }[];
 }
 
-export interface BrokerControlFrame {
-  readonly routes: { targetId: string; domain: string }[];
-}
+export type BrokerControlFrame = VerserBrokerControlFrame;
+
+export type BrokerRoute = RoutedDomainRegistration;

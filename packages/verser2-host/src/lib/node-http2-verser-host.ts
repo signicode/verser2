@@ -1,46 +1,42 @@
 import { EventEmitter } from 'node:events';
 import * as http2 from 'node:http2';
+import { text as readStreamText } from 'node:stream/consumers';
 
 import {
   type RoutedDomainRegistration,
   VERSER_LIFECYCLE_EVENTS,
   type VerserError,
   type VerserPeerId,
+  type VerserPeerRole,
+  type VerserRegistrationResponse,
+  createBrokerRoutesControlFrame,
   createDevelopmentTlsCertificate,
   createPeerId,
   createRoutedDomainRegistration,
   createVerserError,
+  decodeHeaderMap,
   encodeVerserEnvelope,
+  flattenVerserHeaders,
+  parseLeaseAcquireTimeoutMs,
+  parseRegistrationRequest,
   readLeaseResponseMetadataFromStream,
   readNdjsonLines,
   validateVerserHeaders,
 } from '@signicode/verser-common';
-
-import {
-  decodeHeaderMap,
-  flattenValidatedHeaders,
-  parseLeaseAcquireTimeoutMs,
-  parseRegistrationRequest,
-} from './host-protocol';
-import { readRequestBody, sendError, sendJson, writeJsonLine } from './http2-io';
+import { sendError, writeJsonLine } from './http2-io';
 import type {
   VerserHost,
   VerserHostLifecycleEvent,
   VerserHostOptions,
   VerserHostRegistrationRequest,
 } from './types';
-import { activeLeaseKey, toVerserError } from './utils';
+import { toVerserError } from './utils';
 
 interface RegisteredPeer {
   readonly peerId: VerserPeerId;
-  readonly role: 'broker' | 'guest';
+  readonly role: VerserPeerRole;
   readonly session: http2.Http2Session;
   readonly controlStream?: http2.ServerHttp2Stream;
-}
-
-interface RegistrationResponse {
-  readonly status: 'registered';
-  readonly routes: RoutedDomainRegistration[];
 }
 
 interface GuestLeaseStream {
@@ -207,7 +203,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       });
     }
 
-    const registration = parseRegistrationRequest(await readRequestBody(stream));
+    const registration = parseRegistrationRequest(await readStreamText(stream));
     this.registerPeer(stream, registration);
   }
 
@@ -245,13 +241,13 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (registration.role === 'guest') {
       this.guestRegistrations.set(
         peerId,
-        (registration.routedDomains ?? []).map((domain) =>
+        (registration.routedDomains ?? []).map((domain: string) =>
           createRoutedDomainRegistration({ targetId: peerId, domain }),
         ),
       );
     }
 
-    const response: RegistrationResponse = {
+    const response: VerserRegistrationResponse = {
       status: 'registered',
       routes: this.getRoutedDomains(),
     };
@@ -260,7 +256,10 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
-    sendJson(stream, response);
+    if (!stream.headersSent) {
+      stream.respond({ ':status': 200, 'content-type': 'application/json' });
+    }
+    stream.end(JSON.stringify(response));
     this.advertiseRoutes();
   }
 
@@ -272,7 +271,7 @@ export class NodeHttp2VerserHost implements VerserHost {
         peer.controlStream !== undefined &&
         !peer.controlStream.closed
       ) {
-        writeJsonLine(peer.controlStream, { type: 'routes', routes });
+        writeJsonLine(peer.controlStream, createBrokerRoutesControlFrame(routes));
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
           peerId: peer.peerId,
@@ -393,7 +392,7 @@ export class NodeHttp2VerserHost implements VerserHost {
           targetId,
           method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
           path: String(headers['x-verser-path'] ?? '/'),
-          headers: flattenValidatedHeaders(
+          headers: flattenVerserHeaders(
             validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
           ),
         },
@@ -448,7 +447,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (queued !== undefined) {
       clearTimeout(queued.timeout);
       lease.active = true;
-      this.activeLeases.set(activeLeaseKey(lease.guestId, lease.leaseId), lease);
+      this.activeLeases.set(`${lease.guestId}:${lease.leaseId}`, lease);
       queued.resolve(lease);
       return;
     }
@@ -467,7 +466,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     const lease = idleLeases.shift();
     if (lease !== undefined) {
       lease.active = true;
-      this.activeLeases.set(activeLeaseKey(lease.guestId, lease.leaseId), lease);
+      this.activeLeases.set(`${lease.guestId}:${lease.leaseId}`, lease);
       return Promise.resolve(lease);
     }
 
@@ -513,7 +512,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       lease.guestId,
       idleLeases.filter((candidate) => candidate !== lease),
     );
-    this.activeLeases.delete(activeLeaseKey(lease.guestId, lease.leaseId));
+    this.activeLeases.delete(`${lease.guestId}:${lease.leaseId}`);
   }
 
   private closeGuestLeases(guestId: VerserPeerId): void {
@@ -525,7 +524,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     for (const lease of this.activeLeases.values()) {
       if (lease.guestId === guestId) {
         lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-        this.activeLeases.delete(activeLeaseKey(lease.guestId, lease.leaseId));
+        this.activeLeases.delete(`${lease.guestId}:${lease.leaseId}`);
       }
     }
   }

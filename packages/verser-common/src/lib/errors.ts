@@ -1,5 +1,11 @@
 import type { VerserErrorCode, VerserErrorContext } from './types';
 
+export interface VerserErrorContextInput {
+  guestId?: string;
+}
+
+type MutableVerserErrorContext = Record<string, string | number | boolean | undefined>;
+
 function formatVerserErrorMessage(
   code: VerserErrorCode,
   message: string,
@@ -31,4 +37,16 @@ export function createVerserError(
   context: VerserErrorContext = {},
 ): VerserError {
   return new VerserError(code, message, context);
+}
+
+export function toVerserError(error: unknown, context: VerserErrorContextInput = {}): VerserError {
+  if (error instanceof VerserError) {
+    if (context.guestId !== undefined && error.context.guestId !== context.guestId) {
+      (error.context as MutableVerserErrorContext).guestId = context.guestId;
+    }
+    return error;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return createVerserError('protocol-error', message, context as VerserErrorContext);
 }

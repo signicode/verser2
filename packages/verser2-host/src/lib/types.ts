@@ -1,24 +1,23 @@
 import type { AddressInfo } from 'node:net';
 
-import type { RoutedDomainRegistration, VerserError } from '@signicode/verser-common';
-
-export type VerserPeerRole = 'broker' | 'guest';
+import type {
+  VerserPeerRole as CommonVerserPeerRole,
+  RoutedDomainRegistration,
+  VerserError,
+  VerserRegistrationRequest,
+} from '@signicode/verser-common';
 
 export interface VerserHostOptions {
   readonly port?: number;
   readonly host?: string;
 }
 
-export interface VerserHostRegistrationRequest {
-  readonly peerId: string;
-  readonly role: VerserPeerRole;
-  readonly routedDomains?: readonly string[];
-}
+export type VerserHostRegistrationRequest = VerserRegistrationRequest;
 
 export interface VerserHostLifecycleEvent {
   readonly name: string;
   readonly peerId?: string;
-  readonly role?: VerserPeerRole;
+  readonly role?: CommonVerserPeerRole;
   readonly reason?: string;
   readonly error?: VerserError;
 }

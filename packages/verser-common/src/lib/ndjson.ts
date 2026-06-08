@@ -4,6 +4,10 @@ import { createVerserError } from './errors';
 import type { VerserError } from './errors';
 import { getErrorMessage } from './utils';
 
+export function encodeJsonLine(value: unknown): Buffer {
+  return Buffer.from(`${JSON.stringify(value)}\n`);
+}
+
 export function readNdjsonLines<T>(
   stream: EventEmitter,
   onFrame: (frame: T) => void,
