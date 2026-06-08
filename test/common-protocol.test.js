@@ -142,6 +142,29 @@ test('shared lifecycle names and contextual errors are exported', () => {
   assert.equal(contextFreeError.message, '[timeout] Request timed out');
 });
 
+test('shared HTTP error response shape is stable', () => {
+  const encoded = common.toVerserHttpErrorResponse(
+    common.createVerserError('missing-guest', 'No guest', { targetId: 'guest-1' }),
+  );
+
+  assert.deepEqual(encoded, {
+    error: {
+      code: 'missing-guest',
+      message: '[missing-guest] No guest (targetId=guest-1',
+      context: {
+        targetId: 'guest-1',
+      },
+    },
+  });
+});
+
+test('shared error code parser accepts known codes and falls back', () => {
+  assert.equal(common.toVerserErrorCode('timeout'), 'timeout');
+  assert.equal(common.toVerserErrorCode('disconnected-target'), 'disconnected-target');
+  assert.equal(common.toVerserErrorCode(undefined), 'local-handler-failure');
+  assert.equal(common.toVerserErrorCode('unknown-code'), 'local-handler-failure');
+});
+
 test('shared HTTP/2 pseudo-header mapping keeps protocol fields explicit', () => {
   assert.deepEqual(common.toHttp2RequestHeaders({ method: 'PUT', path: '/items/1' }), {
     ':method': 'PUT',

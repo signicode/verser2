@@ -58,6 +58,8 @@ export {
   createVerserError,
 } from './lib/errors';
 
+export { getErrorMessage } from './lib/utils';
+
 export {
   createVerserEnvelopeParser,
   encodeVerserEnvelope,
@@ -66,9 +68,16 @@ export {
   readVerserEnvelopeFromStream,
 } from './lib/envelope';
 
+export {
+  VerserHttpErrorResponse,
+  toVerserErrorCode,
+  toVerserHttpErrorResponse,
+  verserErrorFromResponseBody,
+} from './lib/error-response';
+
 export { readExactly } from './lib/stream-readers';
 
-export { readNdjsonLines } from './lib/ndjson';
+export { encodeJsonLine, readNdjsonLines } from './lib/ndjson';
 
 export { decodeHeaderMap, flattenVerserHeaders } from './lib/header-serialization';
 

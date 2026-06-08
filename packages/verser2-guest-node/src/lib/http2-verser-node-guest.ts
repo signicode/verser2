@@ -11,11 +11,12 @@ import {
   createVerserError,
   encodeVerserEnvelope,
   flattenVerserHeaders,
+  getErrorMessage,
   readLeaseRequestMetadataFromStream,
   readNdjsonLines,
   validateVerserHeaders,
 } from '@signicode/verser-common';
-import { getErrorMessage, toVerserError } from './error-utils';
+import { toVerserError } from './error-utils';
 import { requestJson } from './http2-client-utils';
 import { MinimalIncomingMessage, MinimalServerResponse } from './minimal-http';
 import type {

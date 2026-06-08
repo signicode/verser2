@@ -68,32 +68,32 @@
 
 ## Phase 4: Error response, coercion, and NDJSON extraction
 
-- [ ] Task: Write or move error and NDJSON tests first
-    - [ ] Fixer guidance: delegate only after identifying exact Host/Guest tests to move or add and requiring unchanged assertions except import/source updates.
-    - [ ] Add or relocate tests for serialized HTTP error response shape, error response parsing, error code coercion, unknown-error coercion, and NDJSON line encoding.
-    - [ ] Preserve assertions where tests move from Host or Guest packages to common.
-    - [ ] Confirm new common tests fail before implementation.
-- [ ] Task: Move error response helpers into common
-    - [ ] Fixer guidance: delegate as a bounded error-response refactor with explicit source helpers, destination exports, and package import updates.
-    - [ ] Move and rename `ErrorResponse` to a common serialized error response type.
-    - [ ] Move `toErrorResponse` into common as the shared serialization helper.
-    - [ ] Move or extract `errorFromBody` into common as the matching parser.
-    - [ ] Move `toVerserErrorCode` into common near `VerserErrorCode`.
-    - [ ] Export or adapt common `getErrorMessage` and combine Host/Guest `toVerserError` variants behind a shared helper if compatible.
-- [ ] Task: Extract NDJSON serialization
-    - [ ] Fixer guidance: delegate only the pure serialization extraction and import rewiring; keep HTTP/2 response behavior out of the delegated common change.
-    - [ ] Extract the pure serialization part of `writeJsonLine` into common, such as `encodeJsonLine`.
-    - [ ] Keep HTTP/2 stream response behavior local to Host.
-    - [ ] Ensure `sendError` uses common error serialization while retaining Host-local send mechanics.
-- [ ] Task: Update package usage and validate
-    - [ ] Fixer guidance: delegate validation assistance only with the focused error/NDJSON test commands and expected successful build scope.
-    - [ ] Update Host and Guest imports to use common error and NDJSON helpers.
-    - [ ] Run focused error/NDJSON tests and build for affected packages.
-- [ ] Task: Record phase decisions and helper placement check
-    - [ ] Mark completed, deferred, or kept-local error/NDJSON items in `docs/draft-interface-moves.md`.
-    - [ ] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable error or NDJSON helpers that should have gone to common.
-    - [ ] Record the helper placement result before phase checkpointing.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Error response, coercion, and NDJSON extraction' (Protocol in workflow.md)
+- [x] Task: Write or move error and NDJSON tests first
+    - [x] Fixer guidance: delegate only after identifying exact Host/Guest tests to move or add and requiring unchanged assertions except import/source updates.
+    - [x] Add or relocate tests for serialized HTTP error response shape, error response parsing, error code coercion, unknown-error coercion, and NDJSON line encoding.
+    - [x] Preserve assertions where tests move from Host or Guest packages to common.
+    - [x] Confirm new common tests fail before implementation.
+- [x] Task: Move error response helpers into common
+    - [x] Fixer guidance: delegate as a bounded error-response refactor with explicit source helpers, destination exports, and package import updates.
+    - [x] Move and rename `ErrorResponse` to a common serialized error response type.
+    - [x] Move `toErrorResponse` into common as the shared serialization helper.
+    - [x] Move or extract `errorFromBody` into common as the matching parser.
+    - [x] Move `toVerserErrorCode` into common near `VerserErrorCode`.
+    - [x] Export or adapt common `getErrorMessage` and combine Host/Guest `toVerserError` variants behind a shared helper if compatible.
+- [x] Task: Extract NDJSON serialization
+    - [x] Fixer guidance: delegate only the pure serialization extraction and import rewiring; keep HTTP/2 response behavior out of the delegated common change.
+    - [x] Extract the pure serialization part of `writeJsonLine` into common, such as `encodeJsonLine`.
+    - [x] Keep HTTP/2 stream response behavior local to Host.
+    - [x] Ensure `sendError` uses common error serialization while retaining Host-local send mechanics.
+- [x] Task: Update package usage and validate
+    - [x] Fixer guidance: delegate validation assistance only with the focused error/NDJSON test commands and expected successful build scope.
+    - [x] Update Host and Guest imports to use common error and NDJSON helpers.
+    - [x] Run focused error/NDJSON tests and build for affected packages.
+- [x] Task: Record phase decisions and helper placement check
+    - [x] Mark completed, deferred, or kept-local error/NDJSON items in `docs/draft-interface-moves.md`.
+    - [x] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable error or NDJSON helpers that should have gone to common.
+    - [x] Record the helper placement result before phase checkpointing.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Error response, coercion, and NDJSON extraction' (Protocol in workflow.md)
 
 ## Phase 5: Isolated non-strong candidates
 
@@ -185,3 +185,12 @@
     - `npm run build`, focused header/protocol tests (`60` tests), and `npm run lint` passed after implementation.
     - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
     - Phase checkpoint commit: `fc16bfc`.
+- Phase 4 validation and placement notes:
+    - Delegated error response and NDJSON extraction as one bounded fixer task; this was larger than ideal and future work should split errors and NDJSON into separate fixer tasks.
+    - TDD fail-first check: `npm run build && node --test --test-timeout=20000 test/common-protocol.test.js test/common-envelope.test.js` failed as expected before implementation because `encodeJsonLine`, `verserErrorFromResponseBody`, `toVerserHttpErrorResponse`, and `toVerserErrorCode` exports were missing.
+    - Added common tests for serialized HTTP error response shape, error code fallback, serialized error response parsing, and NDJSON line encoding.
+    - Moved reusable error response helpers into `packages/verser-common/src/lib/error-response.ts` and pure NDJSON line encoding into `packages/verser-common/src/lib/ndjson.ts`.
+    - Preserved the previous Guest unknown error-code fallback as `local-handler-failure` after reviewing the delegated implementation.
+    - Deferred shared `coerceVerserError` because Host and Guest unknown-error coercion still need an explicit fallback code/context API decision.
+    - `npm run build`, focused error/NDJSON tests (`64` tests), and `npm run lint` passed after implementation.
+    - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
