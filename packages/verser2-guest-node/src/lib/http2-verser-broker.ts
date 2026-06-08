@@ -7,6 +7,7 @@ import {
   createDevelopmentTlsCertificate,
   createVerserError,
   readNdjsonLines,
+  stripHttp2PseudoHeaders,
   validateVerserHeaders,
 } from '@signicode/verser-common';
 import type { Dispatcher } from 'undici';
@@ -14,7 +15,6 @@ import { fetch as undiciFetch } from 'undici';
 import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
 import { errorFromBody } from './error-utils';
-import { normalHeaders } from './header-utils';
 import { once, readResponseBody } from './http2-client-utils';
 import type {
   BrokerControlFrame,
@@ -133,7 +133,7 @@ export class Http2VerserBroker implements VerserBroker {
       let responseHeaders: Record<string, string> = {};
       stream.on('response', (headers) => {
         statusCode = Number(headers[':status'] ?? 200);
-        responseHeaders = normalHeaders(headers);
+        responseHeaders = stripHttp2PseudoHeaders(headers);
         if (statusCode < 400) {
           resolve({ requestId, statusCode, headers: responseHeaders, body: stream });
           return;

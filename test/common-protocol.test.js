@@ -157,6 +157,44 @@ test('shared HTTP/2 pseudo-header mapping keeps protocol fields explicit', () =>
   assert.throws(() => common.fromHttp2ResponseHeaders({ ':status': 99 }), /status code/);
 });
 
+test('shared header helpers flatten and decode routed metadata', () => {
+  assert.deepEqual(common.flattenVerserHeaders({ a: 'one', b: ['two', 'three'] }), {
+    a: 'one',
+    b: 'two,three',
+  });
+
+  assert.deepEqual(common.decodeHeaderMap('{"x-a":"1","x-b":2}'), {
+    'x-a': '1',
+    'x-b': '2',
+  });
+});
+
+test('shared protocol helpers parse lease-acquire timeout header', () => {
+  assert.equal(
+    common.parseLeaseAcquireTimeoutMs({ 'x-verser-lease-acquire-timeout-ms': '250' }),
+    250,
+  );
+  assert.equal(common.parseLeaseAcquireTimeoutMs({}), 5000);
+  assert.equal(
+    common.parseLeaseAcquireTimeoutMs({ 'x-verser-lease-acquire-timeout-ms': '-1' }),
+    5000,
+  );
+  assert.equal(
+    common.parseLeaseAcquireTimeoutMs({ 'x-verser-lease-acquire-timeout-ms': 'NaN' }),
+    5000,
+  );
+  assert.equal(
+    common.parseLeaseAcquireTimeoutMs({ 'x-verser-lease-acquire-timeout-ms': 'Infinity' }),
+    5000,
+  );
+});
+
+test('shared HTTP/2 pseudo-header stripping removes :headers', () => {
+  assert.deepEqual(common.stripHttp2PseudoHeaders({ ':status': 200, 'x-a': '1' }), {
+    'x-a': '1',
+  });
+});
+
 test('shared development certificate helpers expose and verify a pinned self-signed certificate', () => {
   const certificate = common.createDevelopmentTlsCertificate();
   const fingerprint = common.getCertificateFingerprint(certificate.cert);

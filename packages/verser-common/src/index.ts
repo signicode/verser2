@@ -70,6 +70,13 @@ export { readExactly } from './lib/stream-readers';
 
 export { readNdjsonLines } from './lib/ndjson';
 
+export { decodeHeaderMap, flattenVerserHeaders } from './lib/header-serialization';
+
+export {
+  VERSER_LEASE_ACQUIRE_TIMEOUT_HEADER,
+  parseLeaseAcquireTimeoutMs,
+} from './lib/protocol-headers';
+
 export { validateVerserHeaders } from './lib/headers';
 
 export {
@@ -77,6 +84,7 @@ export {
   fromHttp2RequestHeaders,
   toHttp2ResponseHeaders,
   fromHttp2ResponseHeaders,
+  stripHttp2PseudoHeaders,
 } from './lib/http2-headers';
 
 export {

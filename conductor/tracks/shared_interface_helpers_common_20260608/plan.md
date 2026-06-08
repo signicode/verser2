@@ -43,28 +43,28 @@
 
 ## Phase 3: Header and protocol-header commonization
 
-- [ ] Task: Write or move header tests first
-    - [ ] Fixer guidance: delegate test movement only with a list of exact source tests and the requirement that assertions remain unchanged except import/source updates.
-    - [ ] Add or relocate tests for header flattening, header map decoding, lease acquire timeout parsing, HTTP/2 pseudo-header stripping, and runtime-neutral header normalization.
-    - [ ] Preserve existing test contents where tests move; change imports/source locations only as needed.
-    - [ ] Confirm new common tests fail before implementation.
-- [ ] Task: Combine common header abstractions
-    - [ ] Fixer guidance: delegate by sub-area when possible, for example header serialization separately from runtime-neutral header normalization, so each change can be reviewed and reverted independently.
-    - [ ] Combine Host `flattenValidatedHeaders` and Guest `flattenHeaders` into a common `flattenVerserHeaders` helper.
-    - [ ] Move `decodeHeaderMap` into common and add a paired encoder only if current call sites need it.
-    - [ ] Extract lease acquire timeout parsing and protocol header constants into common when appropriate.
-    - [ ] Combine JS common `flattenHeaderValue`, `normalizeHeaders`, header-name validation, and header-value validation with existing common header helpers.
-    - [ ] Extract `normalHeaders` into a clearly named HTTP/2 helper such as `stripHttp2PseudoHeaders` if reuse is confirmed.
-- [ ] Task: Update package usage
-    - [ ] Fixer guidance: delegate import rewiring only after common helper names and exports are fixed, and include focused header validation commands.
-    - [ ] Update Host, Guest Node, and Guest JS Common imports to use shared header helpers.
-    - [ ] Keep Node `OutgoingHttpHeaders`, Undici raw header list, and JS URL adaptation local unless only a pure helper is extracted.
-    - [ ] Run focused header tests and build for affected packages.
-- [ ] Task: Record phase decisions and helper placement check
-    - [ ] Mark completed, deferred, or kept-local header/protocol-header items in `docs/draft-interface-moves.md`.
-    - [ ] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable header helpers that should have gone to common.
-    - [ ] Record the helper placement result before phase checkpointing.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Header and protocol-header commonization' (Protocol in workflow.md)
+- [x] Task: Write or move header tests first
+    - [x] Fixer guidance: delegate test movement only with a list of exact source tests and the requirement that assertions remain unchanged except import/source updates.
+    - [x] Add or relocate tests for header flattening, header map decoding, lease acquire timeout parsing, HTTP/2 pseudo-header stripping, and runtime-neutral header normalization.
+    - [x] Preserve existing test contents where tests move; change imports/source locations only as needed.
+    - [x] Confirm new common tests fail before implementation.
+- [x] Task: Combine common header abstractions
+    - [x] Fixer guidance: delegate by sub-area when possible, for example header serialization separately from runtime-neutral header normalization, so each change can be reviewed and reverted independently.
+    - [x] Combine Host `flattenValidatedHeaders` and Guest `flattenHeaders` into a common `flattenVerserHeaders` helper.
+    - [x] Move `decodeHeaderMap` into common and add a paired encoder only if current call sites need it.
+    - [x] Extract lease acquire timeout parsing and protocol header constants into common when appropriate.
+    - [x] Combine JS common `flattenHeaderValue`, `normalizeHeaders`, header-name validation, and header-value validation with existing common header helpers.
+    - [x] Extract `normalHeaders` into a clearly named HTTP/2 helper such as `stripHttp2PseudoHeaders` if reuse is confirmed.
+- [x] Task: Update package usage
+    - [x] Fixer guidance: delegate import rewiring only after common helper names and exports are fixed, and include focused header validation commands.
+    - [x] Update Host, Guest Node, and Guest JS Common imports to use shared header helpers.
+    - [x] Keep Node `OutgoingHttpHeaders`, Undici raw header list, and JS URL adaptation local unless only a pure helper is extracted.
+    - [x] Run focused header tests and build for affected packages.
+- [x] Task: Record phase decisions and helper placement check
+    - [x] Mark completed, deferred, or kept-local header/protocol-header items in `docs/draft-interface-moves.md`.
+    - [x] Check `packages/verser2-guest-node/` and `packages/verser2-host/` for newly introduced reusable header helpers that should have gone to common.
+    - [x] Record the helper placement result before phase checkpointing.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Header and protocol-header commonization' (Protocol in workflow.md)
 
 ## Phase 4: Error response, coercion, and NDJSON extraction
 
@@ -175,3 +175,12 @@
     - Registration/control reusable helpers now live in `packages/verser-common/src/lib/registration.ts` and shared protocol types in `packages/verser-common/src/lib/types.ts`; Host and Guest Node only retain aliases/imports and transport/state-machine mechanics.
     - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
     - Phase checkpoint commit: `935e694`.
+- Phase 3 validation and placement notes:
+    - Delegated header/protocol-header implementation to fixer as one bounded task with explicit allowed files and timeout guidance.
+    - TDD fail-first check: `npm run build && node --test --test-timeout=20000 test/common-protocol.test.js` failed as expected before implementation because `flattenVerserHeaders`, `parseLeaseAcquireTimeoutMs`, and `stripHttp2PseudoHeaders` common exports were missing.
+    - Added common tests for header flattening, serialized header-map decoding, lease-acquire timeout parsing, and HTTP/2 pseudo-header stripping.
+    - Moved reusable header helpers into `packages/verser-common/src/lib/header-serialization.ts`, `packages/verser-common/src/lib/protocol-headers.ts`, and `packages/verser-common/src/lib/http2-headers.ts`.
+    - Removed the unused Host-local `host-protocol.ts` duplicate helper module after rewiring Host imports to common.
+    - Deferred broad JS common header input normalization/value validation and Node-specific header adapters as documented in `docs/draft-interface-moves.md`.
+    - `npm run build`, focused header/protocol tests (`60` tests), and `npm run lint` passed after implementation.
+    - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
