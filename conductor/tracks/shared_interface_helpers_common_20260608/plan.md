@@ -194,3 +194,4 @@
     - Deferred shared `coerceVerserError` because Host and Guest unknown-error coercion still need an explicit fallback code/context API decision.
     - `npm run build`, focused error/NDJSON tests (`64` tests), and `npm run lint` passed after implementation.
     - Coverage status: changed behavior is covered by new common tests plus existing Host/Guest/Broker integration tests; no separate coverage reporter is configured for this repository.
+    - Phase checkpoint commit: `87f3ac2`.
