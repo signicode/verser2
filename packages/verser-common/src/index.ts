@@ -9,12 +9,13 @@ export {
 export { DEFAULT_MAX_ENVELOPE_METADATA_BYTES, VERSER_LIFECYCLE_EVENTS } from './lib/constants';
 
 export type {
-  DevelopmentTlsCertificate,
   VerserPeerRole,
   VerserRegistrationRequest,
   VerserRegistrationResponse,
   VerserBrokerRoutesControlFrame,
   VerserBrokerControlFrame,
+  VerserClientTlsOptions,
+  VerserHostTlsOptions,
   LeaseRequestMetadataReadOptions,
   LeaseResponseMetadataReadOptions,
   ParsedVerserEnvelope,
@@ -121,7 +122,8 @@ export {
 } from './lib/http2-headers';
 
 export {
-  createDevelopmentTlsCertificate,
+  normalizeClientTlsOptions,
+  normalizeServerTlsOptions,
   getCertificateFingerprint,
   verifyPinnedCertificate,
 } from './lib/tls';

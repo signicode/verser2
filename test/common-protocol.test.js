@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const { Readable } = require('node:stream');
 
 const { loadVerserCommon } = require('./support/verser-package-imports.cjs');
+const { trusted } = require('./support/tls-fixtures.cjs');
 
 const common = loadVerserCommon();
 
@@ -425,14 +426,12 @@ test('shared body normalization rejects unsupported bodies', () => {
   );
 });
 
-test('shared development certificate helpers expose and verify a pinned self-signed certificate', () => {
-  const certificate = common.createDevelopmentTlsCertificate();
-  const fingerprint = common.getCertificateFingerprint(certificate.cert);
+test('shared certificate helpers expose and verify a pinned certificate', () => {
+  const fingerprint = common.getCertificateFingerprint(trusted.certificate);
 
-  assert.match(certificate.cert, /BEGIN CERTIFICATE/);
-  assert.match(certificate.key, /BEGIN PRIVATE KEY/);
-  assert.equal(common.verifyPinnedCertificate(certificate.cert, fingerprint).valid, true);
-  assert.deepEqual(common.verifyPinnedCertificate(certificate.cert, 'sha256:invalid'), {
+  assert.match(trusted.certificate, /BEGIN CERTIFICATE/);
+  assert.equal(common.verifyPinnedCertificate(trusted.certificate, fingerprint).valid, true);
+  assert.deepEqual(common.verifyPinnedCertificate(trusted.certificate, 'sha256:invalid'), {
     valid: false,
     reason: 'certificate fingerprint mismatch',
   });

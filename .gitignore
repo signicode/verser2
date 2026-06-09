@@ -1,3 +1,5 @@
 node_modules/
 dist/
 coverage/
+test/fixtures/generated-tls/
+test/fixtures/generated-tls.lock/

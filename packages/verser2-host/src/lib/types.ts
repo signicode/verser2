@@ -4,12 +4,14 @@ import type {
   VerserPeerRole as CommonVerserPeerRole,
   RoutedDomainRegistration,
   VerserError,
+  VerserHostTlsOptions,
   VerserRegistrationRequest,
 } from '@signicode/verser-common';
 
 export interface VerserHostOptions {
   readonly port?: number;
   readonly host?: string;
+  readonly tls?: VerserHostTlsOptions;
 }
 
 export type VerserHostRegistrationRequest = VerserRegistrationRequest;
@@ -27,6 +29,7 @@ export interface VerserHost {
   readonly address: AddressInfo;
   start(): Promise<void>;
   close(reason?: string): Promise<void>;
+  reloadTlsCertificate(): void;
   getRoutedDomains(): RoutedDomainRegistration[];
   onLifecycle(listener: (event: VerserHostLifecycleEvent) => void): () => void;
 }

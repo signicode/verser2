@@ -5,13 +5,13 @@ import type { Readable } from 'node:stream';
 
 import {
   VERSER_LIFECYCLE_EVENTS,
-  createDevelopmentTlsCertificate,
   createGuestId,
   createRoutedRequestEnvelope,
   createVerserError,
   encodeVerserEnvelope,
   flattenVerserHeaders,
   getErrorMessage,
+  normalizeClientTlsOptions,
   readLeaseRequestMetadataFromStream,
   readNdjsonLines,
   validateVerserHeaders,
@@ -69,8 +69,8 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       return;
     }
 
-    const certificate = createDevelopmentTlsCertificate();
-    const session = http2.connect(this.options.hostUrl, { ca: certificate.cert });
+    const tls = normalizeClientTlsOptions(this.options.tls);
+    const session = http2.connect(this.options.hostUrl, tls === undefined ? {} : { ca: tls.ca });
     this.session = session;
     this.closing = false;
 

@@ -18,7 +18,11 @@ const reusableTestRelativePaths = [
   path.join('test', 'common-protocol.test.js'),
   path.join('test', 'end-to-end.test.js'),
 ];
-const supportFileRelativePaths = [path.join('test', 'support', 'verser-package-imports.cjs')];
+const supportFileRelativePaths = [
+  path.join('test', 'support', 'verser-package-imports.cjs'),
+  path.join('test', 'support', 'tls-fixtures.cjs'),
+];
+const fixtureFileRelativePaths = [];
 
 const sourcePackages = [
   {
@@ -217,6 +221,14 @@ function writeBehaviorTest(projectRoot) {
     const sourcePath = path.join(rootDirectory, relativePath);
     const destinationPath = path.join(projectRoot, relativePath);
     requireFile(sourcePath, `tarball test support file ${relativePath}`);
+    ensureDirectory(path.dirname(destinationPath));
+    fs.copyFileSync(sourcePath, destinationPath);
+  }
+
+  for (const relativePath of fixtureFileRelativePaths) {
+    const sourcePath = path.join(rootDirectory, relativePath);
+    const destinationPath = path.join(projectRoot, relativePath);
+    requireFile(sourcePath, `tarball test fixture file ${relativePath}`);
     ensureDirectory(path.dirname(destinationPath));
     fs.copyFileSync(sourcePath, destinationPath);
   }
