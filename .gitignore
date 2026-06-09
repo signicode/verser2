@@ -3,5 +3,6 @@ dist/
 coverage/
 __pycache__/
 *.pyc
+.venv/
 test/fixtures/generated-tls/
 test/fixtures/generated-tls.lock/
