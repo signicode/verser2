@@ -50,6 +50,11 @@ jobs:
           npm run test:package-consumers -- --source=tarball
           npm run test:package-tarballs
 
+      - name: Run source tests and lint
+        run: |
+          npm test
+          npm run lint
+
       - name: Confirm validation job never publishes packages
         run: |
           echo "Pull requests and validation-only runs stop after build, staging, packing, and tests."
