@@ -57,6 +57,13 @@ test('workflow builds, stages, packs, and validates consumers locally', () => {
   );
 });
 
+test('workflow runs full source tests and lint in validation job', () => {
+  assertHas(
+    /package-validation:[\s\S]*?npm test[\s\S]*?npm run lint[\s\S]*?Confirm validation job never publishes packages/,
+    'Expected validation job to run full source tests and lint before completing.',
+  );
+});
+
 test('workflow applies package version policy and publishes to GitHub Packages', () => {
   assertHas(
     /npm run package:version-policy -- --version/,
