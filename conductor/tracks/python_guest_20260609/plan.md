@@ -46,7 +46,7 @@ Phase 0 validation notes:
     - [x] Run the narrowest package-recognition and scaffold tests.
     - [x] Run applicable package build/stage checks impacted by the new package metadata.
     - [x] Record any intentionally deferred Python package publishing behavior.
-- [~] Task: Conductor - User Manual Verification 'Phase 1: Package Scaffold and Tooling Integration' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Package Scaffold and Tooling Integration' (Protocol in workflow.md)
 
 Phase 1 validation notes:
 - Common library scan: reviewed `@signicode/verser-common` exports and Node Guest/Host registration and leased request protocol; no common code changes were needed for scaffold-only work.
@@ -59,6 +59,8 @@ Phase 1 validation notes:
 - Publishing behavior: npm package staging, dry-run packing, consumer import checks, and tarball behavior tests now include the Python package's npm shim. Real Python wheel publishing remains deferred; current `pyproject.toml` establishes metadata only.
 - Deduplication review: no duplicated implementation logic was introduced; package enumeration remains local to existing package tooling scripts/tests and will be revisited if repeated package metadata becomes harder to maintain.
 - Coverage: meaningful coverage for Phase 1 scaffold is covered by focused Node scaffold tests and Python `unittest`; no numeric coverage command was run for scaffold-only metadata.
+- Manual verification: confirmed by user after Phase 1 changes were pushed for review.
+- Phase checkpoint commit: `d336a3e`; cleanup commit: `f420726`.
 
 ## Phase 2: ASGI Guest Core and Host Protocol Connection
 
