@@ -16,34 +16,38 @@ Phase 0 checkpoint: created branch `conductor/configurable-tls-setup-20260609`, 
 
 ## Phase 1: Baseline audit and red tests for TLS configuration
 
-- [ ] Task: Audit current TLS implementation and package exports
-    - [ ] Review Host, Guest, Broker, and common TLS source files for embedded certificate usage.
-    - [ ] Review package entrypoints and staged package behavior to identify shipped development certificate artifacts.
-    - [ ] Review existing common libraries for reusable TLS option/type helpers before adding new code.
-    - [ ] Review `conductor/known-solutions.md` before choosing recovery paths for any recognizable validation, test, or tooling failures encountered during this phase.
-    - [ ] Record deduplication/common-library findings in this plan.
-- [ ] Task: Add failing tests for Host TLS options
-    - [ ] Add tests proving Host accepts direct PEM `cert`/`key` options.
-    - [ ] Add tests proving Host accepts `certFile`/`keyFile` path options.
-    - [ ] Add tests proving Host fails clearly when required certificate/key material is missing or invalid.
-    - [ ] Run the narrowest relevant test command and confirm failures are for missing TLS option support.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Add failing tests for Guest and Broker trust options
-    - [ ] Add tests proving Guest and Broker accept direct `ca` options.
-    - [ ] Add tests proving Guest and Broker accept `caFile` path options.
-    - [ ] Add tests proving Guest and Broker no longer pin a bundled development CA by default.
-    - [ ] Add/confirm coverage that local Guest HTTP/1 handlers remain plain `node:http` handlers without HTTPS requirements.
-    - [ ] Run the narrowest relevant test command and confirm failures are for missing trust option support or current pinned dev CA behavior.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Add failing tests for removal of shipped development certificate
-    - [ ] Add tests or package-readiness assertions proving runtime source/package exports do not include the embedded development certificate/private key.
-    - [ ] Ensure any test certificate fixture is under a test-only path.
-    - [ ] Run the narrowest relevant test command and confirm failures reflect current shipped runtime development certificate usage.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Oracle review for Phase 1
-    - [ ] Delegate a read-only review to `@oracle` for test coverage, API direction, and risk before implementation.
-    - [ ] Apply accepted suggestions or record why suggestions are deferred.
-    - [ ] Commit the completed phase with validation, known-solutions/error-handling notes, and review notes.
+- [x] Task: Audit current TLS implementation and package exports
+    - [x] Review Host, Guest, Broker, and common TLS source files for embedded certificate usage.
+    - [x] Review package entrypoints and staged package behavior to identify shipped development certificate artifacts.
+    - [x] Review existing common libraries for reusable TLS option/type helpers before adding new code.
+    - [x] Review `conductor/known-solutions.md` before choosing recovery paths for any recognizable validation, test, or tooling failures encountered during this phase.
+    - [x] Record deduplication/common-library findings in this plan.
+- [x] Task: Add failing tests for Host TLS options
+    - [x] Add tests proving Host accepts direct PEM `cert`/`key` options.
+    - [x] Add tests proving Host accepts `certFile`/`keyFile` path options.
+    - [x] Add tests proving Host fails clearly when required certificate/key material is missing or invalid.
+    - [x] Run the narrowest relevant test command and confirm failures are for missing TLS option support.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Add failing tests for Guest and Broker trust options
+    - [x] Add tests proving Guest and Broker accept direct `ca` options.
+    - [x] Add tests proving Guest and Broker accept `caFile` path options.
+    - [x] Add tests proving Guest and Broker no longer pin a bundled development CA by default.
+    - [x] Add/confirm coverage that local Guest HTTP/1 handlers remain plain `node:http` handlers without HTTPS requirements.
+    - [x] Run the narrowest relevant test command and confirm failures are for missing trust option support or current pinned dev CA behavior.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Add failing tests for removal of shipped development certificate
+    - [x] Add tests or package-readiness assertions proving runtime source/package exports do not include the embedded development certificate/private key.
+    - [x] Ensure any test certificate fixture is under a test-only path.
+    - [x] Run the narrowest relevant test command and confirm failures reflect current shipped runtime development certificate usage.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Oracle review for Phase 1
+    - [x] Delegate a read-only review to `@oracle` for test coverage, API direction, and risk before implementation.
+    - [x] Apply accepted suggestions or record why suggestions are deferred.
+    - [x] Commit the completed phase with validation, known-solutions/error-handling notes, and review notes.
+
+Phase 1 notes: audit found runtime development certificate usage in Host, Guest, Broker, and `@signicode/verser-common` exports. Added `test/tls-configuration.test.js` with direct PEM, file path, missing-key, Guest CA, Broker CA, and plain local HTTP/1 assertions plus package export/source assertions in `test/packages.test.js`. Red validation command `node --test "test/tls-configuration.test.js" "test/packages.test.js"` fails as expected: package still exposes `createDevelopmentTlsCertificate`, Host ignores configured fixture cert/key and accepts missing key, and Guest/Broker still fail with `DEPTH_ZERO_SELF_SIGNED_CERT` because configured CA is ignored. Initial red validation timed out due lingering failed TLS sessions; this matched the known Node test-hang recovery guidance, and cleanup was fixed by destroying sessions/closing servers. Deduplication/common-library note: TLS normalization and file loading are shared Host/Guest/Broker concerns and should be centralized in common runtime code, but test certificate material must remain under `test/fixtures/tls` only.
+
+Oracle review: applied high/medium suggestions before the phase commit. Removed the contradictory expected `createDevelopmentTlsCertificate` export from `test/packages.test.js`, added no-default-CA red tests using a test-only copy of the legacy development cert, added broader Host missing TLS/cert/key validation red tests, added a runtime source scan for development certificate symbols, and switched normal fixture connections to `127.0.0.1` to avoid `localhost` IPv6 flakes. Updated red validation command `npm run build && node --test "test/tls-configuration.test.js" "test/packages.test.js"` builds successfully and fails as expected with 13 red assertions covering removed common export/source symbols, Host config validation/wiring, Guest/Broker CA wiring, and default Node trust behavior.
 
 ## Phase 2: Implement shared TLS option types and runtime wiring
 
