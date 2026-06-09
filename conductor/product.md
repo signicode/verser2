@@ -6,11 +6,12 @@
 
 ## Product Vision
 
-`verser2` is a reverse HTTP connectivity package that lets connected processes call HTTP/1 servers running inside client-side processes, even when those client-side servers cannot open listening ports. It provides a low-friction way to expose local, sandboxed, NAT-restricted, or agent-hosted services through outbound connections while preserving familiar HTTP semantics.
+`verser2` is a reverse HTTP connectivity package that lets connected processes call HTTP/1 servers and ASGI applications running inside client-side processes, even when those client-side services cannot open listening ports. It provides a low-friction way to expose local, sandboxed, NAT-restricted, or agent-hosted services through outbound connections while preserving familiar HTTP semantics.
 
 ## Target Users
 
 - Node.js developers who want to embed ordinary HTTP server handlers in processes that cannot accept inbound connections.
+- Python developers who want to expose ASGI 3 applications, including FastAPI-compatible or Starlette-compatible apps, from processes that cannot accept inbound connections.
 - Agent platform teams running local development agents, sandboxed runtimes, worker processes, or containers that can connect outbound but cannot receive direct inbound traffic.
 - Package maintainers extending the Host, Guest, Broker, Peer, or shared common library APIs while keeping implementation details reusable across packages.
 - Teams planning future guest implementations in other languages after the TypeScript/Node foundation is stable.
@@ -26,16 +27,17 @@ The product uses the repo nomenclature:
 
 ## Initial Milestone
 
-The first milestone established the TypeScript/Node.js package foundation and a minimal Host/Guest/Broker request path:
+The implemented foundation includes the TypeScript/Node.js package path and a Python ASGI Guest:
 
 - A shared `@signicode/verser-common` package for reusable protocol-neutral primitives, types, constants, and helpers.
 - A configurable TLS HTTP/2 Host that accepts outbound Guest and Broker connections, registers routed domains, and advertises route updates.
 - A Node Guest that owns or receives a normal `http.Server` or request listener without calling `listen()`.
+- A Python Guest that connects outbound to the existing Host and dispatches routed requests into an ASGI 3 app without opening an inbound port.
 - A Broker that can route requests through the Host into a connected Guest's local HTTP/1 handler.
 - A minimal plain `node:http` Agent path for Host-advertised domains.
 - End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
 
-Current MVP limitations are documented in the README: HTTP/3, non-Node guests, advanced Agent behavior, authentication, authorization, and public gateway policy are future track work.
+Current MVP limitations are documented in the README: HTTP/3, browser/Bun/Rust/Go/Java guests, Python Host/Broker behavior, advanced Agent behavior, authentication, authorization, and public gateway policy are future track work.
 
 ## Product Principles
 
@@ -44,7 +46,7 @@ Current MVP limitations are documented in the README: HTTP/3, non-Node guests, a
 - **Streaming support:** Request and response bodies should preserve streaming behavior where the selected transport supports it.
 - **Shared foundations:** Reusable solution code belongs in common packages before it is duplicated across Host, Guest, Broker, Peer, or runtime-specific packages.
 - **Transport incrementality:** Transport behavior, multiplexing, routing, and HTTP/3 support should be introduced only by explicit implementation tracks, not by scaffold or documentation-only work.
-- **Incremental language expansion:** TypeScript/Node is the primary implementation target. Browser, Bun, Python, Rust, Go, and Java guests belong on the roadmap after the core model is proven.
+- **Incremental language expansion:** TypeScript/Node is the primary implementation target and Python ASGI Guest support is implemented. Browser, Bun, Rust, Go, and Java guests belong on the roadmap after the core model is proven.
 
 ## Primary Use Cases
 
@@ -64,6 +66,7 @@ Current MVP limitations are documented in the README: HTTP/3, non-Node guests, a
 ## Success Criteria
 
 - A Node guest can attach a normal HTTP/1 server without opening a port.
+- A Python guest can attach an ASGI 3 application without opening a port.
 - A connected peer can issue a request through the host to that guest server.
 - Method, path, headers, request body, status, response headers, and response body are preserved.
 - Shared primitives needed by multiple packages are provided by `@signicode/verser-common` instead of duplicated in package-local implementations.
