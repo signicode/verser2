@@ -29,24 +29,36 @@ Phase 0 validation notes:
 
 ## Phase 1: Package Scaffold and Tooling Integration
 
-- [ ] Task: Confirm package boundaries, tooling, and shared protocol inputs
-    - [ ] Review `@signicode/verser-common`, `packages/verser2-guest-node`, and Host registration/request routing behavior for reusable protocol definitions and parity targets.
-    - [ ] Confirm the Python package is scoped to Guest behavior plus a practical request/fetch helper only if it fits the first slice.
-    - [ ] Record any protocol or tooling assumptions in package documentation or track notes.
-- [ ] Task: Write failing scaffold/package-recognition tests
-    - [ ] Add or update repository tests that expect `packages/verser2-guest-python` to be recognized by package tooling.
-    - [ ] Add package-level Python command smoke tests or script checks that fail until package metadata/scripts exist.
-    - [ ] Run the narrowest relevant test command and confirm failure for the expected missing-package reason.
-- [ ] Task: Implement Python package scaffold
-    - [ ] Add `packages/verser2-guest-python/package.json` with repo-compatible scripts for build, test, lint/type checks, and package validation.
-    - [ ] Add Python packaging metadata such as `pyproject.toml`, source layout, test layout, README/example placeholders, and environment setup using `uv`/venv tooling.
-    - [ ] Update repository package lists/scripts/tests that currently assume four packages.
-    - [ ] Update `conductor/tech-stack.md` to move Python Guest from roadmap-only to active implemented package target when behavior is implemented in later phases.
-- [ ] Task: Validate package scaffold
-    - [ ] Run the narrowest package-recognition and scaffold tests.
-    - [ ] Run applicable package build/stage checks impacted by the new package metadata.
-    - [ ] Record any intentionally deferred Python package publishing behavior.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Package Scaffold and Tooling Integration' (Protocol in workflow.md)
+- [x] Task: Confirm package boundaries, tooling, and shared protocol inputs
+    - [x] Review `@signicode/verser-common`, `packages/verser2-guest-node`, and Host registration/request routing behavior for reusable protocol definitions and parity targets.
+    - [x] Confirm the Python package is scoped to Guest behavior plus a practical request/fetch helper only if it fits the first slice.
+    - [x] Record any protocol or tooling assumptions in package documentation or track notes.
+- [x] Task: Write failing scaffold/package-recognition tests
+    - [x] Add or update repository tests that expect `packages/verser2-guest-python` to be recognized by package tooling.
+    - [x] Add package-level Python command smoke tests or script checks that fail until package metadata/scripts exist.
+    - [x] Run the narrowest relevant test command and confirm failure for the expected missing-package reason.
+- [x] Task: Implement Python package scaffold
+    - [x] Add `packages/verser2-guest-python/package.json` with repo-compatible scripts for build, test, lint/type checks, and package validation.
+    - [x] Add Python packaging metadata such as `pyproject.toml`, source layout, test layout, README/example placeholders, and environment setup using `uv`/venv tooling.
+    - [x] Update repository package lists/scripts/tests that currently assume four packages.
+    - [x] Defer `conductor/tech-stack.md` movement from roadmap-only to active implemented package target until behavior is implemented in later phases.
+- [x] Task: Validate package scaffold
+    - [x] Run the narrowest package-recognition and scaffold tests.
+    - [x] Run applicable package build/stage checks impacted by the new package metadata.
+    - [x] Record any intentionally deferred Python package publishing behavior.
+- [~] Task: Conductor - User Manual Verification 'Phase 1: Package Scaffold and Tooling Integration' (Protocol in workflow.md)
+
+Phase 1 validation notes:
+- Common library scan: reviewed `@signicode/verser-common` exports and Node Guest/Host registration and leased request protocol; no common code changes were needed for scaffold-only work.
+- Protocol assumptions: Python Guest will mirror current Guest registration via `/verser/register`, Guest control stream `/verser/guest/control`, leased streams at `/verser/guest/lease`, versioned request/response/error envelopes, and shared lifecycle/error terminology. Python-local protocol copies are deferred until Phase 2 implementation.
+- Tooling assumptions: the Python package participates in npm workspace discovery through `package.json`, exposes a `python -m venv .venv` environment setup script, uses Python `unittest` and `compileall` for initial package-level checks, and creates npm-compatible `dist/index.js`, `dist/index.d.ts`, and `dist/LICENSE` artifacts for existing staging/consumer tooling.
+- Package scope: Guest behavior is in scope; a Python-side request/fetch helper remains deferred unless it fits a later first-slice implementation. Python Host, full Python Broker, HTTP/3, authentication, authorization, and public gateway policy remain out of scope.
+- Failing test confirmation: `node --test test/python-guest-package-scaffold.test.js` failed before scaffold implementation because `packages/verser2-guest-python/package.json` and `pyproject.toml` were missing.
+- Validation passed: `node --test test/python-guest-package-scaffold.test.js`; `npm run test --workspace=@signicode/verser2-guest-python`; `npm run lint --workspace=@signicode/verser2-guest-python`; `npm run build && npm run stage:packages && node --test test/python-guest-package-scaffold.test.js test/package-publish-readiness.test.js`; `npm run test:package-consumers -- --source=source`; `npm run test:package-consumers -- --source=staging`; `npm run test:package-consumers -- --source=tarball`; `node --test test/package-consumer-imports.test.js`; `npm run test:package-tarballs`; `npm run lint`.
+- Validation failure recovered: staging initially failed because `dist/LICENSE` was missing for the Python package; fixed the session-introduced build script to copy the root license into `dist/LICENSE`.
+- Publishing behavior: npm package staging, dry-run packing, consumer import checks, and tarball behavior tests now include the Python package's npm shim. Real Python wheel publishing remains deferred; current `pyproject.toml` establishes metadata only.
+- Deduplication review: no duplicated implementation logic was introduced; package enumeration remains local to existing package tooling scripts/tests and will be revisited if repeated package metadata becomes harder to maintain.
+- Coverage: meaningful coverage for Phase 1 scaffold is covered by focused Node scaffold tests and Python `unittest`; no numeric coverage command was run for scaffold-only metadata.
 
 ## Phase 2: ASGI Guest Core and Host Protocol Connection
 

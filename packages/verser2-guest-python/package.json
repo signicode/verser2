@@ -1,0 +1,16 @@
+{
+  "name": "@signicode/verser2-guest-python",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Python ASGI Guest package for Verser2.",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "venv": "python -m venv .venv",
+    "test": "PYTHONPATH=src python -m unittest discover -s tests",
+    "lint": "python -m compileall -q src tests examples"
+  },
+  "files": ["dist", "LICENSE", "README.md", "pyproject.toml", "src"]
+}

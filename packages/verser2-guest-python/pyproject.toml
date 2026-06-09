@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "verser2-guest-python"
+version = "0.0.0"
+description = "Python ASGI Guest package for Verser2."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Signicode" }]
+dependencies = []
+
+[tool.verser2]
+node-package = "@signicode/verser2-guest-python"
+role = "guest"
+app-interface = "ASGI 3"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/verser2_guest_python"]
