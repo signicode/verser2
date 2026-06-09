@@ -4,17 +4,17 @@
 
 `verser2` is configured as an npm workspace monorepo using `packages/*` for package implementations and `test/` for tests.
 
-Implemented TypeScript/Node package targets:
+Implemented package targets:
 
 - `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, certificate fingerprint helpers, and TLS option normalization helpers for Verser packages.
 - `@signicode/verser2-host` in `packages/verser2-host`: Configurable TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, routed-domain advertisements, route cleanup, certificate reload support, and Broker request forwarding.
 - `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, configurable Host TLS trust, and minimal plain `node:http` Agent implementation.
+- `@signicode/verser2-guest-python` in `packages/verser2-guest-python`: Python ASGI Guest implementation using `uv` for Python package commands and the `h2` library for outbound TLS HTTP/2 Guest registration, control, leased request dispatch, ASGI `scope`/`receive`/`send`, and request/response body streaming.
 
 Future package targets:
 
 - `packages/verser2-guest-browser`: Browser Guest library using Fetch API concepts.
 - `packages/verser2-guest-bun`: Bun Guest library compatible with `Bun.serve` concepts.
-- `packages/verser2-guest-python`: Python Guest library with ASGI compatibility goals.
 - `packages/verser2-guest-rust`: Rust Guest library with Hyper compatibility goals.
 - `packages/verser2-guest-go`: Go Guest library compatible with `net/http` concepts.
 - `packages/verser2-guest-java`: Java Guest library using `net.httpserver` or similar concepts.
@@ -32,11 +32,13 @@ Future package targets:
 - Node.js `node:http` for local HTTP/1 server compatibility and the MVP Broker-backed plain HTTP Agent.
 - Node.js `node:http2` for the current TLS HTTP/2 Host, Guest, and Broker transport.
 - Shared TypeScript package code through `@signicode/verser-common`.
+- Python `asyncio` plus `h2` for the Python ASGI Guest outbound TLS HTTP/2 transport.
 - HTTP/3 behavior only when introduced by explicit future tracks.
 
 ## Tooling
 
 - Package manager: npm.
+- Python package command runner: `uv` for `packages/verser2-guest-python` commands and dependency resolution.
 - Build command: `npm run build`.
 - Package staging command: `npm run stage:packages`, which writes publish-ready package directories under `dist/packages` from built workspace artifacts.
 - Package consumer validation command: `npm run test:package-consumers -- --source=<source|staging|tarball|github>`.

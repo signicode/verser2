@@ -8,12 +8,13 @@ It lets a client process host an HTTP/1 server without opening a listening port,
 
 This repository is an npm workspace monorepo using `packages/*`.
 
-Implemented TypeScript packages:
+Implemented packages:
 
 - `@signicode/verser-common` in `packages/verser-common`
 - `@signicode/verser2-guest-js-common` in `packages/verser2-guest-js-common`
 - `@signicode/verser2-host` in `packages/verser2-host`
 - `@signicode/verser2-guest-node` in `packages/verser2-guest-node`
+- `@signicode/verser2-guest-python` in `packages/verser2-guest-python`
 
 Install dependencies:
 
@@ -236,6 +237,61 @@ const streamResponse = await fetch('http://client-json.local.test/upload', {
 
 console.log(streamResponse.status);
 ```
+
+## Python ASGI Guest usage
+
+`@signicode/verser2-guest-python` exposes a Python ASGI Guest that connects
+outbound to the existing Verser2 Host and serves an ASGI 3 app without opening
+an inbound listening port. The package uses `uv` for Python command execution
+and the `h2` library for the TLS HTTP/2 Guest transport.
+
+```py
+import asyncio
+from verser2_guest_python import create_verser_guest
+
+
+async def app(scope, receive, send):
+    body = b""
+    while True:
+        event = await receive()
+        body += event.get("body", b"")
+        if not event.get("more_body", False):
+            break
+
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"text/plain")],
+        }
+    )
+    await send({"type": "http.response.body", "body": b"Handled " + body})
+
+
+async def main():
+    guest = create_verser_guest(
+        host_url="https://localhost:8443",
+        guest_id="python-client-a",
+        app=app,
+        routed_domains=["python-client-a.local.test"],
+        tls_ca_file="/etc/verser/ca.crt",
+    )
+    await guest.connect()
+    await asyncio.Event().wait()
+
+
+asyncio.run(main())
+```
+
+FastAPI-compatible and Starlette-compatible apps can be attached because the
+Guest calls the normal ASGI 3 `app(scope, receive, send)` interface. FastAPI is
+not a required runtime dependency of the package.
+
+Python Guest streaming support maps routed request body chunks to ASGI
+`http.request` events and sends ASGI `http.response.body` chunks back through the
+Host lease stream. Current Python Guest limits: one minimal HTTP/2 session path,
+no Python Host, no full Python Broker, no Python-side fetch helper yet, no
+HTTP/3, and no built-in authentication/authorization policy.
 
 ### Transport notes
 
