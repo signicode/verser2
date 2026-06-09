@@ -128,14 +128,14 @@ Oracle review: no release blockers. Applied accepted documentation suggestions b
     - [x] Push all completed phase commits to the track PR branch.
     - [x] Confirm PR description still reflects the full plan goals and final TO-BE state, not only the initial commit or latest commit.
     - [x] Confirm PR checks or local equivalents have run as required.
-- [~] Task: Conductor - User Manual Verification 'Phase 4: Final PR push and manual verification' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Final PR push and manual verification' (Protocol in workflow.md)
     - [x] Ask the user to manually verify the final code on the PR branch before close-out and merge.
-    - [ ] Record the manual verification result in this plan.
-- [ ] Task: Close-out readiness
-    - [ ] Confirm no unresolved oracle suggestions remain.
-    - [ ] Confirm no skipped validation remains unexplained.
-    - [ ] Confirm all encountered validation/tool failures were classified and handled according to `workflow.md` and `conductor/known-solutions.md` guidance.
-    - [ ] Confirm the PR is ready for final review/merge according to repository policy.
+    - [x] Record the manual verification result in this plan.
+- [x] Task: Close-out readiness
+    - [x] Confirm no unresolved oracle suggestions remain.
+    - [x] Confirm no skipped validation remains unexplained.
+    - [x] Confirm all encountered validation/tool failures were classified and handled according to `workflow.md` and `conductor/known-solutions.md` guidance.
+    - [x] Confirm the PR is ready for final review/merge according to repository policy.
 
 Phase 4 notes: pushed completed phase commits through `0b391b8` to PR https://github.com/signicode/verser2/pull/6. PR title and description still describe the full configurable TLS TO-BE state, not a single commit. Local equivalents completed: `npm test` passed 146/146, `npm run test:package-tarballs` passed 42/42, package readiness/export tests passed, docs test passed, and `npm run lint` passed. GitHub PR check `Build, stage, pack, and consume without publishing` is pending at the time of manual verification request.
 
@@ -173,3 +173,5 @@ Phase 5 notes: implemented the accepted PR review fixes and expanded certificate
 Oracle Phase 5 review: no runtime/security blockers. Non-blocking suggestions were addressed before final validation by making generated fixture creation race-safe, switching dynamic test Host URLs to `127.0.0.1` to avoid localhost IPv6 flakes while retaining SAN coverage, and documenting reload error handling plus new-handshake behavior. Validation notes: focused command `npm run build && npm run stage:packages && node --test "test/tls-configuration.test.js" "test/end-to-end.test.js" && npm run test:package-tarballs` passed, `npm run lint` passed, and final `npm test` passed 155/155. Encountered failures: a raw direct run of `test/package-tarball/behavior.test.cjs` failed because that test expects installed tarball/node_modules context; the proper `npm run test:package-tarballs` command passed. A clean generated-fixture tarball validation initially failed because the lock directory parent did not exist in the temp consumer; fixed by creating the parent before acquiring the lock, then the same focused validation passed. A full-test run then exposed preexisting nondeterministic lifecycle ordering in `test/host.test.js`; fixed by asserting event counts and final route advertisement instead of assuming connected/registered interleaving, and focused Host validation plus final `npm test` passed.
 
 Phase 5 follow-up note: clarified `conductor/workflow.md` PR guidance so track PRs are created and edited with real multiline Markdown via `gh pr create --body-file` / `gh pr edit --body-file`, avoiding literal escaped `\n` sequences that GitHub renders as one line and may turn into a single large heading. Rewrote PR #6's description using a temporary Markdown body file so the current review surface has proper Markdown line breaks and includes the expanded TLS passphrase, key-permission, generated-fixture, and certificate reload scope.
+
+Close-out note: user manually verified the PR branch and replied “Verified.” PR check `Build, stage, pack, and consume without publishing` is passing, while `Publish to GitHub Packages` is skipped as expected for a pull request. No unresolved oracle blockers remain, all encountered validation/tool failures are recorded above with recovery, and the PR is ready for final review/merge according to repository policy.
