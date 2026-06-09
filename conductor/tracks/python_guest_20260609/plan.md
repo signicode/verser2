@@ -25,6 +25,7 @@ Phase 0 validation notes:
 - Deduplication review: no code changes in this phase.
 - Coverage: not applicable for this setup-only phase.
 - Manual verification: confirmed by user.
+- Phase checkpoint commit: `233a66e`.
 
 ## Phase 1: Package Scaffold and Tooling Integration
 
