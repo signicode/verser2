@@ -8,6 +8,7 @@ const packageNames = [
   '@signicode/verser2-guest-js-common',
   '@signicode/verser2-host',
   '@signicode/verser2-guest-node',
+  '@signicode/verser2-guest-python',
 ];
 
 test('consumer-imports: tarball packages resolve by package name', () => {
