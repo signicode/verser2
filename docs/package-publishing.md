@@ -62,6 +62,7 @@ node --test test/package-publish-readiness.test.js
 npm run test:package-consumers -- --source=source
 npm run test:package-consumers -- --source=staging
 npm run test:package-consumers -- --source=tarball
+npm run test:package-tarballs
 ```
 
 The default test command also stages packages before running the repository test suite:
@@ -69,6 +70,33 @@ The default test command also stages packages before running the repository test
 ```sh
 npm test
 ```
+
+`npm run test:package-consumers -- --source=tarball` is an import-compatibility probe. It packs staged packages, installs them into a temporary consumer project, and verifies CJS, ESM, and TypeScript imports for each package.
+
+`npm run test:package-tarballs` is an automated behavior-test harness for packed artifacts. Build and stage packages first:
+
+```sh
+npm run build
+npm run stage:packages
+npm run test:package-tarballs
+```
+
+The tarball behavior harness:
+
+- packs all staged packages with `npm pack`;
+- installs those `.tgz` files into an isolated temporary consumer project;
+- runs checked-in Node `node:test` files from that temporary consumer;
+- sets `VERSER_TEST_PACKAGE_MODE=tarball` so reusable tests import `@signicode/*` packages by package name from `node_modules` instead of repository-relative `dist` paths;
+- reports included tarball-mode test groups and source-only exclusions.
+
+Current tarball-mode coverage includes:
+
+- consumer import/export shape for all staged packages;
+- existing common protocol and envelope tests from `test/common-protocol.test.js` and `test/common-envelope.test.js`;
+- existing Host, Node Guest, Broker, Agent, dispatcher/fetch, concurrent routing, and disconnect behavior from `test/end-to-end.test.js`;
+- a compact tarball-specific behavior check in `test/package-tarball/behavior.test.cjs`.
+
+Source-only exclusions remain covered by `npm test`. They include workflow/static metadata tests, package staging and version-policy tests that inspect repository files or generated staging metadata, and broader source suites whose purpose is not consumer-installed package behavior.
 
 Use GitHub Packages consumer validation only after packages have been published and credentials are available:
 
@@ -98,16 +126,18 @@ A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
 
 Behavior summary:
 
-- Pull requests to `main`: build, stage, pack, and run local package-consumer tests only. Pull-request workflow runs must never publish packages to GitHub Packages.
-- Pushes to `main`: run the same validation flow, compute a deterministic main-build version, and publish with `next` dist-tag. Pull-request commits do not publish; only accepted main updates publish SHA-labeled package versions.
-- Pushes for tags matching `v*`: run the same flow, publish the tag-decoded version using stable/pre-release dist-tags from policy.
+- Pull requests to `main`: build, stage, pack, run local package-consumer tests, and run automated tarball behavior tests. Pull-request workflow runs must never publish packages to GitHub Packages.
+- Pushes to `main`: run the same validation flow, compute a deterministic main-build version, re-run staged, import-only tarball, and automated tarball behavior tests after applying that version, then publish with `next` dist-tag. Pull-request commits do not publish; only accepted main updates publish SHA-labeled package versions.
+- Pushes for tags matching `v*`: run the same flow, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish using stable/pre-release dist-tags from policy.
 
 For both publish paths, the workflow:
 
 - Uses `actions/setup-node` with `registry-url: https://npm.pkg.github.com` and `scope: @signicode`.
 - Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for publish.
 - Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
-- Re-runs staged and tarball consumer validation after applying the publish version so internal package dependencies point at the same published version.
+- Runs automated tarball behavior tests before the pull-request validation job completes.
+- Re-runs staged consumer validation, import-only tarball consumer validation, and automated tarball behavior tests after applying the publish version so internal package dependencies point at the same published version.
+- Runs automated tarball behavior tests before any `npm publish` command executes.
 - Optionally runs GitHub Packages consumer validation with `VERSER_RUN_GITHUB_CONSUMER_TESTS=1`.
 - Avoids `npm publish` to npmjs.org.
 

@@ -23,3 +23,9 @@ Cause: A `ClientRequest` was not given a socket, destroyed with an error, or end
 Solution: Reproduce with `--test-name-pattern` and `--test-timeout`; wrap each `http.request` helper in a timeout that calls `request.destroy(error)`; dump active handles on timeout; unit-test the Agent with a stub Broker before running Host/Broker/Guest integration tests.
 Constraints: Safe for Node `http.Agent`/custom `Duplex` socket debugging where non-matching routes must fail explicitly instead of falling back to DNS.
 Ignore-If: Do not use for hangs where all HTTP requests settle and active handles point to unrelated timers, files, child processes, or servers.
+
+Problem: `apply_patch` fails with `Prefix/suffix rescue was ambiguous` while editing Markdown or repeated examples.
+Cause: The patch context is too large or matches repeated nearby text, so the patch tool cannot determine a unique edit location.
+Solution: Re-read the target line range, then retry using smaller patches with unique local context or one section per patch.
+Constraints: Safe for non-destructive text/code edits when the intended file and section are known and the failed patch did not mutate files.
+Ignore-If: Do not use when the failure is caused by a missing file, unexpected file contents, or uncertainty about which repeated block should change.
