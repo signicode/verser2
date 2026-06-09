@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
+import struct
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -12,8 +13,8 @@ import h2.connection
 import h2.config
 import h2.events
 
-from .asgi import ASGIApp, DispatchResponse, dispatch_asgi_request
-from .protocol import decode_envelope, encode_envelope, normalize_headers
+from .asgi import ASGIApp, DispatchResponse, build_http_scope, dispatch_asgi_request
+from .protocol import VERSER_ENVELOPE_PREFIX_BYTES, decode_envelope, encode_envelope, normalize_headers
 
 
 class VerserGuest:
@@ -50,7 +51,7 @@ class VerserGuest:
         return self
 
     async def dispatch_routed_request(
-        self, metadata: dict[str, Any], body: bytes
+        self, metadata: dict[str, Any], body: bytes | list[bytes]
     ) -> DispatchResponse:
         if self.app is None:
             return DispatchResponse(
@@ -153,29 +154,136 @@ class VerserGuest:
         )
         await self._wait_for_success_response(stream_id)
         while not self._closed:
-            envelope_type, metadata, body = await self._read_request_envelope_and_body(stream_id)
-            if envelope_type != "request":
-                raise RuntimeError("Lease stream received a non-request envelope")
-            response = await self.dispatch_routed_request(metadata, body)
-            if response.error is not None:
-                await self._send_data(stream_id, encode_envelope("error", response.error), True)
-            else:
+            await self._dispatch_leased_request_stream(stream_id)
+            if not self._closed:
+                self._lease_tasks.append(asyncio.create_task(self._open_lease_stream()))
+            return
+
+    async def _dispatch_leased_request_stream(self, stream_id: int) -> None:
+        if self.app is None:
+            await self._send_data(
+                stream_id,
+                encode_envelope(
+                    "error",
+                    {
+                        "requestId": "",
+                        "code": "local-handler-failure",
+                        "message": "No ASGI app is attached",
+                        "context": {"guestId": self.guest_id},
+                    },
+                ),
+                True,
+            )
+            return
+
+        buffer = b""
+        metadata: dict[str, Any] | None = None
+        request_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        app_task: asyncio.Task[None] | None = None
+        response_started = False
+        response_ended = False
+
+        async def receive() -> dict[str, Any]:
+            return await request_events.get()
+
+        async def send(event: dict[str, Any]) -> None:
+            nonlocal response_started, response_ended
+            event_type = event.get("type")
+            if event_type == "http.response.start":
+                response_started = True
                 await self._send_data(
                     stream_id,
                     encode_envelope(
                         "response",
                         {
-                            "requestId": response.request_id,
-                            "statusCode": response.status_code,
-                            "headers": normalize_headers(response.headers),
+                            "requestId": str((metadata or {}).get("requestId") or ""),
+                            "statusCode": int(event.get("status") or 200),
+                            "headers": {
+                                name.decode("ascii", "ignore").lower(): value.decode("utf-8")
+                                for name, value in event.get("headers", [])
+                            },
                         },
-                    )
-                    + response.body,
+                    ),
+                    False,
+                )
+                return
+            if event_type == "http.response.body":
+                more_body = bool(event.get("more_body", False))
+                response_ended = not more_body
+                await self._send_data(stream_id, bytes(event.get("body") or b""), not more_body)
+
+        async def run_app() -> None:
+            nonlocal response_ended
+            assert metadata is not None
+            try:
+                await self.app(build_http_scope(metadata), receive, send)
+            except Exception as error:  # noqa: BLE001 - app exceptions become protocol errors.
+                if response_started:
+                    if not response_ended:
+                        await self._send_data(stream_id, b"", True)
+                    return
+                await self._send_data(
+                    stream_id,
+                    encode_envelope(
+                        "error",
+                        {
+                            "requestId": str(metadata.get("requestId") or ""),
+                            "code": "local-handler-failure",
+                            "message": str(error),
+                            "context": {
+                                "guestId": self.guest_id,
+                                "requestId": str(metadata.get("requestId") or ""),
+                                "path": str(metadata.get("path") or ""),
+                            },
+                        },
+                    ),
                     True,
                 )
-            if not self._closed:
-                self._lease_tasks.append(asyncio.create_task(self._open_lease_stream()))
-            return
+                response_ended = True
+                return
+            if not response_ended:
+                if not response_started:
+                    await send({"type": "http.response.start", "status": 200, "headers": []})
+                await self._send_data(stream_id, b"", True)
+                response_ended = True
+
+        def try_start_app() -> None:
+            nonlocal buffer, metadata, app_task
+            if metadata is not None or len(buffer) < VERSER_ENVELOPE_PREFIX_BYTES:
+                return
+            metadata_length = struct.unpack(">I", buffer[2:6])[0]
+            envelope_end = VERSER_ENVELOPE_PREFIX_BYTES + metadata_length
+            if len(buffer) < envelope_end:
+                return
+            envelope_type, parsed_metadata, remainder = decode_envelope(buffer[:envelope_end])
+            if envelope_type != "request":
+                raise RuntimeError("Lease stream received a non-request envelope")
+            metadata = parsed_metadata
+            buffer = b""
+            if remainder:
+                request_events.put_nowait(
+                    {"type": "http.request", "body": remainder, "more_body": True}
+                )
+            app_task = asyncio.create_task(run_app())
+
+        while True:
+            event = await self._events[stream_id].get()
+            if isinstance(event, h2.events.DataReceived):
+                if metadata is None:
+                    buffer += event.data
+                    try_start_app()
+                else:
+                    request_events.put_nowait(
+                        {"type": "http.request", "body": event.data, "more_body": True}
+                    )
+            if isinstance(event, h2.events.StreamEnded):
+                try_start_app()
+                request_events.put_nowait({"type": "http.request", "body": b"", "more_body": False})
+                break
+
+        if app_task is None:
+            raise RuntimeError("Lease stream ended before request metadata arrived")
+        await app_task
 
     async def _send_headers(self, headers: list[tuple[str, str]], end_stream: bool) -> int:
         conn = self._require_conn()

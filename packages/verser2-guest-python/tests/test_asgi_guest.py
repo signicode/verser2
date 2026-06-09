@@ -94,6 +94,84 @@ class AsgiDispatchTest(unittest.TestCase):
         self.assertEqual(response.error["context"]["requestId"], "req-python-error")
         self.assertEqual(response.error["context"]["path"], "/explode")
 
+    def test_dispatch_routed_request_streams_request_chunks_to_receive(self) -> None:
+        received = []
+
+        async def app(scope, receive, send):
+            while True:
+                event = await receive()
+                received.append(event)
+                if not event.get("more_body", False):
+                    break
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1",
+            guest_id="python-stream-request",
+            app=app,
+        )
+
+        response = asyncio.run(
+            guest.dispatch_routed_request(
+                {
+                    "requestId": "req-python-stream-request",
+                    "sourceId": "broker-unit",
+                    "targetId": "python-stream-request",
+                    "method": "POST",
+                    "path": "/stream",
+                    "headers": {},
+                },
+                [b"one", b"two"],
+            )
+        )
+
+        self.assertEqual(
+            received,
+            [
+                {"type": "http.request", "body": b"one", "more_body": True},
+                {"type": "http.request", "body": b"two", "more_body": False},
+            ],
+        )
+        self.assertEqual(response.body, b"ok")
+
+    def test_dispatch_routed_request_collects_streamed_response_body_chunks(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 202,
+                    "headers": [(b"x-stream", b"yes")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"one-", "more_body": True})
+            await send({"type": "http.response.body", "body": b"two", "more_body": False})
+
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1",
+            guest_id="python-stream-response",
+            app=app,
+        )
+
+        response = asyncio.run(
+            guest.dispatch_routed_request(
+                {
+                    "requestId": "req-python-stream-response",
+                    "sourceId": "broker-unit",
+                    "targetId": "python-stream-response",
+                    "method": "GET",
+                    "path": "/stream-response",
+                    "headers": {},
+                },
+                b"",
+            )
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.headers, {"x-stream": "yes"})
+        self.assertEqual(response.body, b"one-two")
+
 
 class ProtocolEnvelopeTest(unittest.TestCase):
     def test_encode_response_envelope_matches_verser_prefix(self) -> None:
