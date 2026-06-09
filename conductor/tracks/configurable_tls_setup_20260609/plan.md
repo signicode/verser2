@@ -51,42 +51,46 @@ Oracle review: applied high/medium suggestions before the phase commit. Removed 
 
 ## Phase 2: Implement shared TLS option types and runtime wiring
 
-- [ ] Task: Implement shared TLS option helpers where appropriate
-    - [ ] Add or adapt reusable TLS option types in `@signicode/verser-common` for direct PEM values and file path inputs.
-    - [ ] Add deterministic file-loading/normalization helpers if they are shared across Host, Guest, and Broker.
-    - [ ] Keep helpers protocol-neutral and avoid shipping test certificates from common runtime exports.
-    - [ ] Run focused common package tests/build validation.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Implement Host TLS configuration
-    - [ ] Extend `VerserHostOptions` with TLS certificate/key configuration.
-    - [ ] Wire normalized certificate/key material into `http2.createSecureServer()`.
-    - [ ] Remove Host dependency on `createDevelopmentTlsCertificate()`.
-    - [ ] Ensure missing/invalid Host certificate/key errors are clear and covered by tests.
-    - [ ] Run focused Host TLS tests and build validation.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Implement Guest and Broker trust configuration
-    - [ ] Extend `VerserNodeGuestOptions` and `VerserBrokerOptions` with TLS trust configuration.
-    - [ ] Wire normalized CA material into `http2.connect()` only when provided.
-    - [ ] Remove Guest and Broker dependency on the pinned development CA.
-    - [ ] Preserve default Node.js TLS trust behavior when no custom CA is configured.
-    - [ ] Preserve local plain HTTP/1 Guest handler dispatch behavior.
-    - [ ] Run focused Guest/Broker TLS tests and build validation.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Move development certificate material to test-only fixtures
-    - [ ] Relocate or replace the embedded development certificate/private key with test fixture material outside runtime package sources.
-    - [ ] Update existing tests to load fixture certificate material explicitly through the new TLS options.
-    - [ ] Confirm package source exports no longer expose development certificate helpers.
-    - [ ] Run focused tests that previously relied on the bundled development certificate.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Deduplicate and refactor TLS implementation
-    - [ ] Review changed Host, Guest, Broker, and common code for duplicated TLS normalization or file-loading logic.
-    - [ ] Move repeated runtime-neutral code into `@signicode/verser-common`.
-    - [ ] Keep package-specific adapters thin and type-safe.
-    - [ ] Record the deduplication result and coverage note in this plan.
-- [ ] Task: Oracle review for Phase 2
-    - [ ] Delegate a code/API review to `@oracle` for maintainability, API shape, security defaults, and YAGNI concerns.
-    - [ ] Apply accepted suggestions or record why suggestions are deferred.
-    - [ ] Commit the completed phase with validation, known-solutions/error-handling notes, and review notes.
+- [x] Task: Implement shared TLS option helpers where appropriate
+    - [x] Add or adapt reusable TLS option types in `@signicode/verser-common` for direct PEM values and file path inputs.
+    - [x] Add deterministic file-loading/normalization helpers if they are shared across Host, Guest, and Broker.
+    - [x] Keep helpers protocol-neutral and avoid shipping test certificates from common runtime exports.
+    - [x] Run focused common package tests/build validation.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Implement Host TLS configuration
+    - [x] Extend `VerserHostOptions` with TLS certificate/key configuration.
+    - [x] Wire normalized certificate/key material into `http2.createSecureServer()`.
+    - [x] Remove Host dependency on `createDevelopmentTlsCertificate()`.
+    - [x] Ensure missing/invalid Host certificate/key errors are clear and covered by tests.
+    - [x] Run focused Host TLS tests and build validation.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Implement Guest and Broker trust configuration
+    - [x] Extend `VerserNodeGuestOptions` and `VerserBrokerOptions` with TLS trust configuration.
+    - [x] Wire normalized CA material into `http2.connect()` only when provided.
+    - [x] Remove Guest and Broker dependency on the pinned development CA.
+    - [x] Preserve default Node.js TLS trust behavior when no custom CA is configured.
+    - [x] Preserve local plain HTTP/1 Guest handler dispatch behavior.
+    - [x] Run focused Guest/Broker TLS tests and build validation.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Move development certificate material to test-only fixtures
+    - [x] Relocate or replace the embedded development certificate/private key with test fixture material outside runtime package sources.
+    - [x] Update existing tests to load fixture certificate material explicitly through the new TLS options.
+    - [x] Confirm package source exports no longer expose development certificate helpers.
+    - [x] Run focused tests that previously relied on the bundled development certificate.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Deduplicate and refactor TLS implementation
+    - [x] Review changed Host, Guest, Broker, and common code for duplicated TLS normalization or file-loading logic.
+    - [x] Move repeated runtime-neutral code into `@signicode/verser-common`.
+    - [x] Keep package-specific adapters thin and type-safe.
+    - [x] Record the deduplication result and coverage note in this plan.
+- [x] Task: Oracle review for Phase 2
+    - [x] Delegate a code/API review to `@oracle` for maintainability, API shape, security defaults, and YAGNI concerns.
+    - [x] Apply accepted suggestions or record why suggestions are deferred.
+    - [x] Commit the completed phase with validation, known-solutions/error-handling notes, and review notes.
+
+Phase 2 notes: added shared TLS normalization/loading helpers in `@signicode/verser-common`, wired Host TLS cert/key and Guest/Broker optional CA trust through the public nested `tls` options, removed runtime development certificate source/export usage, and updated existing tests to use test-only TLS fixtures explicitly. Focused validation `npm run build && node --test "test/tls-configuration.test.js" "test/packages.test.js"` passed 18/18. Changed-area validation `node --test "test/host.test.js" "test/guest-node.test.js" "test/broker-routing.test.js" "test/end-to-end.test.js" "test/agent.test.js" "test/dispatcher.test.js" "test/common-protocol.test.js"` passed 80/80. `npm run lint` passed after Biome formatting/import-order fixes. Deduplication result: TLS option normalization and file loading are centralized in common helpers; Host, Guest, and Broker are thin adapters. Coverage note: changed behavior is covered by direct TLS option tests, default trust rejection tests, package source/export assertions, and existing Host/Guest/Broker integration suites; aggregate coverage is not measured by the current Node test runner setup.
+
+Oracle review: no blockers. Applied accepted medium suggestions by clearing Broker session/control-stream state on failed TLS connects and close, tightening the reconnect guard to ignore destroyed sessions, adding a sessionCount assertion for failed default-trust Broker connects, and changing TLS option types to stricter direct-vs-file union shapes for TypeScript callers while retaining runtime validation for JavaScript users. Low notes deferred to Phase 3 documentation: document that `ca` replaces Node's default CA set, and treat exported common TLS normalization helpers as deliberate shared package building blocks. Follow-up validation: `npm run build && node --test "test/tls-configuration.test.js" "test/packages.test.js"` passed 18/18, changed-area integration command passed 80/80, `npm run lint` passed, and package source scan found no runtime development certificate symbols.
 
 ## Phase 3: Documentation, package validation, and release-readiness checks
 

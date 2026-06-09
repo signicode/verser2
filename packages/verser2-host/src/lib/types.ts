@@ -4,12 +4,14 @@ import type {
   VerserPeerRole as CommonVerserPeerRole,
   RoutedDomainRegistration,
   VerserError,
+  VerserHostTlsOptions,
   VerserRegistrationRequest,
 } from '@signicode/verser-common';
 
 export interface VerserHostOptions {
   readonly port?: number;
   readonly host?: string;
+  readonly tls?: VerserHostTlsOptions;
 }
 
 export type VerserHostRegistrationRequest = VerserRegistrationRequest;

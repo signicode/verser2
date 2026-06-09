@@ -10,13 +10,13 @@ import {
   type VerserPeerRole,
   type VerserRegistrationResponse,
   createBrokerRoutesControlFrame,
-  createDevelopmentTlsCertificate,
   createPeerId,
   createRoutedDomainRegistration,
   createVerserError,
   decodeHeaderMap,
   encodeVerserEnvelope,
   flattenVerserHeaders,
+  normalizeServerTlsOptions,
   parseLeaseAcquireTimeoutMs,
   parseRegistrationRequest,
   readLeaseResponseMetadataFromStream,
@@ -100,7 +100,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
-    const certificate = createDevelopmentTlsCertificate();
+    const certificate = normalizeServerTlsOptions(this.options.tls);
     const server = http2.createSecureServer({
       cert: certificate.cert,
       key: certificate.key,
