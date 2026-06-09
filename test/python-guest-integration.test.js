@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
@@ -21,6 +22,23 @@ function readBody(stream) {
     stream.on('end', () => resolve(Buffer.concat(chunks)));
     stream.on('error', reject);
   });
+}
+
+function readFirstChunk(stream) {
+  return new Promise((resolve, reject) => {
+    stream.once('data', (chunk) => resolve(Buffer.from(chunk)));
+    stream.once('error', reject);
+    stream.once('end', () => reject(new Error('stream ended before first chunk')));
+  });
+}
+
+function withTimeout(promise, label, timeoutMs = 1_000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs),
+    ),
+  ]);
 }
 
 function waitForProcessOutput(process, pattern, label) {
@@ -103,6 +121,40 @@ test('Python ASGI Guest connects to Host and handles a basic routed Broker reque
       (await readBody(chunkedResponse.body)).toString('utf8'),
       'POST /from-broker x=2 chunks onetwo',
     );
+
+    const slowUpload = new PassThrough();
+    const earlyResponsePromise = broker.request({
+      targetId: 'python-guest-basic',
+      method: 'POST',
+      path: '/first-chunk',
+      headers: { 'x-input': 'stream-request' },
+      body: slowUpload,
+    });
+    slowUpload.write(Buffer.from('first'));
+    const earlyResponse = await withTimeout(
+      earlyResponsePromise,
+      'Python Guest response before request end',
+    );
+
+    assert.equal(earlyResponse.statusCode, 215);
+    assert.equal((await readBody(earlyResponse.body)).toString('utf8'), 'first:first');
+    slowUpload.end(Buffer.from('second'));
+
+    const slowResponse = await broker.request({
+      targetId: 'python-guest-basic',
+      method: 'POST',
+      path: '/slow-response',
+      headers: { 'x-input': 'stream-response' },
+      body: [Buffer.from('payload')],
+    });
+    const firstResponseChunk = await withTimeout(
+      readFirstChunk(slowResponse.body),
+      'Python Guest first response chunk',
+    );
+
+    assert.equal(slowResponse.statusCode, 216);
+    assert.equal(firstResponseChunk.toString('utf8'), 'one-');
+    assert.equal((await readBody(slowResponse.body)).toString('utf8'), 'two');
   } finally {
     guestProcess.kill('SIGTERM');
     await broker.close('test-complete');

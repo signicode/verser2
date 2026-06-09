@@ -133,20 +133,30 @@ Phase 3 validation notes:
 
 ## Phase 4: Developer Experience, Examples, and Documentation
 
-- [ ] Task: Write failing documentation/example checks
-    - [ ] Add or update docs tests that expect Python Guest package references, implemented status, and correct Host/Guest/Broker terminology.
-    - [ ] Add smoke validation for a plain ASGI or FastAPI-compatible example if practical.
-    - [ ] Confirm docs/example checks fail before documentation and examples are added.
-- [ ] Task: Implement examples and optional helper API
-    - [ ] Add a minimal plain ASGI Guest example.
-    - [ ] Add a FastAPI/Starlette-compatible usage example without requiring FastAPI as a core runtime dependency unless explicitly justified.
-    - [ ] Add a Python-side request/fetch helper if it fits the first implementation slice; otherwise document it as deferred.
-- [ ] Task: Update product documentation and package readiness
-    - [ ] Update README, package docs, and `conductor/tech-stack.md` to describe Python Guest as implemented.
-    - [ ] Document streaming behavior, known limits, lifecycle behavior, and validation commands.
-    - [ ] Update package publish/readiness tests and scripts so existing Node package workflows continue to pass with the Python package present.
-- [ ] Task: Final validation and deduplication review
-    - [ ] Run the narrowest reliable full-track validation set, including Python package tests/checks and affected npm tests.
-    - [ ] Perform a phase-end deduplication review and record whether shared protocol code was reused, adapted, copied, or intentionally deferred.
-    - [ ] Confirm no HTTP/3, authentication/authorization, Python Host, or unrelated runtime behavior was introduced.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Developer Experience, Examples, and Documentation' (Protocol in workflow.md)
+- [x] Task: Write failing documentation/example checks
+    - [x] Add or update docs tests that expect Python Guest package references, implemented status, and correct Host/Guest/Broker terminology.
+    - [x] Add smoke validation for a plain ASGI or FastAPI-compatible example if practical.
+    - [x] Confirm docs/example checks fail before documentation and examples are added.
+- [x] Task: Implement examples and optional helper API
+    - [x] Add a minimal plain ASGI Guest example.
+    - [x] Add a FastAPI/Starlette-compatible usage example without requiring FastAPI as a core runtime dependency unless explicitly justified.
+    - [x] Add a Python-side request/fetch helper if it fits the first implementation slice; otherwise document it as deferred.
+- [x] Task: Update product documentation and package readiness
+    - [x] Update README, package docs, and `conductor/tech-stack.md` to describe Python Guest as implemented.
+    - [x] Document streaming behavior, known limits, lifecycle behavior, and validation commands.
+    - [x] Update package publish/readiness tests and scripts so existing Node package workflows continue to pass with the Python package present.
+- [x] Task: Final validation and deduplication review
+    - [x] Run the narrowest reliable full-track validation set, including Python package tests/checks and affected npm tests.
+    - [x] Perform a phase-end deduplication review and record whether shared protocol code was reused, adapted, copied, or intentionally deferred.
+    - [x] Confirm no HTTP/3, authentication/authorization, Python Host, or unrelated runtime behavior was introduced.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Developer Experience, Examples, and Documentation' (Protocol in workflow.md)
+
+Phase 4 validation notes:
+- Failing docs/example checks confirmed: `node --test test/python-guest-documentation.test.js` failed before README/package README/tech-stack updates because implemented Python Guest references, `create_verser_guest`, FastAPI-compatible wording, and `uv`/`h2` tech-stack details were missing.
+- Documentation updates: README now lists `@signicode/verser2-guest-python` as implemented, includes Python ASGI Guest usage, documents FastAPI-compatible usage, streaming behavior, and current Python Guest limits. Package README now documents commands, `create_verser_guest`, ASGI 3 usage, FastAPI-compatible usage, streaming behavior, and known limits. `conductor/tech-stack.md` now lists the Python ASGI Guest as implemented with `uv` and `h2`.
+- Examples: existing plain ASGI example remains, `examples/basic_guest.py` is used by the Node/Python integration test, and package tests smoke-validate the plain ASGI example import surface. Python-side request/fetch helper remains deferred and documented as a known limit.
+- Streaming proof: `test/python-guest-integration.test.js` now asserts the Python ASGI Guest can return a response after the first request chunk before the Broker request body ends, and that the Broker can observe the first Python ASGI response body chunk before the response stream ends.
+- Validation passed: `node --test test/python-guest-documentation.test.js`; `npm run test --workspace=@signicode/verser2-guest-python`; `npm test`; `npm run build && npm run stage:packages && node --test test/python-guest-integration.test.js`; `npm run lint --workspace=@signicode/verser2-guest-python`; `npm run lint`; `npm run test:package-tarballs`.
+- Deduplication review: shared TypeScript protocol code remains in `@signicode/verser-common`; Python mirrors only cross-language constants/envelope behavior needed by the Python runtime. No new HTTP/3, authentication/authorization, Python Host, full Python Broker, or unrelated runtime behavior was introduced.
+- Coverage: repository Node tests and Python package tests cover docs, examples, package recognition, ASGI dispatch, streaming, and Node/Python routed integration. Numeric Python coverage remains unmeasured because no Python coverage dependency is configured.
+- Manual verification: confirmed by user.

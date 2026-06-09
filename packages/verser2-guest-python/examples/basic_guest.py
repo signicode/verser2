@@ -5,12 +5,45 @@ from verser2_guest_python import create_verser_guest
 
 
 async def app(scope, receive, send):
+    if scope["path"] == "/first-chunk":
+        event = await receive()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 215,
+                "headers": [(b"x-guest", b"python"), (b"x-stream", b"request")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"first:" + event.get("body", b""),
+                "more_body": False,
+            }
+        )
+        while event.get("more_body", False):
+            event = await receive()
+        return
+
     body = b""
     while True:
         event = await receive()
         body += event.get("body", b"")
         if not event.get("more_body", False):
             break
+
+    if scope["path"] == "/slow-response":
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 216,
+                "headers": [(b"x-guest", b"python"), (b"x-stream", b"response")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"one-", "more_body": True})
+        await asyncio.sleep(0.1)
+        await send({"type": "http.response.body", "body": b"two", "more_body": False})
+        return
 
     header_map = {name: value for name, value in scope["headers"]}
     await send(
