@@ -4,11 +4,10 @@ const { PassThrough } = require('node:stream');
 const test = require('node:test');
 const { fetch } = require('undici');
 
-const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
-const {
-  createVerserBroker,
-  createVerserNodeGuest,
-} = require('../packages/verser2-guest-node/dist/index.js');
+const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
+
+const { createVerserHost } = loadVerserHost();
+const { createVerserBroker, createVerserNodeGuest } = loadVerserGuestNode();
 
 function readBody(stream) {
   return new Promise((resolve, reject) => {

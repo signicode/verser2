@@ -5,7 +5,7 @@ This file tracks all major tracks for the project. Each track has its own detail
 ---
 
 - [x] **Track: Implement the minimal version of verser2 host and node guest core functionality**
-*Link: [./tracks/minimal_verser2_core_20260606/](./tracks/minimal_verser2_core_20260606/)*
+*Link: [./archive/minimal_verser2_core_20260606/](./archive/minimal_verser2_core_20260606/)*
 
 ---
 
@@ -14,10 +14,15 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: Split package sources while preserving single-file dist artifacts**
-*Link: [./tracks/split_package_sources_single_file_dist_20260608/](./tracks/split_package_sources_single_file_dist_20260608/)*
+- [x] **Track: Split package sources while preserving single-file dist artifacts**
+*Link: [./archive/split_package_sources_single_file_dist_20260608/](./archive/split_package_sources_single_file_dist_20260608/)*
 
 ---
 
 - [x] **Track: Move shared interface helpers into common using docs/draft-interface-moves.md as the implementation todo list**
 *Link: [./archive/shared_interface_helpers_common_20260608/](./archive/shared_interface_helpers_common_20260608/)*
+
+---
+
+- [x] **Track: package buildability and ability to publish**
+*Link: [./tracks/package_publish_readiness_20260608/](./tracks/package_publish_readiness_20260608/)*

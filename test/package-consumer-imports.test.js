@@ -1,0 +1,83 @@
+const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
+const path = require('node:path');
+const test = require('node:test');
+
+const rootDirectory = path.resolve(__dirname, '..');
+const scriptPath = path.join(rootDirectory, 'scripts', 'test-package-consumers.js');
+const runAuthenticatedGithubConsumers = process.env.VERSER_RUN_GITHUB_CONSUMER_TESTS === '1';
+
+function runConsumerChecks(sourceMode) {
+  const output = execFileSync(process.execPath, [scriptPath, `--source=${sourceMode}`, '--json'], {
+    cwd: rootDirectory,
+    encoding: 'utf8',
+  });
+  return JSON.parse(output);
+}
+
+test('consumer matrix validates cjs, esm, and typescript imports from source packages', () => {
+  const report = runConsumerChecks('source');
+
+  assert.equal(report.source, 'source');
+  assert.equal(report.skipped, false);
+  assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
+  assert.equal(report.packages.length, 4);
+
+  for (const packageReport of report.packages) {
+    assert.equal(packageReport.cjs, true);
+    assert.equal(packageReport.mjs, true);
+    assert.equal(packageReport.typescript, true);
+  }
+});
+
+test('consumer matrix validates cjs, esm, and typescript imports from staged packages', () => {
+  const report = runConsumerChecks('staging');
+
+  assert.equal(report.source, 'staging');
+  assert.equal(report.skipped, false);
+  assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
+  assert.equal(report.packages.length, 4);
+
+  for (const packageReport of report.packages) {
+    assert.equal(packageReport.cjs, true);
+    assert.equal(packageReport.mjs, true);
+    assert.equal(packageReport.typescript, true);
+  }
+});
+
+test('consumer matrix validates cjs, esm, and typescript imports from tarball packages', () => {
+  const report = runConsumerChecks('tarball');
+
+  assert.equal(report.source, 'tarball');
+  assert.equal(report.skipped, false);
+  assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
+  assert.equal(report.packages.length, 4);
+
+  for (const packageReport of report.packages) {
+    assert.equal(packageReport.cjs, true);
+    assert.equal(packageReport.mjs, true);
+    assert.equal(packageReport.typescript, true);
+  }
+});
+
+test('github mode does not fail when authentication token is absent', () => {
+  const report = runConsumerChecks('github');
+
+  assert.equal(report.source, 'github');
+  if (!runAuthenticatedGithubConsumers) {
+    assert.equal(report.skipped, true);
+    assert.equal(report.packages.length, 0);
+    assert.equal(typeof report.reason, 'string');
+    return;
+  }
+
+  assert.equal(report.skipped, false);
+  assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
+  assert.equal(report.packages.length, 4);
+
+  for (const packageReport of report.packages) {
+    assert.equal(packageReport.cjs, true);
+    assert.equal(packageReport.mjs, true);
+    assert.equal(packageReport.typescript, true);
+  }
+});

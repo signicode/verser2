@@ -1,8 +1,8 @@
 {
   "track_id": "minimal_verser2_core_20260606",
   "type": "feature",
-  "status": "new",
+  "status": "completed",
   "created_at": "2026-06-06T22:36:13Z",
-  "updated_at": "2026-06-06T22:36:13Z",
+  "updated_at": "2026-06-08T14:07:30Z",
   "description": "Implement the minimal version of verser2 host and node guest core functionality"
 }
