@@ -1,11 +1,21 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const http2 = require('node:http2');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
-const { createDevelopmentTlsCertificate } = require('../packages/verser-common/dist/index.js');
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
 const { createVerserNodeGuest } = require('../packages/verser2-guest-node/dist/index.js');
+
+const localhostCertificate = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
+  'utf8',
+);
+const localhostKey = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'),
+  'utf8',
+);
 
 function once(emitter, eventName) {
   return new Promise((resolve, reject) => {
@@ -14,9 +24,29 @@ function once(emitter, eventName) {
   });
 }
 
+function createHost(options = {}) {
+  return createVerserHost({
+    ...options,
+    tls: {
+      cert: localhostCertificate,
+      key: localhostKey,
+      ...options.tls,
+    },
+  });
+}
+
+function createGuest(options) {
+  return createVerserNodeGuest({
+    ...options,
+    tls: {
+      ca: localhostCertificate,
+      ...options.tls,
+    },
+  });
+}
+
 async function createLeaseTrackingHost() {
-  const certificate = createDevelopmentTlsCertificate();
-  const server = http2.createSecureServer({ cert: certificate.cert, key: certificate.key });
+  const server = http2.createSecureServer({ cert: localhostCertificate, key: localhostKey });
   const leases = [];
 
   server.on('stream', (stream, headers) => {
@@ -73,13 +103,13 @@ async function waitForLeaseCount(leases, expectedCount) {
 }
 
 test('Node Guest connects outbound to Host and registers routed domains', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const events = [];
   let guest;
 
   try {
-    guest = createVerserNodeGuest({
+    guest = createGuest({
       hostUrl: `https://localhost:${host.address.port}`,
       guestId: 'guest-node-1',
     });
@@ -110,7 +140,7 @@ test('Node Guest connects outbound to Host and registers routed domains', async 
 });
 
 test('Node Guest dispatches a routed request to an attached request listener', async () => {
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'guest-node-2',
   });
@@ -151,9 +181,9 @@ test('Node Guest dispatches a routed request to an attached request listener', a
 });
 
 test('Node Guest uses the guest id as the automatic attach domain', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: `https://localhost:${host.address.port}`,
     guestId: 'guest-auto-domain',
   });
@@ -172,12 +202,9 @@ test('Node Guest uses the guest id as the automatic attach domain', async () => 
 });
 
 test('Node Guest rejects invalid setup and missing handlers with contextual errors', async () => {
-  assert.throws(
-    () => createVerserNodeGuest({ hostUrl: 'https://localhost:1', guestId: '' }),
-    /guest id/i,
-  );
+  assert.throws(() => createGuest({ hostUrl: 'https://localhost:1', guestId: '' }), /guest id/i);
 
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'guest-node-missing-handler',
   });
@@ -205,7 +232,7 @@ test('Node Guest rejects invalid setup and missing handlers with contextual erro
 });
 
 test('Node Guest supports response writes before ending without a final chunk', async () => {
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'guest-node-write-only',
   });
@@ -228,7 +255,7 @@ test('Node Guest supports response writes before ending without a final chunk', 
 });
 
 test('Node Guest preserves binary and encoded response chunks', async () => {
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'guest-node-binary',
   });
@@ -251,13 +278,13 @@ test('Node Guest preserves binary and encoded response chunks', async () => {
 });
 
 test('Node Guest maps failed Host registration to an actionable error', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const first = createVerserNodeGuest({
+  const first = createGuest({
     hostUrl: `https://localhost:${host.address.port}`,
     guestId: 'duplicate-guest',
   });
-  const duplicate = createVerserNodeGuest({
+  const duplicate = createGuest({
     hostUrl: `https://localhost:${host.address.port}`,
     guestId: 'duplicate-guest',
   });
@@ -284,7 +311,7 @@ test('Node Guest can attach an http.Server without listening', async () => {
     response.writeHead(202, { 'x-server': 'attached' });
     response.end(request.url);
   });
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'guest-node-3',
   });
@@ -307,15 +334,14 @@ test('Node Guest can attach an http.Server without listening', async () => {
 });
 
 test('Node Guest maps invalid Host registration JSON to an actionable error', async () => {
-  const certificate = createDevelopmentTlsCertificate();
-  const server = http2.createSecureServer({ cert: certificate.cert, key: certificate.key });
+  const server = http2.createSecureServer({ cert: localhostCertificate, key: localhostKey });
   server.on('stream', (stream) => {
     stream.respond({ ':status': 200, 'content-type': 'application/json' });
     stream.end('not-json');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: `https://localhost:${address.port}`,
     guestId: 'guest-bad-json',
   });
@@ -338,7 +364,7 @@ test('Node Guest maps invalid Host registration JSON to an actionable error', as
 
 test('Node Guest maps local handler failures to contextual errors and lifecycle events', async () => {
   const events = [];
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'guest-node-4',
   });
@@ -373,7 +399,7 @@ test('Node Guest maps local handler failures to contextual errors and lifecycle 
 
 test('Node Guest opens leases until minWaitingStreams is satisfied', async () => {
   const host = await createLeaseTrackingHost();
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: host.url,
     guestId: 'guest-lease-min',
     minWaitingStreams: 2,
@@ -398,7 +424,7 @@ test('Node Guest opens leases until minWaitingStreams is satisfied', async () =>
 
 test('Node Guest never exceeds maxOpenStreams while opening leases', async () => {
   const host = await createLeaseTrackingHost();
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: host.url,
     guestId: 'guest-lease-max',
     minWaitingStreams: 4,
@@ -419,7 +445,7 @@ test('Node Guest never exceeds maxOpenStreams while opening leases', async () =>
 
 test('Node Guest replenishes leases after an idle lease closes', async () => {
   const host = await createLeaseTrackingHost();
-  const guest = createVerserNodeGuest({
+  const guest = createGuest({
     hostUrl: host.url,
     guestId: 'guest-lease-replenish',
     minWaitingStreams: 2,

@@ -1,17 +1,38 @@
 const assert = require('node:assert/strict');
 const http2 = require('node:http2');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 const common = require('../packages/verser-common/dist/index.js');
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
+
+const localhostCertificate = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
+  'utf8',
+);
+const localhostKey = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'),
+  'utf8',
+);
+
+function createHost(options = {}) {
+  return createVerserHost({
+    ...options,
+    tls: {
+      cert: localhostCertificate,
+      key: localhostKey,
+      ...options.tls,
+    },
+  });
+}
 
 function once(emitter, eventName) {
   return new Promise((resolve) => emitter.once(eventName, resolve));
 }
 
 async function connectClient(port) {
-  const tls = common.createDevelopmentTlsCertificate();
-  const session = http2.connect(`https://localhost:${port}`, { ca: tls.cert });
+  const session = http2.connect(`https://localhost:${port}`, { ca: localhostCertificate });
   await once(session, 'connect');
   return session;
 }
@@ -106,7 +127,7 @@ function openBrokerRegistration(session, payload) {
 }
 
 test('Host starts and stops a TLS HTTP/2 server', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
 
   assert.throws(() => host.address, /not listening/);
 
@@ -124,7 +145,7 @@ test('Host starts and stops a TLS HTTP/2 server', async () => {
 });
 
 test('Host accepts registrations and advertises routed domains to Brokers', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   const events = [];
   host.onLifecycle((event) => events.push(event));
 
@@ -169,7 +190,7 @@ test('Host accepts registrations and advertises routed domains to Brokers', asyn
 });
 
 test('Host supports lifecycle unsubscription and disconnect route cleanup', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   const events = [];
   const unsubscribe = host.onLifecycle((event) => events.push(event));
 
@@ -211,7 +232,7 @@ test('Host supports lifecycle unsubscription and disconnect route cleanup', asyn
 });
 
 test('Host rejects duplicate and malformed registrations with contextual errors', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
 
   await host.start();
   const first = await connectClient(host.address.port);
@@ -255,7 +276,7 @@ test('Host rejects duplicate and malformed registrations with contextual errors'
 });
 
 test('Host accepts Guest-opened lease streams for registered Guests', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
 
   await host.start();
   const guest = await connectClient(host.address.port);
@@ -277,7 +298,7 @@ test('Host accepts Guest-opened lease streams for registered Guests', async () =
 });
 
 test('Host rejects lease streams for missing Guests', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
 
   await host.start();
   const guest = await connectClient(host.address.port);
@@ -299,7 +320,7 @@ test('Host rejects lease streams for missing Guests', async () => {
 });
 
 test('Host rejects lease streams without lease ids', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
 
   await host.start();
   const guest = await connectClient(host.address.port);
@@ -325,7 +346,7 @@ test('Host rejects lease streams without lease ids', async () => {
 });
 
 test('Host queues Broker routed requests and times out when no lease is available', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
 
   await host.start();
   const guest = await connectClient(host.address.port);

@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const http2 = require('node:http2');
 const { PassThrough } = require('node:stream');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 const common = require('../packages/verser-common/dist/index.js');
@@ -10,6 +12,46 @@ const {
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
 
+const tlsCertificate = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
+  'utf8',
+);
+const tlsKey = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'),
+  'utf8',
+);
+
+function createHost(options = {}) {
+  return createVerserHost({
+    ...options,
+    tls: {
+      cert: tlsCertificate,
+      key: tlsKey,
+      ...options.tls,
+    },
+  });
+}
+
+function createBroker(options) {
+  return createVerserBroker({
+    ...options,
+    tls: {
+      ca: tlsCertificate,
+      ...options.tls,
+    },
+  });
+}
+
+function createGuest(options) {
+  return createVerserNodeGuest({
+    ...options,
+    tls: {
+      ca: tlsCertificate,
+      ...options.tls,
+    },
+  });
+}
+
 function once(emitter, eventName) {
   return new Promise((resolve, reject) => {
     emitter.once(eventName, resolve);
@@ -18,8 +60,7 @@ function once(emitter, eventName) {
 }
 
 async function connectRawClient(port) {
-  const tls = common.createDevelopmentTlsCertificate();
-  const session = http2.connect(`https://localhost:${port}`, { ca: tls.cert });
+  const session = http2.connect(`https://localhost:${port}`, { ca: tlsCertificate });
   await once(session, 'connect');
   return session;
 }
@@ -86,15 +127,15 @@ function readBody(stream) {
 }
 
 test('Broker connects, receives route advertisements, and forwards requests to a Node Guest', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
   let broker;
   let guest;
 
   try {
-    broker = createVerserBroker({ hostUrl, brokerId: 'broker-routing-1' });
-    guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-routing-1' });
+    broker = createBroker({ hostUrl, brokerId: 'broker-routing-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-routing-1' });
     guest.attach((request, response) => {
       const chunks = [];
       request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
@@ -135,15 +176,15 @@ test('Broker connects, receives route advertisements, and forwards requests to a
 });
 
 test('Broker maps missing guests and Guest handler failures to actionable errors', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
   let broker;
   let guest;
 
   try {
-    broker = createVerserBroker({ hostUrl, brokerId: 'broker-errors-1' });
-    guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-errors-1' });
+    broker = createBroker({ hostUrl, brokerId: 'broker-errors-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-errors-1' });
     guest.attach(() => {
       throw new Error('guest handler failed');
     }, 'errors.local.test');
@@ -179,10 +220,10 @@ test('Broker maps missing guests and Guest handler failures to actionable errors
 });
 
 test('Broker validates routed request headers before forwarding metadata', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-header-validation-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-header-validation-1' });
 
   try {
     await broker.connect();
@@ -208,10 +249,10 @@ test('Broker validates routed request headers before forwarding metadata', async
 });
 
 test('Broker forwards configured lease acquire timeout to the Host', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({
+  const broker = createBroker({
     hostUrl,
     brokerId: 'broker-timeout-option-1',
     leaseAcquireTimeoutMs: 25,
@@ -253,10 +294,10 @@ test('Broker forwards configured lease acquire timeout to the Host', async () =>
 });
 
 test('Host does not serialize lease acquire timeout as request metadata timeout', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({
+  const broker = createBroker({
     hostUrl,
     brokerId: 'broker-timeout-metadata-1',
     leaseAcquireTimeoutMs: 25,
@@ -309,15 +350,15 @@ test('Host does not serialize lease acquire timeout as request metadata timeout'
 });
 
 test('Broker uses one session with separate concurrent routed request streams', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
   let broker;
   let guest;
 
   try {
-    broker = createVerserBroker({ hostUrl, brokerId: 'broker-concurrency-1' });
-    guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-concurrency-1' });
+    broker = createBroker({ hostUrl, brokerId: 'broker-concurrency-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-concurrency-1' });
     guest.attach((request, response) => {
       response.end(`handled ${request.url}`);
     }, 'concurrency.local.test');
@@ -348,11 +389,11 @@ test('Broker uses one session with separate concurrent routed request streams', 
 });
 
 test('Broker receives route retraction after Guest disconnect', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-retraction-1' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-retraction-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-retraction-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-retraction-1' });
   guest.attach((_request, response) => response.end('ok'), 'retraction.local.test');
 
   try {
@@ -382,10 +423,10 @@ test('Broker receives route retraction after Guest disconnect', async () => {
 });
 
 test('Broker request routes over a raw leased HTTP/2 stream without a Guest control stream', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-raw-lease-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-raw-lease-1' });
   const rawGuest = await connectRawClient(host.address.port);
   const requestBodies = [];
 
@@ -438,10 +479,10 @@ test('Broker request routes over a raw leased HTTP/2 stream without a Guest cont
 });
 
 test('Host isolates active leases when different Guests reuse a lease id', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-duplicate-lease-id-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-duplicate-lease-id-1' });
   const firstGuest = await connectRawClient(host.address.port);
   const secondGuest = await connectRawClient(host.address.port);
 
@@ -525,7 +566,7 @@ test('Host isolates active leases when different Guests reuse a lease id', async
 });
 
 test('Host pipes leased response body to Broker before the lease ends', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const rawGuest = await connectRawClient(host.address.port);
   const rawBroker = await connectRawClient(host.address.port);
@@ -589,10 +630,10 @@ test('Host pipes leased response body to Broker before the lease ends', async ()
 });
 
 test('Host maps leased error envelopes to Broker request errors', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-lease-error-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-lease-error-1' });
   const rawGuest = await connectRawClient(host.address.port);
 
   try {
@@ -644,10 +685,10 @@ test('Host maps leased error envelopes to Broker request errors', async () => {
 });
 
 test('Host validates leased response metadata headers before forwarding', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-response-header-validation-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-response-header-validation-1' });
   const rawGuest = await connectRawClient(host.address.port);
 
   try {
@@ -702,10 +743,10 @@ test('Host validates leased response metadata headers before forwarding', async 
 });
 
 test('Host reads split leased response metadata before piping body', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-lease-split-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-lease-split-1' });
   const rawGuest = await connectRawClient(host.address.port);
 
   try {
@@ -759,13 +800,13 @@ test('Host reads split leased response metadata before piping body', async () =>
 });
 
 test('leased Node Guest response body streams before the local response ends', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const rawBroker = await connectRawClient(host.address.port);
   let guest;
 
   try {
-    guest = createVerserNodeGuest({
+    guest = createGuest({
       hostUrl: `https://localhost:${host.address.port}`,
       guestId: 'guest-streaming-response-1',
     });
@@ -805,7 +846,7 @@ test('leased Node Guest response body streams before the local response ends', a
 });
 
 test('leased upload dispatch starts before Broker request body ends', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const rawGuest = await connectRawClient(host.address.port);
   const rawBroker = await connectRawClient(host.address.port);
@@ -877,14 +918,14 @@ test('leased upload dispatch starts before Broker request body ends', async () =
 });
 
 test('broker.request streams Readable upload bodies over leased routing', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-readable-upload-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-readable-upload-1' });
   let guest;
 
   try {
-    guest = createVerserNodeGuest({
+    guest = createGuest({
       hostUrl,
       guestId: 'guest-readable-upload-1',
     });
@@ -926,7 +967,7 @@ test('broker.request streams Readable upload bodies over leased routing', async 
 });
 
 test('Broker abort cancels the active leased stream', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const rawGuest = await connectRawClient(host.address.port);
   const rawBroker = await connectRawClient(host.address.port);
@@ -989,13 +1030,13 @@ test('Broker abort cancels the active leased stream', async () => {
 });
 
 test('Guest disconnect fails an active leased Broker request', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const rawBroker = await connectRawClient(host.address.port);
   let guest;
 
   try {
-    guest = createVerserNodeGuest({
+    guest = createGuest({
       hostUrl: `https://localhost:${host.address.port}`,
       guestId: 'guest-active-disconnect-1',
     });
@@ -1034,10 +1075,10 @@ test('Guest disconnect fails an active leased Broker request', async () => {
 });
 
 test('Host maps lease reset before response metadata to a protocol error', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-lease-reset-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-lease-reset-1' });
   const rawGuest = await connectRawClient(host.address.port);
 
   try {
@@ -1079,13 +1120,13 @@ test('Host maps lease reset before response metadata to a protocol error', async
 });
 
 test('Guest handler failure after response start cancels the Broker response stream', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const rawBroker = await connectRawClient(host.address.port);
   let guest;
 
   try {
-    guest = createVerserNodeGuest({
+    guest = createGuest({
       hostUrl: `https://localhost:${host.address.port}`,
       guestId: 'guest-post-response-failure-1',
     });

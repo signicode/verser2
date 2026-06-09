@@ -6,7 +6,10 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
-const { createVerserBroker, createVerserNodeGuest } = require('../packages/verser2-guest-node/dist/index.js');
+const {
+  createVerserBroker,
+  createVerserNodeGuest,
+} = require('../packages/verser2-guest-node/dist/index.js');
 
 function once(emitter, eventName) {
   return new Promise((resolve, reject) => {
@@ -451,6 +454,7 @@ test('Node Broker rejects legacy development certificate when no CA is provided'
 
   try {
     await assert.rejects(() => broker.connect(), /certificate|self/i);
+    assert.equal(broker.sessionCount, 0);
   } finally {
     if (broker.connected) {
       await broker.close('test-complete');

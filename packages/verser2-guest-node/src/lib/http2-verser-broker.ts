@@ -5,8 +5,8 @@ import * as nodeStream from 'node:stream';
 import { buffer } from 'node:stream/consumers';
 
 import {
-  createDevelopmentTlsCertificate,
   createVerserError,
+  normalizeClientTlsOptions,
   readNdjsonLines,
   stripHttp2PseudoHeaders,
   validateVerserHeaders,
@@ -52,14 +52,30 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   public async connect(): Promise<void> {
-    if (this.session !== undefined && !this.session.closed) {
+    if (this.session !== undefined && !this.session.closed && !this.session.destroyed) {
       return;
     }
-    const certificate = createDevelopmentTlsCertificate();
-    const session = http2.connect(this.options.hostUrl, { ca: certificate.cert });
+    const tls = normalizeClientTlsOptions(this.options.tls);
+    const session = http2.connect(this.options.hostUrl, tls === undefined ? {} : { ca: tls.ca });
     this.session = session;
-    await once(session, 'connect');
-    await this.register(session);
+    session.once('close', () => {
+      if (this.session === session) {
+        this.session = undefined;
+        this.controlStream = undefined;
+      }
+    });
+
+    try {
+      await once(session, 'connect');
+      await this.register(session);
+    } catch (error) {
+      session.destroy();
+      if (this.session === session) {
+        this.session = undefined;
+        this.controlStream = undefined;
+      }
+      throw error;
+    }
   }
 
   public async close(_reason = 'broker-close'): Promise<void> {

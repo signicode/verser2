@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
@@ -7,6 +9,26 @@ const {
   createVerserBroker,
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
+
+const localhostCertificate = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
+  'utf8',
+);
+const localhostKey = fs.readFileSync(
+  path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'),
+  'utf8',
+);
+
+function createHost(options = {}) {
+  return createVerserHost({
+    ...options,
+    tls: {
+      cert: localhostCertificate,
+      key: localhostKey,
+      ...options.tls,
+    },
+  });
+}
 
 function requestWithAgent(url, options, body) {
   return new Promise((resolve, reject) => {
@@ -53,12 +75,32 @@ function withTimeout(promise, label) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
 }
 
+function createBroker(options) {
+  return createVerserBroker({
+    ...options,
+    tls: {
+      ca: localhostCertificate,
+      ...options.tls,
+    },
+  });
+}
+
+function createGuest(options) {
+  return createVerserNodeGuest({
+    ...options,
+    tls: {
+      ca: localhostCertificate,
+      ...options.tls,
+    },
+  });
+}
+
 test('Broker exposes an Agent that routes matching hostnames through Verser2', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-1' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-1' });
   let agent;
   guest.attach((request, response) => {
     const chunks = [];
@@ -97,11 +139,11 @@ test('Broker exposes an Agent that routes matching hostnames through Verser2', a
 });
 
 test('Broker Agent routes advertised domains without DNS resolution and rejects non-matching hosts', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-2' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-2' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-2' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-2' });
   let agent;
   guest.attach((_request, response) => response.end('routed'), 'no-dns.local.test');
 
@@ -132,11 +174,11 @@ test('Broker Agent routes advertised domains without DNS resolution and rejects 
 });
 
 test('Broker Agent forwards chunked request bodies through leased routing', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-chunked-1' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-chunked-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-chunked-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-chunked-1' });
   let agent;
   guest.attach((request, response) => {
     const chunks = [];
@@ -172,11 +214,11 @@ test('Broker Agent forwards chunked request bodies through leased routing', asyn
 });
 
 test('Broker Agent streams request body before the client request ends', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-streaming-1' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-streaming-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-streaming-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-streaming-1' });
   let agent;
   guest.attach((request, response) => {
     request.once('data', (chunk) => {
@@ -229,11 +271,11 @@ test('Broker Agent streams request body before the client request ends', async (
 });
 
 test('Broker Agent resumes streamed responses after client-side backpressure', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-agent-backpressure-1' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-agent-backpressure-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-backpressure-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-backpressure-1' });
   const expectedBody = Buffer.alloc(256 * 1024, 'a');
   let agent;
   guest.attach((_request, response) => {
