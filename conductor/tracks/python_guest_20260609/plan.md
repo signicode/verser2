@@ -2,11 +2,11 @@
 
 ## Phase 0: Track Branch, Start Checkpoint, and PR Setup
 
-- [ ] Task: Prepare repository for the track branch
-    - [ ] Confirm the current branch is ready to use as the starting point and inspect `git status`, recent commits, and remotes.
-    - [ ] Push `main` before starting the track branch if the local `main` has unpushed commits.
-    - [ ] Create a dedicated track branch from the recorded starting commit.
-- [ ] Task: Record and commit the start of work
+- [x] Task: Prepare repository for the track branch
+    - [x] Confirm the current branch is ready to use as the starting point and inspect `git status`, recent commits, and remotes.
+    - [x] Push `main` before starting the track branch if the local `main` has unpushed commits.
+    - [x] Create a dedicated track branch from the recorded starting commit.
+- [~] Task: Record and commit the start of work
     - [ ] Confirm the track `spec.md`, `plan.md`, `metadata.json`, and registry entry are present before the start checkpoint.
     - [ ] Commit the track-start Conductor artifacts with the message `chore(conductor): Add new track 'Python Guest'`.
     - [ ] Record the starting commit SHA for the track in the plan or track notes if useful for later checkpointing.
