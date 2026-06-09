@@ -1,0 +1,8 @@
+{
+  "track_id": "python_guest_20260609",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-06-09T18:32:56Z",
+  "updated_at": "2026-06-09T18:32:56Z",
+  "description": "Python Guest. Following the successful builds of node guest and host, create a Python implementation of verser2 guest targeting broadly what node currently has, exposing an ASGI-like interface with near FastAPI compatibility and streaming APIs in the guest."
+}
