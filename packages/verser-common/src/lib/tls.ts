@@ -1,15 +1,12 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
 import type { VerserClientTlsOptions, VerserHostTlsOptions } from './types';
-
-function readTextFile(filePath: string): string {
-  return readFileSync(filePath, 'utf8');
-}
 
 export function normalizeServerTlsOptions(options?: VerserHostTlsOptions): {
   cert: string;
   key: string;
+  passphrase?: string;
 } {
   if (options === undefined) {
     throw new Error(
@@ -40,7 +37,11 @@ export function normalizeServerTlsOptions(options?: VerserHostTlsOptions): {
     if (options.cert === undefined || options.key === undefined) {
       throw new Error('Host TLS config must include both `tls.cert` and `tls.key`.');
     }
-    return { cert: options.cert, key: options.key };
+    return {
+      cert: options.cert,
+      key: options.key,
+      passphrase: options.passphrase,
+    };
   }
 
   if (hasCertFile) {
@@ -48,9 +49,20 @@ export function normalizeServerTlsOptions(options?: VerserHostTlsOptions): {
       throw new Error('Host TLS config must include both `tls.certFile` and `tls.keyFile`.');
     }
 
+    if (process.platform !== 'win32') {
+      const keyStat = statSync(options.keyFile);
+      const keyMode = keyStat.mode & 0o777;
+      if (keyMode !== 0o600) {
+        throw new Error(
+          `Insecure TLS key permissions for ${options.keyFile}: mode 0${keyMode.toString(8).padStart(3, '0')}; expected 0600. Run: chmod 0600 ${options.keyFile}`,
+        );
+      }
+    }
+
     return {
-      cert: readTextFile(options.certFile),
-      key: readTextFile(options.keyFile),
+      cert: readFileSync(options.certFile, 'utf8'),
+      key: readFileSync(options.keyFile, 'utf8'),
+      passphrase: options.passphrase,
     };
   }
 
@@ -74,7 +86,7 @@ export function normalizeClientTlsOptions(
   }
 
   if (hasCaFile) {
-    return { ca: readTextFile(options.caFile) };
+    return { ca: readFileSync(options.caFile, 'utf8') };
   }
 
   if (hasCa) {

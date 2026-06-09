@@ -1,21 +1,11 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const http2 = require('node:http2');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
 const { createVerserNodeGuest } = require('../packages/verser2-guest-node/dist/index.js');
-
-const localhostCertificate = fs.readFileSync(
-  path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
-  'utf8',
-);
-const localhostKey = fs.readFileSync(
-  path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'),
-  'utf8',
-);
+const { trusted } = require('./support/tls-fixtures.cjs');
 
 function once(emitter, eventName) {
   return new Promise((resolve, reject) => {
@@ -28,8 +18,8 @@ function createHost(options = {}) {
   return createVerserHost({
     ...options,
     tls: {
-      cert: localhostCertificate,
-      key: localhostKey,
+      cert: trusted.certificate,
+      key: trusted.key,
       ...options.tls,
     },
   });
@@ -39,14 +29,14 @@ function createGuest(options) {
   return createVerserNodeGuest({
     ...options,
     tls: {
-      ca: localhostCertificate,
+      ca: trusted.certificate,
       ...options.tls,
     },
   });
 }
 
 async function createLeaseTrackingHost() {
-  const server = http2.createSecureServer({ cert: localhostCertificate, key: localhostKey });
+  const server = http2.createSecureServer({ cert: trusted.certificate, key: trusted.key });
   const leases = [];
 
   server.on('stream', (stream, headers) => {
@@ -80,7 +70,7 @@ async function createLeaseTrackingHost() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   return {
-    url: `https://localhost:${address.port}`,
+    url: `https://127.0.0.1:${address.port}`,
     leases,
     async close() {
       for (const lease of leases) {
@@ -110,7 +100,7 @@ test('Node Guest connects outbound to Host and registers routed domains', async 
 
   try {
     guest = createGuest({
-      hostUrl: `https://localhost:${host.address.port}`,
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
       guestId: 'guest-node-1',
     });
     guest.onLifecycle((event) => events.push(event));
@@ -184,7 +174,7 @@ test('Node Guest uses the guest id as the automatic attach domain', async () => 
   const host = createHost({ port: 0 });
   await host.start();
   const guest = createGuest({
-    hostUrl: `https://localhost:${host.address.port}`,
+    hostUrl: `https://127.0.0.1:${host.address.port}`,
     guestId: 'guest-auto-domain',
   });
 
@@ -281,11 +271,11 @@ test('Node Guest maps failed Host registration to an actionable error', async ()
   const host = createHost({ port: 0 });
   await host.start();
   const first = createGuest({
-    hostUrl: `https://localhost:${host.address.port}`,
+    hostUrl: `https://127.0.0.1:${host.address.port}`,
     guestId: 'duplicate-guest',
   });
   const duplicate = createGuest({
-    hostUrl: `https://localhost:${host.address.port}`,
+    hostUrl: `https://127.0.0.1:${host.address.port}`,
     guestId: 'duplicate-guest',
   });
 
@@ -334,7 +324,7 @@ test('Node Guest can attach an http.Server without listening', async () => {
 });
 
 test('Node Guest maps invalid Host registration JSON to an actionable error', async () => {
-  const server = http2.createSecureServer({ cert: localhostCertificate, key: localhostKey });
+  const server = http2.createSecureServer({ cert: trusted.certificate, key: trusted.key });
   server.on('stream', (stream) => {
     stream.respond({ ':status': 200, 'content-type': 'application/json' });
     stream.end('not-json');
@@ -342,7 +332,7 @@ test('Node Guest maps invalid Host registration JSON to an actionable error', as
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   const guest = createGuest({
-    hostUrl: `https://localhost:${address.port}`,
+    hostUrl: `https://127.0.0.1:${address.port}`,
     guestId: 'guest-bad-json',
   });
 

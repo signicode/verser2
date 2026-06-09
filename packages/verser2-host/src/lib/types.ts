@@ -29,6 +29,7 @@ export interface VerserHost {
   readonly address: AddressInfo;
   start(): Promise<void>;
   close(reason?: string): Promise<void>;
+  reloadTlsCertificate(): void;
   getRoutedDomains(): RoutedDomainRegistration[];
   onLifecycle(listener: (event: VerserHostLifecycleEvent) => void): () => void;
 }

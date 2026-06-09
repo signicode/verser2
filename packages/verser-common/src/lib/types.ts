@@ -151,12 +151,14 @@ export type VerserHostTlsOptions =
   | {
       readonly cert: string;
       readonly key: string;
+      readonly passphrase?: string;
       readonly certFile?: never;
       readonly keyFile?: never;
     }
   | {
       readonly cert?: never;
       readonly key?: never;
+      readonly passphrase?: string;
       readonly certFile: string;
       readonly keyFile: string;
     };

@@ -1,7 +1,5 @@
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const { fetch } = require('undici');
 
@@ -10,22 +8,14 @@ const {
   createVerserBroker,
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
-
-const localhostCertificate = fs.readFileSync(
-  path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
-  'utf8',
-);
-const localhostKey = fs.readFileSync(
-  path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'),
-  'utf8',
-);
+const { trusted } = require('./support/tls-fixtures.cjs');
 
 function createHost(options = {}) {
   return createVerserHost({
     ...options,
     tls: {
-      cert: localhostCertificate,
-      key: localhostKey,
+      cert: trusted.certificate,
+      key: trusted.key,
       ...options.tls,
     },
   });
@@ -35,7 +25,7 @@ function createBroker(options) {
   return createVerserBroker({
     ...options,
     tls: {
-      ca: localhostCertificate,
+      ca: trusted.certificate,
       ...options.tls,
     },
   });
@@ -45,7 +35,7 @@ function createGuest(options) {
   return createVerserNodeGuest({
     ...options,
     tls: {
-      ca: localhostCertificate,
+      ca: trusted.certificate,
       ...options.tls,
     },
   });
@@ -62,7 +52,7 @@ function withTimeout(promise, label, timeoutMs = 5000) {
 async function createConnectedRoute(domain, listener, ids) {
   const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: ids.brokerId });
   const guest = createGuest({ hostUrl, guestId: ids.guestId });
   guest.attach(listener, domain);

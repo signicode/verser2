@@ -124,15 +124,50 @@ Oracle review: no release blockers. Applied accepted documentation suggestions b
 
 ## Phase 4: Final PR push and manual verification
 
-- [ ] Task: Push completed implementation to the PR branch
-    - [ ] Push all completed phase commits to the track PR branch.
-    - [ ] Confirm PR description still reflects the full plan goals and final TO-BE state, not only the initial commit or latest commit.
-    - [ ] Confirm PR checks or local equivalents have run as required.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Final PR push and manual verification' (Protocol in workflow.md)
-    - [ ] Ask the user to manually verify the final code on the PR branch before close-out and merge.
+- [x] Task: Push completed implementation to the PR branch
+    - [x] Push all completed phase commits to the track PR branch.
+    - [x] Confirm PR description still reflects the full plan goals and final TO-BE state, not only the initial commit or latest commit.
+    - [x] Confirm PR checks or local equivalents have run as required.
+- [~] Task: Conductor - User Manual Verification 'Phase 4: Final PR push and manual verification' (Protocol in workflow.md)
+    - [x] Ask the user to manually verify the final code on the PR branch before close-out and merge.
     - [ ] Record the manual verification result in this plan.
 - [ ] Task: Close-out readiness
     - [ ] Confirm no unresolved oracle suggestions remain.
     - [ ] Confirm no skipped validation remains unexplained.
     - [ ] Confirm all encountered validation/tool failures were classified and handled according to `workflow.md` and `conductor/known-solutions.md` guidance.
     - [ ] Confirm the PR is ready for final review/merge according to repository policy.
+
+Phase 4 notes: pushed completed phase commits through `0b391b8` to PR https://github.com/signicode/verser2/pull/6. PR title and description still describe the full configurable TLS TO-BE state, not a single commit. Local equivalents completed: `npm test` passed 146/146, `npm run test:package-tarballs` passed 42/42, package readiness/export tests passed, docs test passed, and `npm run lint` passed. GitHub PR check `Build, stage, pack, and consume without publishing` is pending at the time of manual verification request.
+
+PR #6 review outcome: top-level review is “fixes needed”, so Phase 4 manual verification remains paused. Accepted follow-up scope: inline the trivial TLS file reader; add optional Host TLS `passphrase` support for encrypted private keys; require POSIX `tls.keyFile` mode `0600` with an actionable error; replace committed localhost private-key fixtures with generated, gitignored test fixtures chmodded `0600`; update TLS fixture loading through shared test support; add tests for bad key permissions, mismatched cert/key, wrong CA/certificate verification, and password-protected keys; add end-to-end SSL verification failure coverage; rename remaining “legacy development certificate” test wording to neutral generated/untrusted fixture wording; and add a linked SSL certificate generation guide including local self-signed generation and Let’s Encrypt DNS-01 with Cloudflare. Expanded user-requested scope: implement a Host certificate reload method that can refresh TLS certificate material without adding process-level signal handling, and document how an application can wire `SIGUSR1` to that reload method as a general future Verser reload hook. Deferred as out of scope: mTLS, ACME automation, direct renewal management, automatic process signal handlers, `passphraseFile`, broad TLS option passthrough, and unrelated transport behavior.
+
+## Phase 5: PR review fixes and certificate reload support
+
+- [x] Task: Update shared TLS normalization and Host reload API
+    - [x] Inline file reads in TLS normalization instead of keeping the trivial `readTextFile()` helper.
+    - [x] Add optional Host TLS `passphrase` support for direct PEM and file-based keys.
+    - [x] Enforce POSIX `0600` permissions for `tls.keyFile` with an actionable error, while documenting Windows permission caveats.
+    - [x] Add a Host TLS reload method that re-reads configured file-based certificate material and updates the running secure server without installing any process signal handler.
+    - [x] Keep direct PEM reload behavior clear and deterministic.
+- [x] Task: Generate TLS test fixtures at test startup
+    - [x] Add shared test support that generates local trusted, untrusted, mismatched, and password-protected certificate/key pairs as needed.
+    - [x] Store generated fixture outputs under a gitignored path and set generated private keys to `0600`.
+    - [x] Update all tests and tarball test consumers to use shared fixture support instead of committed private keys.
+- [x] Task: Add review-requested TLS coverage
+    - [x] Cover key-file permission rejection and acceptance.
+    - [x] Cover password-protected key success and missing/wrong passphrase failure.
+    - [x] Cover mismatched cert/key failure.
+    - [x] Cover wrong CA / certificate verification failures in focused TLS and end-to-end tests.
+    - [x] Cover Host TLS reload behavior without process-level signal handling.
+- [x] Task: Update documentation and package guidance
+    - [x] Document `tls.passphrase`, `keyFile` permission requirements, and certificate reload usage.
+    - [x] Add a linked SSL certificate generation guide with local self-signed certificates, encrypted keys, `chmod 0600`, Let’s Encrypt DNS-01, and Cloudflare examples.
+    - [x] Document how applications may wire `process.on('SIGUSR1', ...)` to the Host reload method without Verser installing that handler itself.
+- [x] Task: Validate review fixes
+    - [x] Run focused TLS, end-to-end, package-readiness, and tarball validations affected by fixture generation and reload behavior.
+    - [x] Run `npm run build`, `npm run lint`, and broader tests as warranted by the changed files.
+    - [x] Record validation results and any failure classifications in this plan before committing.
+
+Phase 5 notes: implemented the accepted PR review fixes and expanded certificate reload scope. `@signicode/verser-common` now supports optional Host TLS passphrases, inlines TLS file reads, and enforces POSIX `tls.keyFile` mode `0600` with a `chmod 0600` error; Windows mode-bit validation remains skipped. `@signicode/verser2-host` passes the passphrase to `http2.createSecureServer()` and exposes `host.reloadTlsCertificate()` using `server.setSecureContext()` without installing signal handlers. Tests now generate trusted, untrusted, mismatched, and encrypted TLS fixtures under gitignored `test/fixtures/generated-tls/`, chmod generated keys `0600`, and use a lock directory for clean concurrent fixture generation. Committed private-key fixtures were removed. Focused and integration tests cover bad key modes, password-protected keys, mismatched cert/key, wrong CA verification failures, end-to-end TLS verification, Host reload behavior, and stopped-Host reload rejection. README and `docs/ssl-certificate-generation.md` document passphrases, POSIX key mode, local self-signed certificates, Let’s Encrypt DNS-01 with Cloudflare, reload usage, application-owned `SIGUSR1` wiring with error handling, and that reload affects new TLS handshakes while existing HTTP/2 sessions keep their current TLS state.
+
+Oracle Phase 5 review: no runtime/security blockers. Non-blocking suggestions were addressed before final validation by making generated fixture creation race-safe, switching dynamic test Host URLs to `127.0.0.1` to avoid localhost IPv6 flakes while retaining SAN coverage, and documenting reload error handling plus new-handshake behavior. Validation notes: focused command `npm run build && npm run stage:packages && node --test "test/tls-configuration.test.js" "test/end-to-end.test.js" && npm run test:package-tarballs` passed, `npm run lint` passed, and final `npm test` passed 155/155. Encountered failures: a raw direct run of `test/package-tarball/behavior.test.cjs` failed because that test expects installed tarball/node_modules context; the proper `npm run test:package-tarballs` command passed. A clean generated-fixture tarball validation initially failed because the lock directory parent did not exist in the temp consumer; fixed by creating the parent before acquiring the lock, then the same focused validation passed. A full-test run then exposed preexisting nondeterministic lifecycle ordering in `test/host.test.js`; fixed by asserting event counts and final route advertisement instead of assuming connected/registered interleaving, and focused Host validation plus final `npm test` passed.

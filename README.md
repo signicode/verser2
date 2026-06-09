@@ -240,6 +240,7 @@ console.log(streamResponse.status);
 ### Current transport notes
 
 - The Host uses TLS HTTP/2 and requires application-provided certificate and private key material.
+- Host `keyFile` private keys must be readable only by the owner (`chmod 0600`) on POSIX systems.
 - The Broker and Guest use normal Node.js TLS trust by default, or application-provided `ca`/`caFile` trust when configured. Passing `ca` or `caFile` replaces Node's default CA set for that outbound HTTP/2 connection.
 - HTTP/3 and QUIC are explicitly not implemented.
 - A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
@@ -257,6 +258,8 @@ TLS applies to the remote Host/Guest/Broker HTTP/2 transport only. Guest-attache
 
 The Host certificate must be valid for the hostname or IP address used in `hostUrl` because Node.js still performs normal TLS hostname verification.
 
+See [SSL certificate generation](./docs/ssl-certificate-generation.md) for local self-signed certificates, encrypted keys, and Let's Encrypt DNS-01 examples.
+
 Configure Host TLS with direct PEM values:
 
 ```ts
@@ -268,6 +271,7 @@ const host = createVerserHost({
   tls: {
     cert: fs.readFileSync('/etc/verser/host.crt', 'utf8'),
     key: fs.readFileSync('/etc/verser/host.key', 'utf8'),
+    passphrase: process.env.VERSER_TLS_KEY_PASSPHRASE,
   },
 });
 ```
@@ -280,7 +284,34 @@ const host = createVerserHost({
   tls: {
     certFile: '/etc/verser/host.crt',
     keyFile: '/etc/verser/host.key',
+    passphrase: process.env.VERSER_TLS_KEY_PASSPHRASE,
   },
+});
+```
+
+When using `keyFile`, set the private key mode to `0600` on POSIX systems:
+
+```sh
+chmod 0600 /etc/verser/host.key
+```
+
+File-based Host TLS can be reloaded after certificate renewal without restarting the process. The new certificate is used for new TLS handshakes; existing HTTP/2 sessions keep their current TLS state.
+
+```ts
+await host.start();
+
+host.reloadTlsCertificate();
+```
+
+Verser does not install process signal handlers. Applications that want signal-driven reloads can wire them explicitly, and can reuse the same handler later for broader reload work:
+
+```ts
+process.on('SIGUSR1', () => {
+  try {
+    host.reloadTlsCertificate();
+  } catch (error) {
+    console.error('Failed to reload Verser TLS certificate:', error);
+  }
 });
 ```
 

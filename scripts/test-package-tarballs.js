@@ -18,11 +18,11 @@ const reusableTestRelativePaths = [
   path.join('test', 'common-protocol.test.js'),
   path.join('test', 'end-to-end.test.js'),
 ];
-const supportFileRelativePaths = [path.join('test', 'support', 'verser-package-imports.cjs')];
-const fixtureFileRelativePaths = [
-  path.join('test', 'fixtures', 'tls', 'localhost-cert.pem'),
-  path.join('test', 'fixtures', 'tls', 'localhost-key.pem'),
+const supportFileRelativePaths = [
+  path.join('test', 'support', 'verser-package-imports.cjs'),
+  path.join('test', 'support', 'tls-fixtures.cjs'),
 ];
+const fixtureFileRelativePaths = [];
 
 const sourcePackages = [
   {
