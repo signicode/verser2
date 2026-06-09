@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http2 = require('node:http2');
 const http = require('node:http');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -10,6 +11,7 @@ const {
   createVerserBroker,
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
+const { trusted, untrusted, mismatched, encrypted } = require('./support/tls-fixtures.cjs');
 
 function once(emitter, eventName) {
   return new Promise((resolve, reject) => {
@@ -18,17 +20,17 @@ function once(emitter, eventName) {
   });
 }
 
-const fixturesDirectory = path.join(__dirname, 'fixtures', 'tls');
-const cert = fs.readFileSync(path.join(fixturesDirectory, 'localhost-cert.pem'), 'utf8');
-const key = fs.readFileSync(path.join(fixturesDirectory, 'localhost-key.pem'), 'utf8');
-const legacyDevelopmentCert = fs.readFileSync(
-  path.join(fixturesDirectory, 'legacy-development-cert.pem'),
-  'utf8',
-);
-const legacyDevelopmentKey = fs.readFileSync(
-  path.join(fixturesDirectory, 'legacy-development-key.pem'),
-  'utf8',
-);
+const cert = trusted.certificate;
+const key = trusted.key;
+const certFile = trusted.certificatePath;
+const keyFile = trusted.keyPath;
+const untrustedCert = untrusted.certificate;
+const untrustedKey = untrusted.key;
+const mismatchedCertPath = mismatched.certificatePath;
+const mismatchedKeyPath = mismatched.keyPath;
+const encryptedCert = encrypted.certificate;
+const encryptedKey = encrypted.key;
+const encryptedPassphrase = encrypted.passphrase;
 
 async function connectSecureHttp2(url, options) {
   const session = http2.connect(url, options);
@@ -107,18 +109,18 @@ async function createSecureFixtureServer(serverCert = cert, serverKey = key) {
   };
 }
 
-async function createLegacyDevelopmentGuestServer() {
-  const host = await createSecureFixtureServer(legacyDevelopmentCert, legacyDevelopmentKey);
+async function createUntrustedGuestServer() {
+  const host = await createSecureFixtureServer(untrustedCert, untrustedKey);
   return {
     ...host,
-    url: `https://localhost:${host.port}`,
+    url: `https://127.0.0.1:${host.port}`,
   };
 }
 
-async function createLegacyDevelopmentBrokerServer() {
+async function createUntrustedBrokerServer() {
   const server = http2.createSecureServer({
-    cert: legacyDevelopmentCert,
-    key: legacyDevelopmentKey,
+    cert: untrustedCert,
+    key: untrustedKey,
   });
   const sessions = new Set();
   server.on('session', (session) => {
@@ -138,7 +140,7 @@ async function createLegacyDevelopmentBrokerServer() {
   const address = server.address();
 
   return {
-    url: `https://localhost:${address.port}`,
+    url: `https://127.0.0.1:${address.port}`,
     async close() {
       await closeSecureServer(server, sessions);
     },
@@ -189,8 +191,6 @@ test('Host supports direct PEM TLS config and accepts TLS clients', async () => 
 });
 
 test('Host supports TLS config using file paths', async () => {
-  const certFile = path.join(fixturesDirectory, 'localhost-cert.pem');
-  const keyFile = path.join(fixturesDirectory, 'localhost-key.pem');
   const host = createVerserHost({
     port: 0,
     tls: {
@@ -211,6 +211,182 @@ test('Host supports TLS config using file paths', async () => {
     await once(session, 'close');
   } finally {
     await host.close('test-complete');
+  }
+});
+
+test('Host startup rejects a file key with insecure mode', async () => {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verser2-tls-'));
+  const tmpKeyFile = path.join(tmpDir, 'insecure-host-key.pem');
+  fs.writeFileSync(tmpKeyFile, key, 'utf8');
+  fs.chmodSync(tmpKeyFile, 0o644);
+
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      certFile,
+      keyFile: tmpKeyFile,
+    },
+  });
+
+  try {
+    await assert.rejects(() => host.start(), /mode 0644/);
+  } finally {
+    await safeCloseHost(host);
+    fs.rmSync(tmpDir, { force: true, recursive: true });
+  }
+});
+
+test('Host startup accepts a file key with 0600 mode', async () => {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verser2-tls-'));
+  const tmpKeyFile = path.join(tmpDir, 'secure-host-key.pem');
+  const tmpCertFile = path.join(tmpDir, 'secure-host-cert.pem');
+  fs.writeFileSync(tmpKeyFile, key, 'utf8');
+  fs.chmodSync(tmpKeyFile, 0o600);
+  fs.writeFileSync(tmpCertFile, cert, 'utf8');
+
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      certFile: tmpCertFile,
+      keyFile: tmpKeyFile,
+    },
+  });
+
+  try {
+    await host.start();
+    assert.equal(host.running, true);
+  } finally {
+    await host.close('test-complete');
+    fs.rmSync(tmpDir, { force: true, recursive: true });
+  }
+});
+
+test('Host supports passphrased PEM key in direct config', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert: encryptedCert,
+      key: encryptedKey,
+      passphrase: encryptedPassphrase,
+    },
+  });
+
+  try {
+    await host.start();
+    assert.equal(host.running, true);
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host rejects passphrase protected private key without passphrase', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert: encryptedCert,
+      key: encryptedKey,
+    },
+  });
+
+  try {
+    await assert.rejects(() => host.start(), /passphrase|decrypt|PEM routines/i);
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host rejects passphrase protected private key with wrong passphrase', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert: encryptedCert,
+      key: encryptedKey,
+      passphrase: 'wrong-passphrase',
+    },
+  });
+
+  try {
+    await assert.rejects(() => host.start(), /passphrase|decrypt|PEM routines/i);
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host startup fails with mismatched certificate and key pair', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      certFile: mismatchedCertPath,
+      keyFile: mismatchedKeyPath,
+    },
+  });
+
+  try {
+    await assert.rejects(() => host.start(), /cert|key|PEM|error/i);
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host reloadTlsCertificate replaces in-use TLS material', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verser2-tls-'));
+  const reloadCertFile = path.join(tmpDir, 'host-cert.pem');
+  const reloadKeyFile = path.join(tmpDir, 'host-key.pem');
+
+  fs.writeFileSync(reloadCertFile, untrustedCert, 'utf8');
+  fs.writeFileSync(reloadKeyFile, untrustedKey, 'utf8');
+  fs.chmodSync(reloadKeyFile, 0o600);
+
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      certFile: reloadCertFile,
+      keyFile: reloadKeyFile,
+    },
+  });
+
+  let guest;
+
+  try {
+    await host.start();
+    const url = `https://127.0.0.1:${host.address.port}`;
+
+    guest = createVerserNodeGuest({
+      hostUrl: url,
+      guestId: 'tls-reload-fail',
+      minWaitingStreams: 0,
+      tls: { ca: cert },
+    });
+
+    await assert.rejects(() => guest.connect(), /certificate|self/i);
+
+    fs.writeFileSync(reloadCertFile, cert, 'utf8');
+    fs.writeFileSync(reloadKeyFile, key, 'utf8');
+    fs.chmodSync(reloadKeyFile, 0o600);
+
+    host.reloadTlsCertificate();
+
+    await guest.connect();
+    assert.equal(guest.connected, true);
+  } finally {
+    if (guest !== undefined) {
+      if (guest.connected) {
+        await guest.close('test-complete');
+      } else {
+        destroyClientSession(guest);
+      }
+    }
+
+    await safeCloseHost(host);
+    fs.rmSync(tmpDir, { force: true, recursive: true });
   }
 });
 
@@ -245,7 +421,7 @@ test('Host startup fails when key is missing from file-based TLS config', async 
   const host = createVerserHost({
     port: 0,
     tls: {
-      certFile: path.join(fixturesDirectory, 'localhost-cert.pem'),
+      certFile,
     },
   });
 
@@ -260,7 +436,7 @@ test('Host startup fails when cert is missing from file-based TLS config', async
   const host = createVerserHost({
     port: 0,
     tls: {
-      keyFile: path.join(fixturesDirectory, 'localhost-key.pem'),
+      keyFile,
     },
   });
 
@@ -299,7 +475,7 @@ test('Node Guest supports TLS config with CA file path', async () => {
     hostUrl: host.url,
     guestId: 'tls-guest-file',
     minWaitingStreams: 0,
-    tls: { caFile: path.join(fixturesDirectory, 'localhost-cert.pem') },
+    tls: { caFile: certFile },
   });
 
   try {
@@ -378,7 +554,7 @@ test('Node Broker supports TLS config with CA file path', async () => {
     hostUrl: `https://127.0.0.1:${address.port}`,
     brokerId: 'tls-broker-file',
     tls: {
-      caFile: path.join(fixturesDirectory, 'localhost-cert.pem'),
+      caFile: certFile,
     },
   });
   let connected = false;
@@ -404,7 +580,7 @@ test('Node Guest dispatches through plain HTTP/1 attachment without HTTPS setup'
   });
 
   const guest = createVerserNodeGuest({
-    hostUrl: 'https://127.0.0.1:1',
+    hostUrl: 'https://localhost:1',
     guestId: 'tls-guest-http1',
   });
   guest.attach(server);
@@ -425,11 +601,11 @@ test('Node Guest dispatches through plain HTTP/1 attachment without HTTPS setup'
   assert.deepEqual(result.body, Buffer.from('/http1'));
 });
 
-test('Node Guest rejects legacy development certificate when no CA is provided', async () => {
-  const host = await createLegacyDevelopmentGuestServer();
+test('Node Guest rejects untrusted certificate when no CA is provided', async () => {
+  const host = await createUntrustedGuestServer();
   const guest = createVerserNodeGuest({
     hostUrl: host.url,
-    guestId: 'tls-guest-legacy-no-ca',
+    guestId: 'tls-guest-untrusted-no-ca',
     minWaitingStreams: 0,
   });
 
@@ -445,11 +621,11 @@ test('Node Guest rejects legacy development certificate when no CA is provided',
   }
 });
 
-test('Node Broker rejects legacy development certificate when no CA is provided', async () => {
-  const host = await createLegacyDevelopmentBrokerServer();
+test('Node Broker rejects untrusted certificate when no CA is provided', async () => {
+  const host = await createUntrustedBrokerServer();
   const broker = createVerserBroker({
     hostUrl: host.url,
-    brokerId: 'tls-broker-legacy-no-ca',
+    brokerId: 'tls-broker-untrusted-no-ca',
   });
 
   try {

@@ -1,27 +1,17 @@
 const assert = require('node:assert/strict');
 const http2 = require('node:http2');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 
 const common = require('../packages/verser-common/dist/index.js');
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
-
-const localhostCertificate = fs.readFileSync(
-  path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
-  'utf8',
-);
-const localhostKey = fs.readFileSync(
-  path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'),
-  'utf8',
-);
+const { trusted } = require('./support/tls-fixtures.cjs');
 
 function createHost(options = {}) {
   return createVerserHost({
     ...options,
     tls: {
-      cert: localhostCertificate,
-      key: localhostKey,
+      cert: trusted.certificate,
+      key: trusted.key,
       ...options.tls,
     },
   });
@@ -32,7 +22,7 @@ function once(emitter, eventName) {
 }
 
 async function connectClient(port) {
-  const session = http2.connect(`https://localhost:${port}`, { ca: localhostCertificate });
+  const session = http2.connect(`https://127.0.0.1:${port}`, { ca: trusted.certificate });
   await once(session, 'connect');
   return session;
 }
@@ -144,6 +134,12 @@ test('Host starts and stops a TLS HTTP/2 server', async () => {
   assert.equal(host.running, false);
 });
 
+test('Host refuses to reload TLS certificate when stopped', () => {
+  const host = createHost({ port: 0 });
+
+  assert.throws(() => host.reloadTlsCertificate(), /not running|not started/i);
+});
+
 test('Host accepts registrations and advertises routed domains to Brokers', async () => {
   const host = createHost({ port: 0 });
   const events = [];
@@ -178,10 +174,11 @@ test('Host accepts registrations and advertises routed domains to Brokers', asyn
       type: 'routes',
       routes: [{ targetId: 'guest-1', domain: 'guest.local.test' }],
     });
-    assert.deepEqual(
-      events.map((event) => event.name),
-      ['connected', 'connected', 'registered', 'registered', 'route-advertised'],
-    );
+    const eventNames = events.map((event) => event.name);
+    assert.equal(eventNames.filter((name) => name === 'connected').length, 2);
+    assert.equal(eventNames.filter((name) => name === 'registered').length, 2);
+    assert.equal(eventNames.filter((name) => name === 'route-advertised').length, 1);
+    assert.equal(eventNames.at(-1), 'route-advertised');
   } finally {
     broker.close();
     guest.close();

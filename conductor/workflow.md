@@ -91,6 +91,7 @@ At the end of each phase:
 - Every Conductor track PR description must include the intended TO-BE state, including the behavior, structure, or workflow that should exist when the track is complete.
 - Do not title or describe a Conductor track PR as only a plan/spec/docs PR when the branch is the review surface for the full track implementation.
 - It is acceptable for the first commit in a track PR to add only Conductor planning artifacts, but the PR itself must still communicate the final target state for the complete track.
+- Push phase checkpoint commits only when the active track is using a dedicated PR branch and the current branch is that track branch. Never push Conductor track work directly to `main`; if a track is not already using a PR branch, create or ask for one before pushing.
 
 ## Testing Requirements
 
