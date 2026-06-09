@@ -75,27 +75,37 @@
 
   Manual verification: user approved completing Phase 3 after existing common and end-to-end tests were included in tarball mode.
 
+  Phase checkpoint commit: `7b3f810`.
+
 ## Phase 4: Documentation, final validation, and review
 
-- [ ] Task: Update release-engineering documentation
-    - [ ] Document the local tarball automated test command and expected prerequisites.
-    - [ ] Explain how tarball automated tests differ from import-only consumer checks.
-    - [ ] Document pull-request, pre-publish, and post-publish CI behavior.
-    - [ ] Document tarball-mode test coverage and source-only exclusions.
-- [ ] Task: Run final validation
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm run stage:packages`.
-    - [ ] Run `npm run test:package-tarballs`.
-    - [ ] Run focused package workflow and package-readiness tests.
-    - [ ] Run `npm test` if changed behavior warrants full validation.
-    - [ ] Run `npm run lint`.
-    - [ ] Record coverage status for changed behavior or explain why aggregate coverage is not meaningful for release-engineering harnesses.
-- [ ] Task: Perform release-readiness review
-    - [ ] Confirm tests run against installed tarball package names in temp consumer mode.
-    - [ ] Confirm package metadata, tarball installation, workflow ordering, and docs are aligned.
-    - [ ] Confirm no secrets, generated artifacts, npmjs publish behavior, or PR publish path are introduced.
-    - [ ] Request maintainability/workflow-risk review if needed.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Documentation, final validation, and review' (Protocol in workflow.md)
+- [x] Task: Update release-engineering documentation
+    - [x] Document the local tarball automated test command and expected prerequisites.
+    - [x] Explain how tarball automated tests differ from import-only consumer checks.
+    - [x] Document pull-request, pre-publish, and post-publish CI behavior.
+    - [x] Document tarball-mode test coverage and source-only exclusions.
+
+      Documentation notes: `docs/package-publishing.md` now covers `npm run test:package-tarballs`, temp-consumer tarball behavior tests, import-only versus behavior tarball validation, CI ordering, and source-only exclusions. README was also cleaned up to remove stale MVP/future API wording, split Guest serving setup from request examples, and split direct Broker, Agent, Dispatcher, fetch helper, and streaming examples into separate readable blocks. `conductor/known-solutions.md` records the approved small-patch recovery for ambiguous Markdown patch failures.
+- [x] Task: Run final validation
+    - [x] Run `npm run build`.
+    - [x] Run `npm run stage:packages`.
+    - [x] Run `npm run test:package-tarballs`.
+    - [x] Run focused package workflow and package-readiness tests.
+    - [x] Run `npm test` if changed behavior warrants full validation.
+    - [x] Run `npm run lint`.
+    - [x] Record coverage status for changed behavior or explain why aggregate coverage is not meaningful for release-engineering harnesses.
+
+      Validation: `npm run build` passed; `node --test test/package-workflow.test.js test/package-tarball-tests.test.js test/package-publish-readiness.test.js` passed; `npm run stage:packages && npm run test:package-tarballs && npm test && npm run lint` passed; after README cleanup, `node --test test/docs.test.js` and `npm run lint` passed. Coverage note: the changed behavior is release-engineering orchestration across spawned npm/package/tarball/temp-consumer processes, so aggregate Node coverage is not meaningful; behavior is covered by static workflow/harness tests, full source tests, and 42 tarball-mode tests running from installed package names.
+- [x] Task: Perform release-readiness review
+    - [x] Confirm tests run against installed tarball package names in temp consumer mode.
+    - [x] Confirm package metadata, tarball installation, workflow ordering, and docs are aligned.
+    - [x] Confirm no secrets, generated artifacts, npmjs publish behavior, or PR publish path are introduced.
+    - [x] Request maintainability/workflow-risk review if needed.
+
+      Review: @oracle found no blockers. Non-blocking docs wording was fixed. Other accepted risks are explicit test dependency on `undici` through the installed guest-node dependency, hardcoded package lists in existing release-engineering scripts, and publishing staged directories rather than the exact tested tarball files.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Documentation, final validation, and review' (Protocol in workflow.md)
+
+  Manual verification: user approved completing Phase 4 and requested skipping PR creation while pushing to the current PR branch.
 
 ## Phase Checkpoint Policy
 
