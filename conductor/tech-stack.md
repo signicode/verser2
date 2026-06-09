@@ -6,9 +6,9 @@
 
 Implemented TypeScript/Node package targets:
 
-- `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, and development TLS helpers for Verser packages.
-- `@signicode/verser2-host` in `packages/verser2-host`: Minimal TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, routed-domain advertisements, route cleanup, and Broker request forwarding.
-- `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, and minimal plain `node:http` Agent implementation.
+- `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, certificate fingerprint helpers, and TLS option normalization helpers for Verser packages.
+- `@signicode/verser2-host` in `packages/verser2-host`: Configurable TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, routed-domain advertisements, route cleanup, certificate reload support, and Broker request forwarding.
+- `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, configurable Host TLS trust, and minimal plain `node:http` Agent implementation.
 
 Future package targets:
 
@@ -52,6 +52,7 @@ Future package targets:
 - Package publish staging: generated publish-only package manifests retain runtime metadata and omit development scripts, private/workspace fields, and test-only metadata.
 - GitHub Actions: `.github/workflows/package-publish.yml` validates package build/stage/pack/consumer/tarball behavior for pull requests and publishes staged packages to GitHub Packages on main/tag push events using scoped npm registry configuration for `@signicode` after versioned tarball behavior tests pass.
 - Documentation: package publishing and release-engineering workflow details live in `docs/package-publishing.md`.
+- Documentation: TLS certificate generation and reload guidance lives in `docs/ssl-certificate-generation.md`.
 
 ## Implementation Priorities
 
