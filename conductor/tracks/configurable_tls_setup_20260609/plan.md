@@ -2,9 +2,9 @@
 
 ## Phase 0: Track branch, initial checkpoint, and PR setup
 
-- [ ] Task: Create review branch and initial track checkpoint
-    - [ ] Create a dedicated Conductor branch for this track.
-    - [ ] Add the approved track artifacts as the initial track checkpoint.
+- [~] Task: Create review branch and initial track checkpoint
+    - [x] Create a dedicated Conductor branch for this track.
+    - [x] Add the approved track artifacts as the initial track checkpoint.
     - [ ] Commit the initial track artifacts with a scoped Conductor commit.
 - [ ] Task: Open track pull request
     - [ ] Create a GitHub pull request using `gh`.
