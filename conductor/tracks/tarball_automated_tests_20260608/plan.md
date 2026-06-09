@@ -107,6 +107,8 @@
 
   Manual verification: user approved completing Phase 4 and requested skipping PR creation while pushing to the current PR branch.
 
+  Phase checkpoint commit: `3f940f4`.
+
 ## Phase Checkpoint Policy
 
 - [ ] Task: Commit only after completing each phase.
