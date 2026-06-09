@@ -129,6 +129,7 @@ Phase 3 validation notes:
 - Deduplication review: no repeated TypeScript logic was introduced; Python-specific HTTP/2 stream orchestration remains in the Python Guest package, and protocol constants remain the minimal cross-language mirror needed for compatibility.
 - Coverage: Phase 3 streaming behavior is covered by focused Python unit tests and a Node/Python integration test. Numeric 95% coverage was not measured because repository coverage tooling is Node-only and the Python package currently uses `unittest` without a coverage dependency.
 - Manual verification: confirmed by user.
+- Phase checkpoint commit: `3cea4f4`.
 
 ## Phase 4: Developer Experience, Examples, and Documentation
 
