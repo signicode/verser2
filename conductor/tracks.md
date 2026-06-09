@@ -29,5 +29,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [~] **Track: Implement configurable TLS setup for verser2 host/guest/broker and remove the shipped development certificate**
+- [x] **Track: Implement configurable TLS setup for verser2 host/guest/broker and remove the shipped development certificate**
 *Link: [./tracks/configurable_tls_setup_20260609/](./tracks/configurable_tls_setup_20260609/)*
