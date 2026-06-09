@@ -35,8 +35,9 @@ test('package tarball automated test runner installs tarballs into a temp consum
   const script = fs.readFileSync(scriptPath, 'utf8');
 
   assert.match(script, /npm['"], \[['"]pack/);
-  assert.match(script, /npm['"], \[['"]install/);
+  assert.match(script, /npm['"],[\s\S]*?['"]install/);
   assert.match(script, /mkdtempSync/);
   assert.match(script, /node_modules/);
-  assert.match(script, /require\.resolve\([^)]*@signicode\/verser-common/);
+  assert.match(script, /behavior\.test\.cjs/);
+  assert.match(script, /copyFileSync/);
 });
