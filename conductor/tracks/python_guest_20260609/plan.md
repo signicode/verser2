@@ -102,6 +102,7 @@ Phase 2 validation notes:
 - Deduplication review: no repeated TypeScript package logic was added; Python-local protocol helpers are minimal mirrors of common protocol bytes/metadata needed for cross-language compatibility.
 - Coverage: Phase 2 Python unit tests cover ASGI scope construction, receive/send behavior, response metadata/body capture, app exception error metadata, and envelope encoding; Node/Python integration covers Host registration, route advertisement, Broker routed request, headers, status, and body preservation. Numeric coverage was not measured because repository coverage tooling is Node-only.
 - Manual verification: confirmed by user.
+- Phase checkpoint commit: `3c297e2`.
 
 ## Phase 3: Streaming Semantics and Parity Coverage
 
