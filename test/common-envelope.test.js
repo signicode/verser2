@@ -2,7 +2,9 @@ const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
 const { test } = require('node:test');
 
-const common = require('../packages/verser-common/dist/index.js');
+const { loadVerserCommon } = require('./support/verser-package-imports.cjs');
+
+const common = loadVerserCommon();
 
 test('shared envelope helpers encode request, response, and error metadata', () => {
   const requestEnvelope = common.encodeVerserEnvelope({

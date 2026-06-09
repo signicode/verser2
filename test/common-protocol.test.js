@@ -2,7 +2,9 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { Readable } = require('node:stream');
 
-const common = require('../packages/verser-common/dist/index.js');
+const { loadVerserCommon } = require('./support/verser-package-imports.cjs');
+
+const common = loadVerserCommon();
 
 test('shared protocol helpers create identifiers and route registrations', () => {
   const guestId = common.createGuestId('guest-alpha');
