@@ -3,9 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "description": "Shared TypeScript utilities and primitives for Verser packages.",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts"
+    "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
   }
 }

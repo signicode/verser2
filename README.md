@@ -81,7 +81,7 @@ Non-listening HTTP/1 Server
 
 A guest-side (client side) HTTP server can be called by other connected servers even when it is not listening on a network port.
 
-The current TypeScript packages expose a Host, a Node Guest, and a guest-side Broker. A Guest attaches a normal Node HTTP handler without listening on a port, while a Broker connects to the Host and sends requests to advertised Guest routes.
+The TypeScript packages expose a Host, a Node Guest, and a guest-side Broker. A Guest attaches a normal Node HTTP handler without listening on a port, while a Broker connects to the Host and sends requests to advertised Guest routes.
 
 ```ts
 import fs from 'node:fs';
@@ -131,9 +131,9 @@ console.log(response.statusCode);
 response.body.pipe(process.stdout);
 ```
 
-## Current TypeScript API
+## TypeScript package usage
 
-The current workspace implementation exposes package-level APIs for the Host, Node Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
+The workspace packages expose APIs for the Host, Node Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
 
 ```ts
 import fs from 'node:fs';
@@ -237,7 +237,7 @@ const streamResponse = await fetch('http://client-json.local.test/upload', {
 console.log(streamResponse.status);
 ```
 
-### Current transport notes
+### Transport notes
 
 - The Host uses TLS HTTP/2 and requires application-provided certificate and private key material.
 - Host `keyFile` private keys must be readable only by the owner (`chmod 0600`) on POSIX systems.
@@ -366,7 +366,7 @@ const broker = createVerserBroker({
 
 ## Why HTTP/2 Now, And HTTP/3 Later
 
-HTTP/2 and HTTP/3 both support multiplexed streams. The current TypeScript implementation uses TLS HTTP/2; HTTP/3 is roadmap work.
+HTTP/2 and HTTP/3 both support multiplexed streams. The TypeScript packages use TLS HTTP/2; HTTP/3 is roadmap work.
 
 That means one client connection can carry many independent HTTP requests at the same time:
 
@@ -447,7 +447,7 @@ guest.attach(server, 'client-a.local.test');
 await guest.connect();
 ```
 
-The current implementation dispatches to normal request listeners through `IncomingMessage`-like and `ServerResponse`-like shims. Application handlers can remain close to ordinary Node.js HTTP code, while advanced socket internals, upgrades, trailers, and full `IncomingMessage`/`ServerResponse` compatibility remain outside the current API.
+Verser dispatches to normal request listeners through `IncomingMessage`-like and `ServerResponse`-like shims. Application handlers can remain close to ordinary Node.js HTTP code, while advanced socket internals, upgrades, trailers, and full `IncomingMessage`/`ServerResponse` compatibility remain outside the supported surface.
 
 ## Multiplexed Requests
 
@@ -482,7 +482,7 @@ response.body.pipe(destination);
 
 `verser2` prefers modern multiplexed transports.
 
-Current protocol roles:
+Protocol roles:
 
 1. TLS HTTP/2 is the implemented remote multiplexed transport between Host, Guest, and Broker.
 2. HTTP/1 is used for local in-process server dispatch into normal Node request handlers.
@@ -591,7 +591,7 @@ broker.on("streamError", error => {});
 
 ## Status
 
-`verser2` is intended as a modern replacement for reverse HTTP connectivity built around multiplexed sessions. The current TypeScript implementation uses TLS HTTP/2; HTTP/3 remains roadmap work.
+`verser2` is intended as a modern replacement for reverse HTTP connectivity built around multiplexed sessions. The TypeScript packages use TLS HTTP/2; HTTP/3 remains roadmap work.
 
 The primary design goal is simple:
 

@@ -48,6 +48,10 @@ function assertStagedPackageArtifacts(packageName) {
     fs.existsSync(path.join(packageDirectory, 'dist/index.d.ts')),
     `Expected staged declaration entrypoint for ${packageName}`,
   );
+  assert.ok(
+    fs.existsSync(path.join(packageDirectory, 'LICENSE')),
+    `Expected staged license for ${packageName}`,
+  );
 }
 
 test('central staging tree contains publish-ready packages', () => {
@@ -66,6 +70,7 @@ test('staged package manifests are publish-only consumer metadata', () => {
     assert.equal(stagedManifest.name, sourceManifest.name);
     assert.equal(stagedManifest.version, sourceManifest.version);
     assert.equal(stagedManifest.description, sourceManifest.description);
+    assert.equal(stagedManifest.license, 'MIT');
     assert.equal(stagedManifest.main, 'dist/index.js');
     assert.equal(stagedManifest.types, 'dist/index.d.ts');
     assert.equal(stagedManifest.exports['.'].require, './dist/index.js');
@@ -96,6 +101,7 @@ test('staged packages are packable with npm pack dry-run', () => {
     const packedFiles = packResult.files.map((file) => file.path).sort();
 
     assert.ok(packedFiles.includes('package.json'));
+    assert.ok(packedFiles.includes('LICENSE'));
     assert.ok(packedFiles.includes('dist/index.js'));
     assert.ok(packedFiles.includes('dist/index.d.ts'));
     assert.equal(

@@ -21,7 +21,7 @@ Build packages first with npm run build, then run this command to create
 publish-ready package directories under dist/packages/<safe-package-name>.
 
 Generated staged packages include built entrypoints, TypeScript declarations,
-and publish-only package.json metadata for GitHub Packages.`);
+licenses, and publish-only package.json metadata for GitHub Packages.`);
   process.exit(0);
 }
 
@@ -82,6 +82,7 @@ for (const packageDirectory of packageDirectories) {
   const sourceDistDirectory = path.join(packageDirectory, 'dist');
   const sourceJavaScriptArtifact = path.join(sourceDistDirectory, 'index.js');
   const sourceDeclarationArtifact = path.join(sourceDistDirectory, 'index.d.ts');
+  const sourceLicenseArtifact = path.join(sourceDistDirectory, 'LICENSE');
 
   if (!fs.existsSync(sourceManifestPath)) {
     throw new Error(`Source package manifest is missing: ${sourceManifestPath}`);
@@ -96,6 +97,7 @@ for (const packageDirectory of packageDirectories) {
 
   requireFile(sourceJavaScriptArtifact);
   requireFile(sourceDeclarationArtifact);
+  requireFile(sourceLicenseArtifact);
 
   const stagedPackageDirectory = path.join(stagingRootDirectory, safePackageName(packageName));
   fs.rmSync(stagedPackageDirectory, { recursive: true, force: true });
@@ -107,6 +109,7 @@ for (const packageDirectory of packageDirectories) {
     sourceDeclarationArtifact,
     path.join(stagedPackageDirectory, 'dist', 'index.d.ts'),
   );
+  fs.copyFileSync(sourceLicenseArtifact, path.join(stagedPackageDirectory, 'LICENSE'));
 
   const stagedManifest = buildStagedManifest(sourceManifest);
   const stagedManifestPath = path.join(stagedPackageDirectory, 'package.json');

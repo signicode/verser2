@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Initial TypeScript scaffold for the Verser2 Node Guest package.",
+  "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
@@ -11,6 +12,6 @@
     "undici": "^6.26.0"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common --external @signicode/verser2-guest-js-common --external undici && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts"
+    "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common --external @signicode/verser2-guest-js-common --external undici && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
   }
 }
