@@ -6,11 +6,13 @@
     - [x] Create a dedicated Conductor branch for this track.
     - [x] Add the approved track artifacts as the initial track checkpoint.
     - [x] Commit the initial track artifacts with a scoped Conductor commit.
-- [~] Task: Open track pull request
-    - [ ] Create a GitHub pull request using `gh`.
-    - [ ] Ensure the PR title and description describe the full intended TO-BE state for the track: configurable remote transport TLS, no shipped development certificate, updated tests, and updated documentation.
-    - [ ] Do not describe the PR as only a planning/spec commit or a single-commit change; the PR is the review surface for the whole implementation plan.
-    - [ ] Use the PR as the review surface for all subsequent phase work.
+- [x] Task: Open track pull request
+    - [x] Create a GitHub pull request using `gh`.
+    - [x] Ensure the PR title and description describe the full intended TO-BE state for the track: configurable remote transport TLS, no shipped development certificate, updated tests, and updated documentation.
+    - [x] Do not describe the PR as only a planning/spec commit or a single-commit change; the PR is the review surface for the whole implementation plan.
+    - [x] Use the PR as the review surface for all subsequent phase work.
+
+Phase 0 checkpoint: created branch `conductor/configurable-tls-setup-20260609`, pushed it, and opened PR https://github.com/signicode/verser2/pull/6 with a description covering the full track TO-BE state rather than a single commit.
 
 ## Phase 1: Baseline audit and red tests for TLS configuration
 
