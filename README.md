@@ -8,9 +8,10 @@ It lets a client process host an HTTP/1 server without opening a listening port,
 
 This repository is an npm workspace monorepo using `packages/*`.
 
-Initial TypeScript package scaffolds:
+Implemented TypeScript packages:
 
 - `@signicode/verser-common` in `packages/verser-common`
+- `@signicode/verser2-guest-js-common` in `packages/verser2-guest-js-common`
 - `@signicode/verser2-host` in `packages/verser2-host`
 - `@signicode/verser2-guest-node` in `packages/verser2-guest-node`
 
@@ -67,7 +68,7 @@ Connected Guest
     ▼
 verser2 connection layer
     │
-    │ HTTP/2 multiplexed stream in the current MVP
+    │ TLS HTTP/2 routed request stream plus leased body stream
     ▼
 Client Process
     │
@@ -80,15 +81,23 @@ Non-listening HTTP/1 Server
 
 A guest-side (client side) HTTP server can be called by other connected servers even when it is not listening on a network port.
 
-The examples in this section show the intended product API shape. The currently implemented workspace APIs are listed in [Current TypeScript MVP API](#current-typescript-mvp-api).
+The current TypeScript packages expose a Host, a Node Guest, and a guest-side Broker. A Guest attaches a normal Node HTTP handler without listening on a port, while a Broker connects to the Host and sends requests to advertised Guest routes.
 
 ```ts
-import http from "node:http";
-import { Verser2Client } from "verser2";
+import http from 'node:http';
+import { createVerserHost } from '@signicode/verser2-host';
+import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
+
+const host = createVerserHost({ port: 8443 });
+await host.start();
+
+const hostUrl = 'https://localhost:8443';
+const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a' });
+const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a' });
 
 const localServer = http.createServer((req, res) => {
-  if (req.url === "/health") {
-    res.writeHead(200, { "content-type": "application/json" });
+  if (req.url === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
     return;
   }
@@ -97,30 +106,280 @@ const localServer = http.createServer((req, res) => {
   res.end();
 });
 
-const client = new Verser2Client({
-  url: "https://broker.example.com"
-});
+guest.attach(localServer, 'client-a.local.test');
 
-client.registerServer("client-a", localServer);
-
-await client.connect();
+await broker.connect();
+await guest.connect();
+await broker.waitForRoute('client-a.local.test');
 ```
 
-Another connected guest can then call the client-side server:
+The Broker can then call the Guest-side server:
 
 ```ts
-const response = await connectedServer.request({
-  target: "client-a",
-  method: "GET",
-  path: "/health"
+const response = await broker.request({
+  targetId: 'client-a',
+  method: 'GET',
+  path: '/health',
 });
 
-console.log(await response.json());
+console.log(response.statusCode);
+response.body.pipe(process.stdout);
 ```
 
-## Current TypeScript MVP API
+## Current TypeScript API
 
-The current workspace implementation exposes package-level APIs for the minimal Host, Node Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
+The current workspace implementation exposes package-level APIs for the Host, Node Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
+
+```ts
+import http from 'node:http';
+import { createVerserHost } from '@signicode/verser2-host';
+import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
+
+const host = createVerserHost({ port: 8443 });
+await host.start();
+
+const hostUrl = 'https://localhost:8443';
+const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a' });
+const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a' });
+
+await broker.connect();
+```
+
+Serve a response from the attached Guest handler:
+
+```ts
+const jsonServer = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  res.writeHead(404);
+  res.end();
+});
+
+guest.attach(jsonServer, 'client-json.local.test');
+
+await guest.connect();
+await broker.waitForRoute('client-json.local.test');
+```
+
+Send a routed request directly through the Broker:
+
+```ts
+const brokerResponse = await broker.request({
+  targetId: 'client-a',
+  method: 'GET',
+  path: '/health',
+});
+
+console.log(brokerResponse.statusCode);
+brokerResponse.body.pipe(process.stdout);
+```
+
+Use the Broker's `http.Agent` with ordinary Node HTTP APIs:
+
+```ts
+const agent = broker.createAgent();
+http.get('http://client-json.local.test/health', { agent }, (response) => {
+  response.pipe(process.stdout);
+});
+```
+
+Use the Broker's Undici `Dispatcher` with `fetch`:
+
+```ts
+const dispatcher = broker.createDispatcher();
+const fetchResponse = await fetch('http://client-json.local.test/health', { dispatcher });
+console.log(await fetchResponse.text());
+```
+
+Or create a fetch helper that is already wired to the Broker:
+
+```ts
+const routedFetch = broker.createFetch();
+const helperResponse = await routedFetch('http://client-json.local.test/health');
+console.log(await helperResponse.text());
+```
+
+The same routing APIs support streamed request and response bodies:
+
+```ts
+const uploadResponse = await broker.request({
+  targetId: 'client-a',
+  method: 'POST',
+  path: '/upload',
+  body: readableStream,
+});
+
+uploadResponse.body.pipe(destination);
+```
+
+```ts
+const streamResponse = await fetch('http://client-json.local.test/upload', {
+  method: 'POST',
+  body: readableStream,
+  duplex: 'half',
+  dispatcher: broker.createDispatcher(),
+});
+
+console.log(streamResponse.status);
+```
+
+### Current transport notes
+
+- The Host uses TLS HTTP/2 with an embedded self-signed development certificate from `@signicode/verser-common`.
+- The Broker and Guest use that development certificate as a pinned CA for the current development path.
+- HTTP/3 and QUIC are explicitly not implemented.
+- A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
+- The Guest maintains a configurable pool of one-use leased HTTP/2 streams. Routed request and response bodies are transferred as raw octets over an assigned lease, not as base64 NDJSON control frames.
+- Guest control streams remain for coordination such as route advertisements.
+- Node Guest lease pool options include `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and `maxMetadataBytes`.
+- Successful `broker.request()` calls expose `body` as a Node.js `Readable` stream. Error response bodies may be read internally so routed errors include actionable diagnostics.
+- The Agent supports plain `http.request`/`http.get` for Host-advertised domains only. Non-advertised hostnames are rejected instead of falling back to DNS.
+- The Node Broker also exposes `createDispatcher()` for Undici `fetch(url, { dispatcher })` and `createFetch()` for a local fetch helper preconfigured with Verser routing.
+- Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, CONNECT, WebSocket, target TLS semantics, and advanced socket features are not implemented.
+
+## Features
+
+- Expose client-side HTTP/1 servers without opening inbound ports.
+- Dispatch remote requests into non-listening `http.Server` instances.
+- Allow connected servers to call each other through a shared broker or connection layer.
+- Use HTTP/2 streams for multiplexed connectivity.
+- Keep HTTP/3 streams as future work; they are not implemented.
+- Carry many concurrent requests over one physical connection.
+- Preserve HTTP method, path, headers, body, and response semantics.
+- Support request and response streaming where the transport supports it.
+- Keep local application code compatible with normal Node.js HTTP server handlers.
+
+## Why HTTP/2 Now, And HTTP/3 Later
+
+HTTP/2 and HTTP/3 both support multiplexed streams. The current TypeScript implementation uses TLS HTTP/2; HTTP/3 is roadmap work.
+
+That means one client connection can carry many independent HTTP requests at the same time:
+
+```txt
+single client connection
+    ├── stream: GET /health
+    ├── stream: POST /jobs
+    ├── stream: GET /metrics
+    └── stream: POST /rpc/process
+```
+
+This avoids opening a new TCP connection for every logical request and makes reverse connectivity more efficient and easier to manage.
+
+## Connection Model
+
+`verser2` has three main implemented roles.
+
+### Host
+
+The Host listens for outbound Guest and Broker connections and routes requests to registered Guest routes.
+
+```ts
+const host = createVerserHost({ port: 8443 });
+
+await host.start();
+```
+
+### Broker
+
+The Broker connects outbound to a Host and sends requests to advertised Guest routes.
+
+```ts
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+});
+
+await broker.connect();
+```
+
+### Guest
+
+The Guest connects outbound to a Host and attaches a local HTTP/1 handler without listening on a port.
+
+```ts
+const guest = createVerserNodeGuest({
+  hostUrl: 'https://localhost:8443',
+  guestId: 'client-a',
+});
+
+guest.attach(localHttpServer, 'client-a.local.test');
+
+await guest.connect();
+```
+
+## Non-Listening HTTP/1 Servers
+
+A key feature of `verser2` is that local HTTP/1 servers do not need to bind a port.
+
+Instead of this:
+
+```ts
+server.listen(3000);
+```
+
+Use this:
+
+```ts
+guest.attach(server, 'client-a.local.test');
+await guest.connect();
+```
+
+The current implementation dispatches to normal request listeners through `IncomingMessage`-like and `ServerResponse`-like shims. Application handlers can remain close to ordinary Node.js HTTP code, while advanced socket internals, upgrades, trailers, and full `IncomingMessage`/`ServerResponse` compatibility remain outside the current API.
+
+## Multiplexed Requests
+
+Multiple requests can be active at once over a single client connection.
+
+```ts
+await Promise.all([
+  broker.request({ targetId: 'client-a', method: 'GET', path: '/health' }),
+  broker.request({ targetId: 'client-a', method: 'GET', path: '/metrics' }),
+  broker.request({ targetId: 'client-a', method: 'POST', path: '/jobs', body: ['payload'] }),
+]);
+```
+
+Each Broker-to-Host request maps to a separate HTTP/2 stream. The Guest leg uses an assigned one-use Guest-opened lease stream for raw routed request and response body bytes, while the Guest control stream remains available for route advertisements and coordination.
+
+## Streaming Status
+
+`verser2` supports streaming request and response bodies on the leased HTTP/2 routed path. Successful `broker.request()` calls return a response body `Readable`, and request bodies may be provided as a `Readable` or as explicit chunks. Error response bodies may still be read internally to produce actionable routed error diagnostics.
+
+```ts
+const response = await broker.request({
+  targetId: 'client-a',
+  method: 'POST',
+  path: '/upload',
+  body: readableStream,
+});
+
+response.body.pipe(destination);
+```
+
+## Protocol Selection
+
+`verser2` prefers modern multiplexed transports.
+
+Current protocol roles:
+
+1. TLS HTTP/2 is the implemented remote multiplexed transport between Host, Guest, and Broker.
+2. HTTP/1 is used for local in-process server dispatch into normal Node request handlers.
+3. HTTP/3 remains roadmap work and is not implemented.
+
+```ts
+const host = createVerserHost({ port: 8443 });
+await host.start();
+
+const guest = createVerserNodeGuest({
+  hostUrl: 'https://localhost:8443',
+  guestId: 'client-a',
+});
+```
+
+## End-to-End Example
 
 ```ts
 import http from 'node:http';
@@ -139,240 +398,19 @@ const localServer = http.createServer((req, res) => {
   res.end(`Handled ${req.method} ${req.url}`);
 });
 
-// The local server is attached in-process and does not call listen().
 guest.attach(localServer, 'client-a.local.test');
 
 await broker.connect();
 await guest.connect();
 await broker.waitForRoute('client-a.local.test');
 
-const brokerResponse = await broker.request({
+const response = await broker.request({
   targetId: 'client-a',
   method: 'GET',
-  path: '/health',
+  path: '/hello',
 });
 
-console.log(brokerResponse.statusCode);
-brokerResponse.body.pipe(process.stdout);
-
-const agent = broker.createAgent();
-http.get('http://client-a.local.test/health', { agent }, (response) => {
-  response.pipe(process.stdout);
-});
-
-const dispatcher = broker.createDispatcher();
-const fetchResponse = await fetch('http://client-a.local.test/health', { dispatcher });
-console.log(await fetchResponse.text());
-
-const routedFetch = broker.createFetch();
-const helperResponse = await routedFetch('http://client-a.local.test/health');
-console.log(await helperResponse.text());
-```
-
-### Current MVP transport notes
-
-- The Host uses TLS HTTP/2 with an embedded self-signed development certificate from `@signicode/verser-common`.
-- The Broker and Guest use that development certificate as a pinned CA for the MVP path.
-- HTTP/3 and QUIC are explicitly not implemented in the current TypeScript MVP.
-- A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
-- The Guest maintains a configurable pool of one-use leased HTTP/2 streams. Routed request and response bodies are transferred as raw octets over an assigned lease, not as base64 NDJSON control frames.
-- Guest control streams remain for coordination such as route advertisements.
-- Node Guest lease pool options include `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and `maxMetadataBytes`.
-- Successful `broker.request()` calls expose `body` as a Node.js `Readable` stream. Error response bodies may be read internally so routed errors include actionable diagnostics.
-- The Agent MVP supports plain `http.request`/`http.get` for Host-advertised domains only. Non-advertised hostnames are rejected instead of falling back to DNS.
-- The Node Broker also exposes `createDispatcher()` for Undici `fetch(url, { dispatcher })` and `createFetch()` for a local fetch helper preconfigured with Verser routing.
-- Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, CONNECT, WebSocket, target TLS semantics, and advanced socket features are outside the current MVP subset.
-
-Requests can also be made using the current MVP `http.Agent` or Undici `Dispatcher` exposed by a connected Broker:
-
-```ts
-import http from "node:http";
-import { Verser2Client } from "verser2";
-const client = await new Verser2Client({
-  url: "https://broker.example.com"
-}).connect();
-
-const agent = client.agent();
-const response = await http.get("http://client-a/health", { agent });
-console.log(await response.json());
-
-const dispatcher = client.dispatcher();
-const fetchResponse = await fetch("http://client-a/health", { dispatcher });
-console.log(await fetchResponse.json());
-```
-
-
-
-## Features
-
-- Expose client-side HTTP/1 servers without opening inbound ports.
-- Dispatch remote requests into non-listening `http.Server` instances.
-- Allow connected servers to call each other through a shared broker or connection layer.
-- Use HTTP/2 streams for multiplexed connectivity.
-- Keep HTTP/3 streams as future work; they are not implemented in the current TypeScript MVP.
-- Carry many concurrent requests over one physical connection.
-- Preserve HTTP method, path, headers, body, and response semantics.
-- Support request and response streaming where the transport supports it.
-- Keep local application code compatible with normal Node.js HTTP server handlers.
-
-## Why HTTP/2 Now, And HTTP/3 Later
-
-HTTP/2 and HTTP/3 both support multiplexed streams. The current TypeScript MVP implements TLS HTTP/2 only; HTTP/3 is roadmap work.
-
-That means one client connection can carry many independent HTTP requests at the same time:
-
-```txt
-single client connection
-    ├── stream: GET /health
-    ├── stream: POST /jobs
-    ├── stream: GET /metrics
-    └── stream: POST /rpc/process
-```
-
-This avoids opening a new TCP connection for every logical request and makes reverse connectivity more efficient and easier to manage.
-
-## Connection Model
-
-`verser2` has three main roles.
-
-### Client
-
-The client owns a local HTTP/1 server and opens an outbound connection.
-
-```ts
-const client = new Verser2Client({
-  url: "https://broker.example.com",
-  server: localHttpServer,
-  id: "client-a"
-});
-
-await client.connect();
-```
-
-### Broker
-
-The broker accepts connected clients and routes requests between connected peers.
-
-```ts
-const broker = new Verser2Broker({
-  port: 8443,
-  protocols: ["h3", "h2"]
-});
-
-await broker.listen();
-```
-
-### Connected Server
-
-A connected server can call a client-side HTTP server through the broker.
-
-```ts
-const response = await broker.request({
-  target: "client-a",
-  method: "POST",
-  path: "/tasks",
-  body: { id: "task-1" }
-});
-```
-
-## Non-Listening HTTP/1 Servers
-
-A key feature of `verser2` is that local HTTP/1 servers do not need to bind a port.
-
-Instead of this:
-
-```ts
-server.listen(3000);
-```
-
-Use this:
-
-```ts
-await client.connect({ server });
-```
-
-The current MVP dispatches to normal request listeners through minimal `IncomingMessage`-like and `ServerResponse`-like shims. Application handlers can remain close to ordinary Node.js HTTP code, but advanced socket internals, upgrades, trailers, and full `IncomingMessage`/`ServerResponse` compatibility are future work.
-
-## Multiplexed Requests
-
-Multiple requests can be active at once over a single client connection.
-
-```ts
-await Promise.all([
-  broker.request({ target: "client-a", method: "GET", path: "/health" }),
-  broker.request({ target: "client-a", method: "GET", path: "/metrics" }),
-  broker.request({ target: "client-a", method: "POST", path: "/jobs", body: { id: 1 } })
-]);
-```
-
-Each Broker-to-Host request maps to a separate HTTP/2 stream in the current MVP. The Guest leg uses an assigned one-use Guest-opened lease stream for raw routed request and response body bytes, while the Guest control stream remains available for route advertisements and coordination.
-
-## Streaming Status
-
-`verser2` supports streaming request and response bodies on the leased HTTP/2 routed path. Successful `broker.request()` calls return a response body `Readable`, and request bodies may be provided as a `Readable` or as explicit chunks. Error response bodies may still be read internally to produce actionable routed error diagnostics.
-
-```ts
-const response = await broker.request({
-  target: "client-a",
-  method: "POST",
-  path: "/upload",
-  body: readableStream
-});
-
-response.body.pipe(destination);
-```
-
-## Protocol Selection
-
-`verser2` prefers modern multiplexed transports.
-
-Recommended default order:
-
-1. HTTP/2 as the current stable default.
-2. HTTP/3 when added by a future track.
-3. HTTP/1 only for local in-process server dispatch, not for the remote multiplexed connection.
-
-```ts
-const client = new Verser2Client({
-  url: "https://broker.example.com",
-  protocols: ["h3", "h2"],
-  server: localServer
-});
-```
-
-## Expected API Shape
-
-```ts
-import http from "node:http";
-import { Verser2Client, Verser2Broker } from "verser2";
-
-const broker = new Verser2Broker({
-  port: 8443,
-  protocols: ["h3", "h2"]
-});
-
-await broker.listen();
-
-const localServer = http.createServer((req, res) => {
-  res.writeHead(200, { "content-type": "text/plain" });
-  res.end(`Handled ${req.method} ${req.url}`);
-});
-
-const client = new Verser2Client({
-  id: "client-a",
-  url: "https://127.0.0.1:8443",
-  server: localServer
-});
-
-await client.connect();
-
-const response = await broker.request({
-  target: "client-a",
-  method: "GET",
-  path: "/hello"
-});
-
-console.log(await response.text());
+response.body.pipe(process.stdout);
 ```
 
 ## Error Handling
@@ -416,13 +454,13 @@ broker.on("streamError", error => {});
 ## Limitations
 
 - `verser2` is not a general-purpose public HTTP gateway by itself.
-- HTTP/3 is not implemented in the current TypeScript MVP; availability will depend on future runtime and platform support.
+- HTTP/3 is not implemented; availability will depend on future runtime and platform support.
 - Local HTTP/1 servers are dispatched in-process and are not automatically exposed as public network listeners.
 - Authentication, authorization, and target routing policies must be configured by the application or broker layer.
 
 ## Status
 
-`verser2` is intended as a modern replacement for reverse HTTP connectivity built around multiplexed sessions. The current TypeScript MVP uses TLS HTTP/2; HTTP/3 remains roadmap work.
+`verser2` is intended as a modern replacement for reverse HTTP connectivity built around multiplexed sessions. The current TypeScript implementation uses TLS HTTP/2; HTTP/3 remains roadmap work.
 
 The primary design goal is simple:
 

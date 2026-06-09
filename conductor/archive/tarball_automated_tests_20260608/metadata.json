@@ -1,0 +1,8 @@
+{
+  "track_id": "tarball_automated_tests_20260608",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-06-08T23:48:17Z",
+  "updated_at": "2026-06-08T23:48:17Z",
+  "description": "Run automated tests against built package tarballs"
+}

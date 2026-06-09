@@ -38,13 +38,20 @@ Future package targets:
 
 - Package manager: npm.
 - Build command: `npm run build`.
-- Test command: `npm run test`.
+- Package staging command: `npm run stage:packages`, which writes publish-ready package directories under `dist/packages` from built workspace artifacts.
+- Package consumer validation command: `npm run test:package-consumers -- --source=<source|staging|tarball|github>`.
+- Package tarball behavior validation command: `npm run test:package-tarballs`, which packs staged packages, installs the tarballs into an isolated temporary consumer project, and runs reusable automated tests against package-name imports from `node_modules`.
+- Package version policy command: `npm run package:version-policy`, which maps stable versions to `latest`, prereleases to `next`, and computes SHA-labeled main-build versions for GitHub Packages.
+- Test command: `npm run test` (builds, stages packages, then runs `node:test`).
 - Lint command: `npm run lint`.
 - Formatting/linting: Biome.
 - Test runner: Node.js built-in `node:test` smoke tests.
 - TypeScript compiler: `typescript` with per-package composite builds.
 - Type declarations: generated during package builds.
 - Package bundling: `tsup` bundles each TypeScript package entrypoint to a single CommonJS `dist/index.js` and rolled-up `dist/index.d.ts` artifact after sources are split into internal modules.
+- Package publish staging: generated publish-only package manifests retain runtime metadata and omit development scripts, private/workspace fields, and test-only metadata.
+- GitHub Actions: `.github/workflows/package-publish.yml` validates package build/stage/pack/consumer/tarball behavior for pull requests and publishes staged packages to GitHub Packages on main/tag push events using scoped npm registry configuration for `@signicode` after versioned tarball behavior tests pass.
+- Documentation: package publishing and release-engineering workflow details live in `docs/package-publishing.md`.
 
 ## Implementation Priorities
 
