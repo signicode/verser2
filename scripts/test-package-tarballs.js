@@ -7,7 +7,18 @@ const path = require('node:path');
 
 const rootDirectory = path.resolve(__dirname, '..');
 const stagingRootDirectory = path.join(rootDirectory, 'dist', 'packages');
-const behaviorTestSourcePath = path.join(rootDirectory, 'test', 'package-tarball', 'behavior.test.cjs');
+const behaviorTestSourcePath = path.join(
+  rootDirectory,
+  'test',
+  'package-tarball',
+  'behavior.test.cjs',
+);
+const reusableTestRelativePaths = [
+  path.join('test', 'common-envelope.test.js'),
+  path.join('test', 'common-protocol.test.js'),
+  path.join('test', 'end-to-end.test.js'),
+];
+const supportFileRelativePaths = [path.join('test', 'support', 'verser-package-imports.cjs')];
 
 const sourcePackages = [
   {
@@ -31,15 +42,17 @@ const sourcePackages = [
 const includedGroups = [
   {
     name: 'consumer-imports',
-    description: 'Installed tarball packages resolve by package name and expose public entrypoints.',
+    description:
+      'Installed tarball packages resolve by package name and expose public entrypoints.',
   },
   {
-    name: 'common-protocol-envelope',
-    description: 'Common protocol and envelope helpers work through the installed package entrypoint.',
+    name: 'existing-common-protocol-envelope',
+    description: 'Existing common protocol and envelope tests run from installed tarballs.',
   },
   {
-    name: 'host-guest-broker-smoke',
-    description: 'Host, Node Guest, and Broker can route a lightweight request from installed packages.',
+    name: 'existing-end-to-end',
+    description:
+      'Existing Host, Node Guest, Broker, Agent, and fetch end-to-end tests run from installed tarballs.',
   },
 ];
 
@@ -49,9 +62,9 @@ const excludedGroups = [
     reason: 'These tests inspect repository workflow YAML, package manifests, and staged metadata.',
   },
   {
-    name: 'source-internal-and-full-e2e',
+    name: 'remaining-source-internal-and-streaming',
     reason:
-      'Full source suites include repo-relative imports, internal fixtures, broad streaming coverage, or timing-heavy integration cases already covered by source tests.',
+      'Remaining source suites include repository metadata, workflow assertions, package staging internals, or broader timing-heavy streaming cases already covered by source tests.',
   },
 ];
 
@@ -129,8 +142,14 @@ function packStagedPackages(tarballDirectory) {
   for (const packageInfo of sourcePackages) {
     const stagedDirectory = path.join(stagingRootDirectory, packageInfo.stagedSafeName);
     requireFile(stagedDirectory, `staged package directory for ${packageInfo.name}`);
-    requireFile(path.join(stagedDirectory, 'package.json'), `staged manifest for ${packageInfo.name}`);
-    requireFile(path.join(stagedDirectory, 'dist', 'index.js'), `staged JavaScript for ${packageInfo.name}`);
+    requireFile(
+      path.join(stagedDirectory, 'package.json'),
+      `staged manifest for ${packageInfo.name}`,
+    );
+    requireFile(
+      path.join(stagedDirectory, 'dist', 'index.js'),
+      `staged JavaScript for ${packageInfo.name}`,
+    );
     requireFile(
       path.join(stagedDirectory, 'dist', 'index.d.ts'),
       `staged declarations for ${packageInfo.name}`,
@@ -185,11 +204,33 @@ function installTarballs(projectRoot, tarballPaths) {
 }
 
 function writeBehaviorTest(projectRoot) {
-  const testPath = path.join(projectRoot, 'tarball-behavior.test.cjs');
+  const testDirectory = path.join(projectRoot, 'test');
+  const supportDirectory = path.join(testDirectory, 'support');
+  const testPaths = [path.join(testDirectory, 'tarball-behavior.test.cjs')];
 
+  ensureDirectory(testDirectory);
+  ensureDirectory(supportDirectory);
   requireFile(behaviorTestSourcePath, 'tarball behavior test source');
-  fs.copyFileSync(behaviorTestSourcePath, testPath);
-  return testPath;
+  fs.copyFileSync(behaviorTestSourcePath, testPaths[0]);
+
+  for (const relativePath of supportFileRelativePaths) {
+    const sourcePath = path.join(rootDirectory, relativePath);
+    const destinationPath = path.join(projectRoot, relativePath);
+    requireFile(sourcePath, `tarball test support file ${relativePath}`);
+    ensureDirectory(path.dirname(destinationPath));
+    fs.copyFileSync(sourcePath, destinationPath);
+  }
+
+  for (const relativePath of reusableTestRelativePaths) {
+    const sourcePath = path.join(rootDirectory, relativePath);
+    const destinationPath = path.join(projectRoot, relativePath);
+    requireFile(sourcePath, `reusable tarball test file ${relativePath}`);
+    ensureDirectory(path.dirname(destinationPath));
+    fs.copyFileSync(sourcePath, destinationPath);
+    testPaths.push(destinationPath);
+  }
+
+  return testPaths;
 }
 
 function runTarballTests() {
@@ -199,10 +240,14 @@ function runTarballTests() {
   try {
     const tarballPaths = packStagedPackages(tarballDirectory);
     installTarballs(projectRoot, tarballPaths);
-    const testPath = writeBehaviorTest(projectRoot);
-    runCommand(process.execPath, ['--test', testPath], {
+    const testPaths = writeBehaviorTest(projectRoot);
+    runCommand(process.execPath, ['--test', ...testPaths], {
       cwd: projectRoot,
       stdio: 'inherit',
+      env: {
+        ...process.env,
+        VERSER_TEST_PACKAGE_MODE: 'tarball',
+      },
     });
 
     return {
@@ -210,6 +255,7 @@ function runTarballTests() {
       skipped: false,
       packages: sourcePackages.map((entry) => entry.name),
       tarballs: tarballPaths.map((tarballPath) => path.basename(tarballPath)),
+      tests: testPaths.map((testPath) => path.relative(projectRoot, testPath)),
       includedGroups,
       excludedGroups,
     };

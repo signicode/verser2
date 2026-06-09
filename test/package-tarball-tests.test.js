@@ -27,8 +27,9 @@ test('package tarball automated test runner documents behavior test groups', () 
   assert.match(script, /includedGroups/);
   assert.match(script, /excludedGroups/);
   assert.match(script, /consumer-imports/);
-  assert.match(script, /common-protocol-envelope/);
-  assert.match(script, /host-guest-broker-smoke/);
+  assert.match(script, /existing-common-protocol-envelope/);
+  assert.match(script, /existing-end-to-end/);
+  assert.match(script, /end-to-end\.test\.js/);
 });
 
 test('package tarball automated test runner installs tarballs into a temp consumer', () => {
@@ -40,4 +41,5 @@ test('package tarball automated test runner installs tarballs into a temp consum
   assert.match(script, /node_modules/);
   assert.match(script, /behavior\.test\.cjs/);
   assert.match(script, /copyFileSync/);
+  assert.match(script, /VERSER_TEST_PACKAGE_MODE/);
 });

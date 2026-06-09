@@ -49,10 +49,7 @@ test('common-protocol-envelope: installed common package preserves protocol beha
 
 test('host-guest-broker-smoke: installed packages route a lightweight request', async () => {
   const { createVerserHost } = require('@signicode/verser2-host');
-  const {
-    createVerserBroker,
-    createVerserNodeGuest,
-  } = require('@signicode/verser2-guest-node');
+  const { createVerserBroker, createVerserNodeGuest } = require('@signicode/verser2-guest-node');
 
   const host = createVerserHost({ port: 0 });
   await host.start();

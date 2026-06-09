@@ -52,22 +52,28 @@
 
   Manual verification: user requested replacing generated test-code strings with a checked-in loader target, then approved moving to Phase 3 after that revision passed focused validation.
 
+  Phase checkpoint commit: `bf67632`.
+
 ## Phase 3: GitHub Actions integration for tarball automated tests
 
-- [ ] Task: Update workflow tests for CI ordering and no-publish guarantees
-    - [ ] Assert PR workflows run `test:package-tarballs` and do not publish packages.
-    - [ ] Assert publish workflows apply the final publish version before running `test:package-tarballs`.
-    - [ ] Assert `test:package-tarballs` runs before any `npm publish` command in main/tag jobs.
-- [ ] Task: Update GitHub Actions workflow
-    - [ ] Add tarball automated tests to pull-request validation after build/stage/pack and before the validation job ends.
-    - [ ] Add tarball automated tests to the publish job after staged publish-version mutation and before `npm publish`.
-    - [ ] Preserve post-publish GitHub Packages install validation where feasible.
-    - [ ] Preserve the explicit no-PR-publish guarantee and npmjs out-of-scope boundary.
-- [ ] Task: Validate workflow shape and local scripts
-    - [ ] Run static workflow tests.
-    - [ ] Run tarball automated tests locally.
-    - [ ] Run lint.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: GitHub Actions integration for tarball automated tests' (Protocol in workflow.md)
+- [x] Task: Update workflow tests for CI ordering and no-publish guarantees
+    - [x] Assert PR workflows run `test:package-tarballs` and do not publish packages.
+    - [x] Assert publish workflows apply the final publish version before running `test:package-tarballs`.
+    - [x] Assert `test:package-tarballs` runs before any `npm publish` command in main/tag jobs.
+- [x] Task: Update GitHub Actions workflow
+    - [x] Add tarball automated tests to pull-request validation after build/stage/pack and before the validation job ends.
+    - [x] Add tarball automated tests to the publish job after staged publish-version mutation and before `npm publish`.
+    - [x] Preserve post-publish GitHub Packages install validation where feasible.
+    - [x] Preserve the explicit no-PR-publish guarantee and npmjs out-of-scope boundary.
+- [x] Task: Validate workflow shape and local scripts
+    - [x] Run static workflow tests.
+    - [x] Run tarball automated tests locally.
+    - [x] Run lint.
+
+      Validation: `node --test test/package-workflow.test.js` passed, `npm run test:package-tarballs` passed, and `npm run lint` passed after applying session-introduced formatting fixes. After user feedback, the tarball runner now copies and runs existing `test/common-envelope.test.js`, `test/common-protocol.test.js`, and `test/end-to-end.test.js` from the temporary tarball consumer with `VERSER_TEST_PACKAGE_MODE=tarball`; the tarball command passed 42 tests including the existing Host/Guest/Broker/Agent/fetch end-to-end suite. Workflow now runs tarball automated tests in PR validation before the no-publish confirmation and in publish flows after staged version mutation and before `npm publish`. Deduplication: CI calls the shared npm script rather than duplicating tarball behavior logic in workflow YAML.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: GitHub Actions integration for tarball automated tests' (Protocol in workflow.md)
+
+  Manual verification: user approved completing Phase 3 after existing common and end-to-end tests were included in tarball mode.
 
 ## Phase 4: Documentation, final validation, and review
 

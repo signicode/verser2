@@ -48,6 +48,7 @@ jobs:
         run: |
           npm run test:package-consumers -- --source=staging
           npm run test:package-consumers -- --source=tarball
+          npm run test:package-tarballs
 
       - name: Confirm validation job never publishes packages
         run: |
@@ -132,6 +133,7 @@ jobs:
         run: |
           npm run test:package-consumers -- --source=staging
           npm run test:package-consumers -- --source=tarball
+          npm run test:package-tarballs
 
       - name: Pack staged packages
         run: |
