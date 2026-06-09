@@ -1,0 +1,8 @@
+{
+  "track_id": "configurable_tls_setup_20260609",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-06-09T00:45:01Z",
+  "updated_at": "2026-06-09T00:45:01Z",
+  "description": "Implement configurable TLS setup for verser2 host/guest/broker and remove the shipped development certificate"
+}
