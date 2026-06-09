@@ -6,15 +6,25 @@
     - [x] Confirm the current branch is ready to use as the starting point and inspect `git status`, recent commits, and remotes.
     - [x] Push `main` before starting the track branch if the local `main` has unpushed commits.
     - [x] Create a dedicated track branch from the recorded starting commit.
-- [~] Task: Record and commit the start of work
-    - [ ] Confirm the track `spec.md`, `plan.md`, `metadata.json`, and registry entry are present before the start checkpoint.
-    - [ ] Commit the track-start Conductor artifacts with the message `chore(conductor): Add new track 'Python Guest'`.
-    - [ ] Record the starting commit SHA for the track in the plan or track notes if useful for later checkpointing.
-- [ ] Task: Create the track pull request
-    - [ ] Create a PR with a TO-BE title describing the implemented Python Guest state, not only the plan/spec artifact.
-    - [ ] Write a real multiline PR body using a temporary Markdown file and `gh pr create --body-file` to avoid escaped newline rendering issues.
-    - [ ] Include the intended final behavior, package layout, ASGI compatibility, streaming target, validation expectations, and out-of-scope boundaries in the PR description.
-- [ ] Task: Conductor - User Manual Verification 'Phase 0: Track Branch, Start Checkpoint, and PR Setup' (Protocol in workflow.md)
+- [x] Task: Record and commit the start of work
+    - [x] Confirm the track `spec.md`, `plan.md`, `metadata.json`, and registry entry are present before the start checkpoint.
+    - [x] Commit the track-start Conductor artifacts with the message `chore(conductor): Add new track 'Python Guest'`.
+    - [x] Record the starting commit SHA for the track in the plan or track notes if useful for later checkpointing: `ac5c466`.
+- [x] Task: Create the track pull request
+    - [x] Create a PR with a TO-BE title describing the implemented Python Guest state, not only the plan/spec artifact.
+    - [x] Write a real multiline PR body using a temporary Markdown file and `gh pr create --body-file` to avoid escaped newline rendering issues.
+    - [x] Include the intended final behavior, package layout, ASGI compatibility, streaming target, validation expectations, and out-of-scope boundaries in the PR description.
+- [x] Task: Conductor - User Manual Verification 'Phase 0: Track Branch, Start Checkpoint, and PR Setup' (Protocol in workflow.md)
+
+Phase 0 validation notes:
+- Branch state, recent commits, and remotes were inspected before branch creation.
+- Local `main` was ahead of `origin/main` by the track-start commit and was pushed before creating the dedicated branch.
+- Track branch `conductor/python-guest-20260609` was created and pushed.
+- PR #7 was created with a multiline TO-BE body: https://github.com/signicode/verser2/pull/7
+- Common library scan: not applicable for this setup-only phase; no implementation code was changed.
+- Deduplication review: no code changes in this phase.
+- Coverage: not applicable for this setup-only phase.
+- Manual verification: confirmed by user.
 
 ## Phase 1: Package Scaffold and Tooling Integration
 
