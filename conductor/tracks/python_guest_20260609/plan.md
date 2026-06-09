@@ -106,19 +106,29 @@ Phase 2 validation notes:
 
 ## Phase 3: Streaming Semantics and Parity Coverage
 
-- [ ] Task: Write failing streaming tests
-    - [ ] Test streamed request bodies arriving as ASGI `http.request` events with correct continuation/end semantics.
-    - [ ] Test streamed response bodies emitted through ASGI `http.response.body` events with `more_body` handling.
-    - [ ] Test error/cancellation behavior for interrupted request or response streams where feasible.
-- [ ] Task: Implement bidirectional streaming support
-    - [ ] Stream request body chunks from Host/Broker routing into the ASGI receive channel without buffering the full body when feasible.
-    - [ ] Stream ASGI response chunks back through the Host protocol while preserving status and headers ordering requirements.
-    - [ ] Handle stream completion, cancellation, timeout, and app exception paths with diagnostic errors.
-- [ ] Task: Add parity and coverage validation
-    - [ ] Compare Python Guest behavior against key Node Guest semantics for method, path, headers, body, status, response headers, body, and streaming.
-    - [ ] Confirm meaningful coverage for changed Python behavior is at least 95% or record why coverage cannot be measured.
-    - [ ] Run the narrowest reliable Python and integration validation commands.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Streaming Semantics and Parity Coverage' (Protocol in workflow.md)
+- [x] Task: Write failing streaming tests
+    - [x] Test streamed request bodies arriving as ASGI `http.request` events with correct continuation/end semantics.
+    - [x] Test streamed response bodies emitted through ASGI `http.response.body` events with `more_body` handling.
+    - [x] Test error/cancellation behavior for interrupted request or response streams where feasible.
+- [x] Task: Implement bidirectional streaming support
+    - [x] Stream request body chunks from Host/Broker routing into the ASGI receive channel without buffering the full body when feasible.
+    - [x] Stream ASGI response chunks back through the Host protocol while preserving status and headers ordering requirements.
+    - [x] Handle stream completion, cancellation, timeout, and app exception paths with diagnostic errors.
+- [x] Task: Add parity and coverage validation
+    - [x] Compare Python Guest behavior against key Node Guest semantics for method, path, headers, body, status, response headers, body, and streaming.
+    - [x] Confirm meaningful coverage for changed Python behavior is at least 95% or record why coverage cannot be measured.
+    - [x] Run the narrowest reliable Python and integration validation commands.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Streaming Semantics and Parity Coverage' (Protocol in workflow.md)
+
+Phase 3 validation notes:
+- Failing streaming test confirmation: `npm run test --workspace=@signicode/verser2-guest-python` failed before implementation because chunked request bodies were delivered as one receive event instead of multiple ASGI `http.request` events.
+- Implementation: ASGI dispatch now supports request body chunk lists with correct `more_body` continuation semantics; leased transport now starts the ASGI app after request envelope metadata arrives, forwards HTTP/2 DATA chunks into ASGI receive events, and writes ASGI response body chunks back to the lease stream while preserving response envelope ordering.
+- Streaming parity: method, path, query string, headers, status, response headers, body, and multi-chunk Broker body preservation were validated through Python unit tests and the Node/Python routed Broker integration test.
+- Error/cancellation scope: app exceptions before response start continue to return `local-handler-failure` error envelopes with Guest/request/path context; post-response interruption handling remains minimal and closes the lease response stream when the app raises after response start.
+- Validation passed: `npm run test --workspace=@signicode/verser2-guest-python`; `npm run build && npm run stage:packages && node --test test/python-guest-integration.test.js`; `npm run lint --workspace=@signicode/verser2-guest-python`; `npm run lint`.
+- Deduplication review: no repeated TypeScript logic was introduced; Python-specific HTTP/2 stream orchestration remains in the Python Guest package, and protocol constants remain the minimal cross-language mirror needed for compatibility.
+- Coverage: Phase 3 streaming behavior is covered by focused Python unit tests and a Node/Python integration test. Numeric 95% coverage was not measured because repository coverage tooling is Node-only and the Python package currently uses `unittest` without a coverage dependency.
+- Manual verification: confirmed by user.
 
 ## Phase 4: Developer Experience, Examples, and Documentation
 

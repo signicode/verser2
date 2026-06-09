@@ -48,21 +48,27 @@ async def dispatch_asgi_request(
     app: ASGIApp,
     guest_id: str,
     metadata: dict[str, Any],
-    body: bytes,
+    body: bytes | list[bytes],
 ) -> DispatchResponse:
     request_id = str(metadata.get("requestId") or "")
     started = False
     status_code = 200
     response_headers: dict[str, str] = {}
     response_chunks: list[bytes] = []
-    receive_sent = False
+    body_chunks = body if isinstance(body, list) else [body]
+    receive_index = 0
 
     async def receive() -> dict[str, Any]:
-        nonlocal receive_sent
-        if receive_sent:
+        nonlocal receive_index
+        if receive_index >= len(body_chunks):
             return {"type": "http.request", "body": b"", "more_body": False}
-        receive_sent = True
-        return {"type": "http.request", "body": body, "more_body": False}
+        chunk = body_chunks[receive_index]
+        receive_index += 1
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": receive_index < len(body_chunks),
+        }
 
     async def send(event: dict[str, Any]) -> None:
         nonlocal started, status_code, response_headers

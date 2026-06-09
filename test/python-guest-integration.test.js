@@ -89,6 +89,20 @@ test('Python ASGI Guest connects to Host and handles a basic routed Broker reque
       (await readBody(response.body)).toString('utf8'),
       'POST /from-broker x=1 abc payload',
     );
+
+    const chunkedResponse = await broker.request({
+      targetId: 'python-guest-basic',
+      method: 'POST',
+      path: '/from-broker?x=2',
+      headers: { 'x-input': 'chunks' },
+      body: [Buffer.from('one'), Buffer.from('two')],
+    });
+
+    assert.equal(chunkedResponse.statusCode, 214);
+    assert.equal(
+      (await readBody(chunkedResponse.body)).toString('utf8'),
+      'POST /from-broker x=2 chunks onetwo',
+    );
   } finally {
     guestProcess.kill('SIGTERM');
     await broker.close('test-complete');
