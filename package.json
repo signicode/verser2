@@ -9,6 +9,7 @@
     "stage:packages": "node ./scripts/stage-packages.js",
     "package:version-policy": "node ./scripts/package-version-policy.js",
     "test:package-consumers": "node ./scripts/test-package-consumers.js",
+    "test:package-tarballs": "node ./scripts/test-package-tarballs.js",
     "test": "npm run build && npm run stage:packages && node --test test/*.test.js",
     "test:coverage": "npm run build && npm run stage:packages && node --test --experimental-test-coverage test/*.test.js",
     "lint": "biome check ."

@@ -25,26 +25,32 @@
 
   Manual verification: user approved moving to Phase 2 after the expected red test failures.
 
+  Phase checkpoint commit: `d557dae`.
+
 ## Phase 2: Tarball automated test harness
 
-- [ ] Task: Implement tarball package test runner
-    - [ ] Add a low-dependency Node/npm script such as `scripts/test-package-tarballs.js`.
-    - [ ] Consume existing staged packages, run `npm pack`, install all tarballs into an isolated temp consumer project, and fail with actionable errors when prerequisites are missing.
-    - [ ] Ensure tarball-mode tests resolve Verser packages by package name from temp consumer `node_modules`.
-- [ ] Task: Adapt feasible automated tests for tarball mode
-    - [ ] Add or adapt tests for package export/API shape using installed package names.
-    - [ ] Add or adapt common protocol/envelope behavior tests to run against tarball-installed `@signicode/verser-common` where feasible.
-    - [ ] Add or adapt lightweight Host/Guest/Broker behavior tests that do not depend on source-only internals.
-    - [ ] Preserve existing source/local tests unchanged unless a small resolver abstraction is needed.
-- [ ] Task: Report exclusions and limitations
-    - [ ] Make the tarball test runner report test groups that are included.
-    - [ ] Document source-only exclusions with concise reasons when a test cannot reasonably run from tarballs.
-    - [ ] Ensure exclusions do not hide failures in the normal source test suite.
-- [ ] Task: Add npm script and local validation
-    - [ ] Add `npm run test:package-tarballs` or equivalent.
-    - [ ] Run `npm run build && npm run stage:packages && npm run test:package-tarballs`.
-    - [ ] Run relevant focused tests for the tarball harness.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Tarball automated test harness' (Protocol in workflow.md)
+- [x] Task: Implement tarball package test runner
+    - [x] Add a low-dependency Node/npm script such as `scripts/test-package-tarballs.js`.
+    - [x] Consume existing staged packages, run `npm pack`, install all tarballs into an isolated temp consumer project, and fail with actionable errors when prerequisites are missing.
+    - [x] Ensure tarball-mode tests resolve Verser packages by package name from temp consumer `node_modules`.
+- [x] Task: Adapt feasible automated tests for tarball mode
+    - [x] Add or adapt tests for package export/API shape using installed package names.
+    - [x] Add or adapt common protocol/envelope behavior tests to run against tarball-installed `@signicode/verser-common` where feasible.
+    - [x] Add or adapt lightweight Host/Guest/Broker behavior tests that do not depend on source-only internals.
+    - [x] Preserve existing source/local tests unchanged unless a small resolver abstraction is needed.
+- [x] Task: Report exclusions and limitations
+    - [x] Make the tarball test runner report test groups that are included.
+    - [x] Document source-only exclusions with concise reasons when a test cannot reasonably run from tarballs.
+    - [x] Ensure exclusions do not hide failures in the normal source test suite.
+- [x] Task: Add npm script and local validation
+    - [x] Add `npm run test:package-tarballs` or equivalent.
+    - [x] Run `npm run build && npm run stage:packages && npm run test:package-tarballs`.
+    - [x] Run relevant focused tests for the tarball harness.
+
+      Validation: `node --test test/package-tarball-tests.test.js` passed after fixing a session-introduced brittle static assertion. `npm run build && npm run stage:packages && npm run test:package-tarballs` passed; after user feedback, the runner was revised to copy the checked-in `test/package-tarball/behavior.test.cjs` loader target instead of generating test code strings, and `node --test test/package-tarball-tests.test.js` plus `npm run test:package-tarballs` passed again. Coverage note: changed behavior is a release-engineering harness exercised by focused static tests plus the harness's own copied Node test groups in the temporary consumer; aggregate coverage is not meaningful for the spawned temporary consumer process. Deduplication: existing consumer-tarball packing patterns were reused conceptually, but no common runtime code was added because the harness is release-engineering/test-specific.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Tarball automated test harness' (Protocol in workflow.md)
+
+  Manual verification: user requested replacing generated test-code strings with a checked-in loader target, then approved moving to Phase 3 after that revision passed focused validation.
 
 ## Phase 3: GitHub Actions integration for tarball automated tests
 
