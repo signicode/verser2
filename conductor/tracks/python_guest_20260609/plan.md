@@ -62,27 +62,46 @@ Phase 1 validation notes:
 - Manual verification: confirmed by user after Phase 1 changes were pushed for review.
 - Phase checkpoint commit: `d336a3e`; cleanup commit: `f420726`.
 
+Track workflow update note:
+- Updated `conductor/workflow.md` during Phase 2 to prefer `explore` over `explorer` for larger searches where context compaction can lose important findings, and to require specific bounded prompts plus explicit no-subdelegation guidance for `explore`/`oracle` delegation to avoid delegation loops.
+
+Phase 2 research note:
+- `explore` confirmed the Python Guest basic routed request path should mirror Node Guest registration at `/verser/register`, control stream at `/verser/guest/control`, and leased request stream at `/verser/guest/lease`, using Verser envelope prefix bytes/version/type codes from `@signicode/verser-common`.
+- Relevant reusable tests include `test/end-to-end.test.js`, raw lease patterns in `test/broker-routing.test.js`, Node Guest dispatch tests in `test/guest-node.test.js`, and TLS fixtures in `test/support/tls-fixtures.cjs`.
+- Python stdlib lacks HTTP/2; Phase 2 should add a Python HTTP/2 dependency such as `h2` and keep the first transport slice to one session, one control stream, one waiting lease, and non-streaming ASGI dispatch.
+
 ## Phase 2: ASGI Guest Core and Host Protocol Connection
 
-- [ ] Task: Write failing ASGI Guest unit tests
-    - [ ] Test public API creation/configuration for connecting an ASGI 3 app as a Verser2 Guest.
-    - [ ] Test ASGI HTTP scope construction from routed request data, including method, path, query string, headers, and body metadata.
-    - [ ] Test lifecycle and error behavior for connect, disconnect, app exceptions, and graceful shutdown.
-- [ ] Task: Write failing Host integration test for a basic routed request
-    - [ ] Start the existing Node Host in a focused integration fixture.
-    - [ ] Connect the Python Guest outbound to the Host.
-    - [ ] Send a routed request through existing broker/client tooling and assert method, path, headers, status, and body are preserved.
-    - [ ] Confirm the integration test fails for the expected missing Python Guest behavior.
-- [ ] Task: Implement minimal Python Guest connection and ASGI dispatch
-    - [ ] Implement Python client connection, Guest registration, route advertisement, and lifecycle handling compatible with the existing Host protocol.
-    - [ ] Implement ASGI `scope`, `receive`, and `send` handling for ordinary HTTP requests and responses.
-    - [ ] Preserve protocol-compatible error responses and close behavior where the existing Host/Node Guest model requires it.
-    - [ ] Keep reusable protocol constants/shapes aligned with existing common package definitions and document any Python-local copies.
-- [ ] Task: Validate ASGI Guest core
-    - [ ] Run focused Python unit tests.
-    - [ ] Run focused Node/Python integration tests for the basic routed request path.
-    - [ ] Run lint/type/package checks introduced for the Python package.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: ASGI Guest Core and Host Protocol Connection' (Protocol in workflow.md)
+- [x] Task: Write failing ASGI Guest unit tests
+    - [x] Test public API creation/configuration for connecting an ASGI 3 app as a Verser2 Guest.
+    - [x] Test ASGI HTTP scope construction from routed request data, including method, path, query string, headers, and body metadata.
+    - [x] Test lifecycle and error behavior for connect, disconnect, app exceptions, and graceful shutdown.
+- [x] Task: Write failing Host integration test for a basic routed request
+    - [x] Start the existing Node Host in a focused integration fixture.
+    - [x] Connect the Python Guest outbound to the Host.
+    - [x] Send a routed request through existing broker/client tooling and assert method, path, headers, status, and body are preserved.
+    - [x] Confirm the integration test fails for the expected missing Python Guest behavior.
+- [x] Task: Implement minimal Python Guest connection and ASGI dispatch
+    - [x] Implement Python client connection, Guest registration, route advertisement, and lifecycle handling compatible with the existing Host protocol.
+    - [x] Implement ASGI `scope`, `receive`, and `send` handling for ordinary HTTP requests and responses.
+    - [x] Preserve protocol-compatible error responses and close behavior where the existing Host/Node Guest model requires it.
+    - [x] Keep reusable protocol constants/shapes aligned with existing common package definitions and document any Python-local copies.
+- [x] Task: Validate ASGI Guest core
+    - [x] Run focused Python unit tests.
+    - [x] Run focused Node/Python integration tests for the basic routed request path.
+    - [x] Run lint/type/package checks introduced for the Python package.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: ASGI Guest Core and Host Protocol Connection' (Protocol in workflow.md)
+
+Phase 2 validation notes:
+- Common library scan: Python protocol constants and envelope shapes were aligned to `@signicode/verser-common` constants/types; Python-local copies were introduced because Python cannot import the TypeScript common package directly.
+- Failing unit tests confirmed: `npm run test --workspace=@signicode/verser2-guest-python` initially failed because `create_verser_guest` and `verser2_guest_python.protocol` were missing.
+- Failing integration test confirmed: `npm run build && npm run stage:packages && node --test test/python-guest-integration.test.js` initially failed because the Python example could not import `create_verser_guest`.
+- Implementation: added ASGI dispatch helpers, envelope encode/decode helpers, a minimal `h2`-based outbound TLS HTTP/2 Guest client, Guest registration, control stream opening, one waiting lease stream, protocol-compatible response/error envelopes, and a basic ASGI Guest example used by integration tests.
+- Dependency/tooling: added Python dependency `h2>=4.1,<5` and switched package-level Python commands to `uv run --project .` so tests/examples use an isolated project environment.
+- Validation passed: `npm run test --workspace=@signicode/verser2-guest-python`; `npm run build && npm run stage:packages && node --test test/python-guest-integration.test.js`; `npm run lint --workspace=@signicode/verser2-guest-python`; `node --test test/python-guest-package-scaffold.test.js`; `npm run lint`.
+- Deduplication review: no repeated TypeScript package logic was added; Python-local protocol helpers are minimal mirrors of common protocol bytes/metadata needed for cross-language compatibility.
+- Coverage: Phase 2 Python unit tests cover ASGI scope construction, receive/send behavior, response metadata/body capture, app exception error metadata, and envelope encoding; Node/Python integration covers Host registration, route advertisement, Broker routed request, headers, status, and body preservation. Numeric coverage was not measured because repository coverage tooling is Node-only.
+- Manual verification: confirmed by user.
 
 ## Phase 3: Streaming Semantics and Parity Coverage
 

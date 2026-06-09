@@ -1,9 +1,7 @@
-"""Python ASGI Guest package scaffold for Verser2.
+"""Python ASGI Guest package for Verser2."""
 
-The first scaffold exposes package metadata while later track phases add the
-outbound Host protocol connection and ASGI dispatch implementation.
-"""
+from .guest import VerserGuest, create_verser_guest
 
 VERSER2_GUEST_PYTHON_PACKAGE_NAME = "@signicode/verser2-guest-python"
 
-__all__ = ["VERSER2_GUEST_PYTHON_PACKAGE_NAME"]
+__all__ = ["VERSER2_GUEST_PYTHON_PACKAGE_NAME", "VerserGuest", "create_verser_guest"]

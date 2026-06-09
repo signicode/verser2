@@ -8,9 +8,9 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "node ./scripts/build.mjs",
-    "venv": "python -m venv .venv",
-    "test": "PYTHONPATH=src python -m unittest discover -s tests",
-    "lint": "python -m compileall -q src tests examples"
+    "venv": "uv sync --project .",
+    "test": "uv run --project . python -m unittest discover -s tests",
+    "lint": "uv run --project . python -m compileall -q src tests examples"
   },
   "files": ["dist", "LICENSE", "README.md", "pyproject.toml", "src"]
 }
