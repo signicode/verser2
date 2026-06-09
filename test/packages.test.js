@@ -30,6 +30,7 @@ function assertSingleFileDist(packageDirectory) {
   );
 
   assert.deepEqual(distFiles.sort(), [
+    path.join(packageDirectory, 'dist/LICENSE'),
     path.join(packageDirectory, 'dist/index.d.ts'),
     path.join(packageDirectory, 'dist/index.js'),
   ]);

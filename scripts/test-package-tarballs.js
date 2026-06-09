@@ -158,6 +158,7 @@ function packStagedPackages(tarballDirectory) {
       path.join(stagedDirectory, 'dist', 'index.d.ts'),
       `staged declarations for ${packageInfo.name}`,
     );
+    requireFile(path.join(stagedDirectory, 'LICENSE'), `staged license for ${packageInfo.name}`);
 
     const beforePack = fs
       .readdirSync(tarballDirectory)
