@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { test } = require('node:test');
 
 const packageNames = [
@@ -50,16 +52,21 @@ test('common-protocol-envelope: installed common package preserves protocol beha
 test('host-guest-broker-smoke: installed packages route a lightweight request', async () => {
   const { createVerserHost } = require('@signicode/verser2-host');
   const { createVerserBroker, createVerserNodeGuest } = require('@signicode/verser2-guest-node');
+  const cert = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'tls', 'localhost-cert.pem'),
+    'utf8',
+  );
+  const key = fs.readFileSync(path.join(__dirname, 'fixtures', 'tls', 'localhost-key.pem'), 'utf8');
 
-  const host = createVerserHost({ port: 0 });
+  const host = createVerserHost({ port: 0, tls: { cert, key } });
   await host.start();
   const hostUrl = `https://localhost:${host.address.port}`;
   let broker;
   let guest;
 
   try {
-    broker = createVerserBroker({ hostUrl, brokerId: 'broker-tarball-smoke' });
-    guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-tarball-smoke' });
+    broker = createVerserBroker({ hostUrl, brokerId: 'broker-tarball-smoke', tls: { ca: cert } });
+    guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-tarball-smoke', tls: { ca: cert } });
     guest.attach((request, response) => {
       const chunks = [];
       request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
