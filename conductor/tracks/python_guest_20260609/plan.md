@@ -160,3 +160,4 @@ Phase 4 validation notes:
 - Deduplication review: shared TypeScript protocol code remains in `@signicode/verser-common`; Python mirrors only cross-language constants/envelope behavior needed by the Python runtime. No new HTTP/3, authentication/authorization, Python Host, full Python Broker, or unrelated runtime behavior was introduced.
 - Coverage: repository Node tests and Python package tests cover docs, examples, package recognition, ASGI dispatch, streaming, and Node/Python routed integration. Numeric Python coverage remains unmeasured because no Python coverage dependency is configured.
 - Manual verification: confirmed by user.
+- Phase checkpoint commit: `c633371`.
