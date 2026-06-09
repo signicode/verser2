@@ -94,29 +94,33 @@ Oracle review: no blockers. Applied accepted medium suggestions by clearing Brok
 
 ## Phase 3: Documentation, package validation, and release-readiness checks
 
-- [ ] Task: Update documentation for configurable TLS
-    - [ ] Update README examples for Host `cert`/`key` and `certFile`/`keyFile` options.
-    - [ ] Update README examples for Guest/Broker `ca` and `caFile` options.
-    - [ ] Clearly distinguish remote TLS HTTP/2 transport from local plain Guest HTTP/1 handlers.
-    - [ ] Remove or revise statements about always using an embedded self-signed development certificate and pinned CA.
-    - [ ] Update public API/type documentation exposed through package entrypoints or generated declarations as needed.
-- [ ] Task: Validate package artifacts do not ship test certificates
-    - [ ] Build and stage packages with the narrowest sufficient package command.
-    - [ ] Inspect staged/package artifacts or package-readiness tests to confirm runtime development certificate material is absent.
-    - [ ] Confirm test-only certificate fixtures are not published as runtime package files.
-    - [ ] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
-- [ ] Task: Run final focused and broad validation
-    - [ ] Run focused TLS and end-to-end tests for Host/Guest/Broker behavior.
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm run lint`.
-    - [ ] Run broader package or tarball tests if required by changed package artifact behavior.
-    - [ ] Record coverage result for changed TLS behavior or explain why aggregate coverage cannot be measured.
-    - [ ] For any failing validation, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record whether it was fixed, known, deferred, or requires user guidance.
-- [ ] Task: Oracle review for Phase 3
-    - [ ] Delegate final code, documentation, package-artifact, and release-readiness review to `@oracle`.
-    - [ ] Apply accepted suggestions or record why suggestions are deferred.
-    - [ ] Confirm docs, tests, package exports, runtime behavior, and common-library usage are aligned.
-    - [ ] Commit the completed phase with validation, known-solutions/error-handling notes, and review notes.
+- [x] Task: Update documentation for configurable TLS
+    - [x] Update README examples for Host `cert`/`key` and `certFile`/`keyFile` options.
+    - [x] Update README examples for Guest/Broker `ca` and `caFile` options.
+    - [x] Clearly distinguish remote TLS HTTP/2 transport from local plain Guest HTTP/1 handlers.
+    - [x] Remove or revise statements about always using an embedded self-signed development certificate and pinned CA.
+    - [x] Update public API/type documentation exposed through package entrypoints or generated declarations as needed.
+- [x] Task: Validate package artifacts do not ship test certificates
+    - [x] Build and stage packages with the narrowest sufficient package command.
+    - [x] Inspect staged/package artifacts or package-readiness tests to confirm runtime development certificate material is absent.
+    - [x] Confirm test-only certificate fixtures are not published as runtime package files.
+    - [x] If validation fails unexpectedly, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record the recovery or deferral in this plan.
+- [x] Task: Run final focused and broad validation
+    - [x] Run focused TLS and end-to-end tests for Host/Guest/Broker behavior.
+    - [x] Run `npm run build`.
+    - [x] Run `npm run lint`.
+    - [x] Run broader package or tarball tests if required by changed package artifact behavior.
+    - [x] Record coverage result for changed TLS behavior or explain why aggregate coverage cannot be measured.
+    - [x] For any failing validation, classify the failure per `workflow.md`, consult `conductor/known-solutions.md`, and record whether it was fixed, known, deferred, or requires user guidance.
+- [x] Task: Oracle review for Phase 3
+    - [x] Delegate final code, documentation, package-artifact, and release-readiness review to `@oracle`.
+    - [x] Apply accepted suggestions or record why suggestions are deferred.
+    - [x] Confirm docs, tests, package exports, runtime behavior, and common-library usage are aligned.
+    - [x] Commit the completed phase with validation, known-solutions/error-handling notes, and review notes.
+
+Phase 3 notes: README now documents direct PEM and file-based Host TLS, Guest/Broker `ca` and `caFile` trust, Node `ca` replacement behavior, and the distinction between remote TLS HTTP/2 transport and local plain in-process Guest HTTP/1 handlers. Package validation: `npm run stage:packages` succeeded; staged artifact grep found no development helper/private key material, only the legitimate fingerprint-normalization regex string containing certificate delimiters; `node --test "test/package-publish-readiness.test.js" "test/packages.test.js"` passed 8/8. Full validation: `npm test` passed 146/146; `npm run test:package-tarballs` initially failed because copied tarball-mode tests did not include TLS fixtures and the tarball smoke test still omitted TLS options. Classified as preexisting in-scope from this track's TLS API change; fixed by copying test TLS fixtures into the temporary consumer and adding explicit TLS config to the tarball smoke test. Follow-up `npm run test:package-tarballs` passed 42/42, `node --test "test/package-tarball-tests.test.js"` passed 3/3, and `npm run lint` passed. Coverage note: changed behavior is covered by focused TLS tests, full source tests, package readiness tests, and tarball behavior tests; aggregate coverage is not emitted by the current Node test runner.
+
+Oracle review: no release blockers. Applied accepted documentation suggestions by stating Host certificates must match the `hostUrl` hostname/IP for Node TLS hostname verification, clarifying that both `ca` and `caFile` replace Node's default CA set, and making the direct CA TLS snippet standalone with imports. Test fixture/package review was considered sound: fixtures are copied only into test consumers, staged package dry-run excludes test/source files, and staged grep only matches the certificate delimiter regex in the fingerprint helper. Follow-up validation `node --test "test/docs.test.js" && npm run lint` passed.
 
 ## Phase 4: Final PR push and manual verification
 
