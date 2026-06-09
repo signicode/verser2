@@ -10,13 +10,13 @@ import {
   type VerserPeerRole,
   type VerserRegistrationResponse,
   createBrokerRoutesControlFrame,
-  createDevelopmentTlsCertificate,
   createPeerId,
   createRoutedDomainRegistration,
   createVerserError,
   decodeHeaderMap,
   encodeVerserEnvelope,
   flattenVerserHeaders,
+  normalizeServerTlsOptions,
   parseLeaseAcquireTimeoutMs,
   parseRegistrationRequest,
   readLeaseResponseMetadataFromStream,
@@ -100,10 +100,11 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
-    const certificate = createDevelopmentTlsCertificate();
+    const certificate = normalizeServerTlsOptions(this.options.tls);
     const server = http2.createSecureServer({
       cert: certificate.cert,
       key: certificate.key,
+      passphrase: certificate.passphrase,
     });
 
     server.on('session', (session) => this.trackSession(session));
@@ -124,6 +125,15 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
 
     this.server = server;
+  }
+
+  public reloadTlsCertificate(): void {
+    if (this.server === undefined) {
+      throw new Error('Host is not running; cannot reload TLS certificate.');
+    }
+
+    const certificate = normalizeServerTlsOptions(this.options.tls);
+    this.server.setSecureContext(certificate);
   }
 
   public async close(reason = 'host-close'): Promise<void> {

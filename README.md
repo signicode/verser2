@@ -84,16 +84,21 @@ A guest-side (client side) HTTP server can be called by other connected servers 
 The current TypeScript packages expose a Host, a Node Guest, and a guest-side Broker. A Guest attaches a normal Node HTTP handler without listening on a port, while a Broker connects to the Host and sends requests to advertised Guest routes.
 
 ```ts
+import fs from 'node:fs';
 import http from 'node:http';
 import { createVerserHost } from '@signicode/verser2-host';
 import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
 
-const host = createVerserHost({ port: 8443 });
+const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
+const cert = fs.readFileSync('/etc/verser/host.crt', 'utf8');
+const key = fs.readFileSync('/etc/verser/host.key', 'utf8');
+
+const host = createVerserHost({ port: 8443, tls: { cert, key } });
 await host.start();
 
 const hostUrl = 'https://localhost:8443';
-const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a' });
-const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a' });
+const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a', tls: { ca } });
+const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a', tls: { ca } });
 
 const localServer = http.createServer((req, res) => {
   if (req.url === '/health') {
@@ -131,16 +136,21 @@ response.body.pipe(process.stdout);
 The current workspace implementation exposes package-level APIs for the Host, Node Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
 
 ```ts
+import fs from 'node:fs';
 import http from 'node:http';
 import { createVerserHost } from '@signicode/verser2-host';
 import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
 
-const host = createVerserHost({ port: 8443 });
+const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
+const cert = fs.readFileSync('/etc/verser/host.crt', 'utf8');
+const key = fs.readFileSync('/etc/verser/host.key', 'utf8');
+
+const host = createVerserHost({ port: 8443, tls: { cert, key } });
 await host.start();
 
 const hostUrl = 'https://localhost:8443';
-const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a' });
-const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a' });
+const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a', tls: { ca } });
+const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a', tls: { ca } });
 
 await broker.connect();
 ```
@@ -229,8 +239,9 @@ console.log(streamResponse.status);
 
 ### Current transport notes
 
-- The Host uses TLS HTTP/2 with an embedded self-signed development certificate from `@signicode/verser-common`.
-- The Broker and Guest use that development certificate as a pinned CA for the current development path.
+- The Host uses TLS HTTP/2 and requires application-provided certificate and private key material.
+- Host `keyFile` private keys must be readable only by the owner (`chmod 0600`) on POSIX systems.
+- The Broker and Guest use normal Node.js TLS trust by default, or application-provided `ca`/`caFile` trust when configured. Passing `ca` or `caFile` replaces Node's default CA set for that outbound HTTP/2 connection.
 - HTTP/3 and QUIC are explicitly not implemented.
 - A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
 - The Guest maintains a configurable pool of one-use leased HTTP/2 streams. Routed request and response bodies are transferred as raw octets over an assigned lease, not as base64 NDJSON control frames.
@@ -240,6 +251,106 @@ console.log(streamResponse.status);
 - The Agent supports plain `http.request`/`http.get` for Host-advertised domains only. Non-advertised hostnames are rejected instead of falling back to DNS.
 - The Node Broker also exposes `createDispatcher()` for Undici `fetch(url, { dispatcher })` and `createFetch()` for a local fetch helper preconfigured with Verser routing.
 - Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, CONNECT, WebSocket, target TLS semantics, and advanced socket features are not implemented.
+
+### TLS setup
+
+TLS applies to the remote Host/Guest/Broker HTTP/2 transport only. Guest-attached local HTTP/1 servers remain plain in-process Node HTTP handlers; they do not need HTTPS certificates and do not call `listen()` for this routing path.
+
+The Host certificate must be valid for the hostname or IP address used in `hostUrl` because Node.js still performs normal TLS hostname verification.
+
+See [SSL certificate generation](./docs/ssl-certificate-generation.md) for local self-signed certificates, encrypted keys, and Let's Encrypt DNS-01 examples.
+
+Configure Host TLS with direct PEM values:
+
+```ts
+import fs from 'node:fs';
+import { createVerserHost } from '@signicode/verser2-host';
+
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    cert: fs.readFileSync('/etc/verser/host.crt', 'utf8'),
+    key: fs.readFileSync('/etc/verser/host.key', 'utf8'),
+    passphrase: process.env.VERSER_TLS_KEY_PASSPHRASE,
+  },
+});
+```
+
+Or configure Host TLS with certificate files:
+
+```ts
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    certFile: '/etc/verser/host.crt',
+    keyFile: '/etc/verser/host.key',
+    passphrase: process.env.VERSER_TLS_KEY_PASSPHRASE,
+  },
+});
+```
+
+When using `keyFile`, set the private key mode to `0600` on POSIX systems:
+
+```sh
+chmod 0600 /etc/verser/host.key
+```
+
+File-based Host TLS can be reloaded after certificate renewal without restarting the process. The new certificate is used for new TLS handshakes; existing HTTP/2 sessions keep their current TLS state.
+
+```ts
+await host.start();
+
+host.reloadTlsCertificate();
+```
+
+Verser does not install process signal handlers. Applications that want signal-driven reloads can wire them explicitly, and can reuse the same handler later for broader reload work:
+
+```ts
+process.on('SIGUSR1', () => {
+  try {
+    host.reloadTlsCertificate();
+  } catch (error) {
+    console.error('Failed to reload Verser TLS certificate:', error);
+  }
+});
+```
+
+Configure Guest and Broker trust with direct CA PEM values:
+
+```ts
+import fs from 'node:fs';
+import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
+
+const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
+
+const guest = createVerserNodeGuest({
+  hostUrl: 'https://localhost:8443',
+  guestId: 'client-a',
+  tls: { ca },
+});
+
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  tls: { ca },
+});
+```
+
+Or configure trust with CA files:
+
+```ts
+const guest = createVerserNodeGuest({
+  hostUrl: 'https://localhost:8443',
+  guestId: 'client-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
+});
+
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
+});
+```
 
 ## Features
 
@@ -278,7 +389,13 @@ This avoids opening a new TCP connection for every logical request and makes rev
 The Host listens for outbound Guest and Broker connections and routes requests to registered Guest routes.
 
 ```ts
-const host = createVerserHost({ port: 8443 });
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    certFile: '/etc/verser/host.crt',
+    keyFile: '/etc/verser/host.key',
+  },
+});
 
 await host.start();
 ```
@@ -291,6 +408,7 @@ The Broker connects outbound to a Host and sends requests to advertised Guest ro
 const broker = createVerserBroker({
   hostUrl: 'https://localhost:8443',
   brokerId: 'broker-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
 });
 
 await broker.connect();
@@ -304,6 +422,7 @@ The Guest connects outbound to a Host and attaches a local HTTP/1 handler withou
 const guest = createVerserNodeGuest({
   hostUrl: 'https://localhost:8443',
   guestId: 'client-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
 });
 
 guest.attach(localHttpServer, 'client-a.local.test');
@@ -370,28 +489,40 @@ Current protocol roles:
 3. HTTP/3 remains roadmap work and is not implemented.
 
 ```ts
-const host = createVerserHost({ port: 8443 });
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    certFile: '/etc/verser/host.crt',
+    keyFile: '/etc/verser/host.key',
+  },
+});
 await host.start();
 
 const guest = createVerserNodeGuest({
   hostUrl: 'https://localhost:8443',
   guestId: 'client-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
 });
 ```
 
 ## End-to-End Example
 
 ```ts
+import fs from 'node:fs';
 import http from 'node:http';
 import { createVerserHost } from '@signicode/verser2-host';
 import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
 
-const host = createVerserHost({ port: 8443 });
+const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
+const cert = fs.readFileSync('/etc/verser/host.crt', 'utf8');
+const key = fs.readFileSync('/etc/verser/host.key', 'utf8');
+
+const host = createVerserHost({ port: 8443, tls: { cert, key } });
 await host.start();
 
 const hostUrl = 'https://localhost:8443';
-const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a' });
-const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a' });
+const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a', tls: { ca } });
+const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a', tls: { ca } });
 
 const localServer = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/plain' });

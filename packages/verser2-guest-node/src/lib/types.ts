@@ -7,6 +7,7 @@ import type {
   RoutedRequestEnvelope,
   RoutedResponseEnvelope,
   VerserBrokerControlFrame,
+  VerserClientTlsOptions,
   VerserError,
 } from '@signicode/verser-common';
 
@@ -18,6 +19,7 @@ export interface VerserNodeGuestOptions {
   readonly maxOpenStreams?: number;
   readonly leaseAcquireTimeoutMs?: number;
   readonly maxMetadataBytes?: number;
+  readonly tls?: VerserClientTlsOptions;
 }
 
 export interface VerserNodeGuestLifecycleEvent {
@@ -40,6 +42,7 @@ export interface VerserBrokerOptions {
   readonly hostUrl: string;
   readonly brokerId: string;
   readonly leaseAcquireTimeoutMs?: number;
+  readonly tls?: VerserClientTlsOptions;
 }
 
 export interface VerserBrokerRequest {

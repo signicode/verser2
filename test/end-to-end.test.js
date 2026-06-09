@@ -5,9 +5,41 @@ const test = require('node:test');
 const { fetch } = require('undici');
 
 const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
+const { trusted, untrusted } = require('./support/tls-fixtures.cjs');
 
 const { createVerserHost } = loadVerserHost();
 const { createVerserBroker, createVerserNodeGuest } = loadVerserGuestNode();
+
+function createHost(options = {}) {
+  return createVerserHost({
+    ...options,
+    tls: {
+      cert: trusted.certificate,
+      key: trusted.key,
+      ...options.tls,
+    },
+  });
+}
+
+function createBroker(options) {
+  return createVerserBroker({
+    ...options,
+    tls: {
+      ca: trusted.certificate,
+      ...options.tls,
+    },
+  });
+}
+
+function createGuest(options) {
+  return createVerserNodeGuest({
+    ...options,
+    tls: {
+      ca: trusted.certificate,
+      ...options.tls,
+    },
+  });
+}
 
 function readBody(stream) {
   return new Promise((resolve, reject) => {
@@ -46,11 +78,11 @@ function withTimeout(promise, label, timeoutMs = 500) {
 }
 
 test('Host, Node Guest, Broker, route advertisements, and Agent routing work end-to-end', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-e2e' });
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-e2e' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-e2e' });
   const localServer = http.createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'text/plain' });
     response.end(`Handled ${request.method} ${request.url}`);
@@ -87,12 +119,32 @@ test('Host, Node Guest, Broker, route advertisements, and Agent routing work end
   }
 });
 
-test('leased routing preserves binary Broker bodies and Agent compatibility end-to-end', async () => {
-  const host = createVerserHost({ port: 0 });
+test('End-to-end Broker TLS verification fails with wrong CA', async () => {
+  const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e-binary' });
-  const guest = createVerserNodeGuest({
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({
+    hostUrl,
+    brokerId: 'broker-e2e-wrong-ca',
+    tls: {
+      ca: untrusted.certificate,
+    },
+  });
+
+  try {
+    await assert.rejects(() => broker.connect(), /certificate|self|verify/i);
+  } finally {
+    await broker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('leased routing preserves binary Broker bodies and Agent compatibility end-to-end', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-e2e-binary' });
+  const guest = createGuest({
     hostUrl,
     guestId: 'guest-e2e-binary',
     minWaitingStreams: 2,
@@ -152,11 +204,11 @@ test('leased routing preserves binary Broker bodies and Agent compatibility end-
 });
 
 test('Dispatcher fetch routes through Host, Guest, and Broker end-to-end', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e-dispatcher' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-e2e-dispatcher' });
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-e2e-dispatcher' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-e2e-dispatcher' });
   guest.attach((request, response) => {
     const chunks = [];
     request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
@@ -188,11 +240,11 @@ test('Dispatcher fetch routes through Host, Guest, and Broker end-to-end', async
 });
 
 test('createFetch helper routes through Host, Guest, and Broker end-to-end', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e-create-fetch' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-e2e-create-fetch' });
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-e2e-create-fetch' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-e2e-create-fetch' });
   guest.attach((_request, response) => {
     response.writeHead(203, { 'content-type': 'text/plain' });
     response.end('create-fetch-e2e');
@@ -217,11 +269,11 @@ test('createFetch helper routes through Host, Guest, and Broker end-to-end', asy
 });
 
 test('leased routing supports out-of-order concurrent end-to-end responses', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e-concurrent' });
-  const guest = createVerserNodeGuest({
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-e2e-concurrent' });
+  const guest = createGuest({
     hostUrl,
     guestId: 'guest-e2e-concurrent',
     minWaitingStreams: 3,
@@ -270,11 +322,11 @@ test('leased routing supports out-of-order concurrent end-to-end responses', asy
 });
 
 test('leased routing fails active end-to-end requests when the Guest disconnects', async () => {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: 'broker-e2e-disconnect' });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: 'guest-e2e-disconnect' });
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-e2e-disconnect' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-e2e-disconnect' });
   let dispatchStartedResolve;
   const dispatchStarted = new Promise((resolve) => {
     dispatchStartedResolve = resolve;

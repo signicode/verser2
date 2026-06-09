@@ -131,11 +131,6 @@ export interface LeaseRequestMetadataReadOptions extends VerserEnvelopeParserOpt
   readonly leaseId: string;
 }
 
-export interface DevelopmentTlsCertificate {
-  readonly cert: string;
-  readonly key: string;
-}
-
 export interface VerserRegistrationRequest {
   readonly peerId: string;
   readonly role: VerserPeerRole;
@@ -151,6 +146,32 @@ export interface VerserBrokerRoutesControlFrame {
   readonly type: 'routes';
   readonly routes: readonly RoutedDomainRegistration[];
 }
+
+export type VerserHostTlsOptions =
+  | {
+      readonly cert: string;
+      readonly key: string;
+      readonly passphrase?: string;
+      readonly certFile?: never;
+      readonly keyFile?: never;
+    }
+  | {
+      readonly cert?: never;
+      readonly key?: never;
+      readonly passphrase?: string;
+      readonly certFile: string;
+      readonly keyFile: string;
+    };
+
+export type VerserClientTlsOptions =
+  | {
+      readonly ca: string;
+      readonly caFile?: never;
+    }
+  | {
+      readonly ca?: never;
+      readonly caFile: string;
+    };
 
 export type VerserBrokerControlFrame = VerserBrokerRoutesControlFrame;
 

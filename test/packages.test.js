@@ -42,6 +42,24 @@ function assertDeclarationOmits(packageDirectory, patterns) {
   }
 }
 
+function assertNoRuntimeSourcesMatch(patterns) {
+  const packageDirectory = path.join(rootDirectory, 'packages');
+  const packageDirectories = fs
+    .readdirSync(packageDirectory, { withFileTypes: true })
+    .filter((dirent) => dirent.isDirectory())
+    .map((dirent) => `packages/${dirent.name}`);
+
+  for (const packagePath of packageDirectories) {
+    const sourceFiles = listFiles(path.join(packagePath, 'src'));
+    for (const filePath of sourceFiles.filter((value) => value.endsWith('.ts'))) {
+      const source = readText(filePath);
+      for (const pattern of patterns) {
+        assert.doesNotMatch(source, pattern);
+      }
+    }
+  }
+}
+
 test('@signicode/verser-common package exposes common foundations', () => {
   const packageManifest = readJson('packages/verser-common/package.json');
   const commonPackage = require('../packages/verser-common/dist/index.js');
@@ -60,7 +78,6 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'VerserError',
     'createBrokerRoutesControlFrame',
     'createCommonBrokerRequest',
-    'createDevelopmentTlsCertificate',
     'createGuestId',
     'createPeerId',
     'createRoutedDomainRegistration',
@@ -82,8 +99,10 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'isValidHeaderName',
     'isValidHeaderValue',
     'normalizeBrokerRequestBody',
+    'normalizeClientTlsOptions',
     'normalizeHeaders',
     'normalizeRequestHeaders',
+    'normalizeServerTlsOptions',
     'parseLeaseAcquireTimeoutMs',
     'parseRegistrationRequest',
     'parseRegistrationResponse',
@@ -106,6 +125,29 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'verserErrorFromResponseBody',
   ]);
   assert.equal(commonPackage.VERSER_COMMON_PACKAGE_NAME, '@signicode/verser-common');
+  assert.equal(commonPackage.createDevelopmentTlsCertificate, undefined);
+  assert.equal(
+    readText('packages/verser-common/src/index.ts').includes('createDevelopmentTlsCertificate'),
+    false,
+  );
+  assert.doesNotMatch(
+    readText('packages/verser-common/src/index.ts'),
+    /createDevelopmentTlsCertificate/,
+  );
+  assert.doesNotMatch(
+    readText('packages/verser-common/dist/index.js'),
+    /createDevelopmentTlsCertificate|DEVELOPMENT_CERTIFICATE|DEVELOPMENT_PRIVATE_KEY/,
+  );
+  assertDeclarationOmits('packages/verser-common', [
+    /createDevelopmentTlsCertificate/,
+    /DEVELOPMENT_CERTIFICATE/,
+    /DEVELOPMENT_PRIVATE_KEY/,
+  ]);
+  assertNoRuntimeSourcesMatch([
+    /createDevelopmentTlsCertificate/,
+    /DEVELOPMENT_CERTIFICATE/,
+    /DEVELOPMENT_PRIVATE_KEY/,
+  ]);
   assertSingleFileDist('packages/verser-common');
 });
 

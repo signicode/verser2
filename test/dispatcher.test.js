@@ -8,6 +8,38 @@ const {
   createVerserBroker,
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
+const { trusted } = require('./support/tls-fixtures.cjs');
+
+function createHost(options = {}) {
+  return createVerserHost({
+    ...options,
+    tls: {
+      cert: trusted.certificate,
+      key: trusted.key,
+      ...options.tls,
+    },
+  });
+}
+
+function createBroker(options) {
+  return createVerserBroker({
+    ...options,
+    tls: {
+      ca: trusted.certificate,
+      ...options.tls,
+    },
+  });
+}
+
+function createGuest(options) {
+  return createVerserNodeGuest({
+    ...options,
+    tls: {
+      ca: trusted.certificate,
+      ...options.tls,
+    },
+  });
+}
 
 function withTimeout(promise, label, timeoutMs = 5000) {
   let timeout;
@@ -18,11 +50,11 @@ function withTimeout(promise, label, timeoutMs = 5000) {
 }
 
 async function createConnectedRoute(domain, listener, ids) {
-  const host = createVerserHost({ port: 0 });
+  const host = createHost({ port: 0 });
   await host.start();
-  const hostUrl = `https://localhost:${host.address.port}`;
-  const broker = createVerserBroker({ hostUrl, brokerId: ids.brokerId });
-  const guest = createVerserNodeGuest({ hostUrl, guestId: ids.guestId });
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: ids.brokerId });
+  const guest = createGuest({ hostUrl, guestId: ids.guestId });
   guest.attach(listener, domain);
   await withTimeout(broker.connect(), `${ids.brokerId} connect`);
   await withTimeout(guest.connect(), `${ids.guestId} connect`);
