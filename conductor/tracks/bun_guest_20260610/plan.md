@@ -126,6 +126,7 @@
 - Coverage status: `timeout 20s bun test --coverage packages/verser2-guest-bun/test/adapter.test.ts` passed but now includes the reused Node Guest/common dependency graph because the Bun Guest imports the Node Guest transport. The reported aggregate coverage is therefore not a meaningful measure of the Phase 3 integration slice. Meaningful Phase 3 behavior is covered by the focused Host/Broker/Bun Guest integration test plus existing Node Guest transport coverage.
 - Validation recovery: a package smoke test initially called real `guest.connect()` after `createVerserBunGuest` became a real transport wrapper, causing a self-signed certificate failure and timeout. This session-introduced in-scope test issue was fixed by keeping `test/packages.test.js` as an export/attach smoke test and leaving real transport verification to `test/bun-guest-integration.test.js`.
 - Deduplication result: connection/lifecycle/lease code is reused from `@signicode/verser2-guest-node`; no duplicate HTTP/2 transport implementation was introduced. The Bun adapter remains package-local because it maps Bun/Web handler shapes to the existing JavaScript transport path.
+- Phase checkpoint commit: `a549ddf`.
 
 ## Phase 4: Streaming, Node Compatibility, and Unsupported WebSocket Boundary
 
