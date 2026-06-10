@@ -31,6 +31,99 @@ import type {
   VerserBunGuestServerLike,
 } from './lib/types';
 
+import type { VerserNodeGuest } from '@signicode/verser2-guest-node';
+import { createVerserNodeGuest } from '@signicode/verser2-guest-node';
+
+interface NodeStyleRequest {
+  readonly method: string;
+  readonly url: string;
+  readonly headers: Record<string, string>;
+  on(event: string | symbol, handler: (...args: readonly [unknown]) => void): unknown;
+}
+
+interface NodeStyleResponse {
+  statusCode: number;
+  writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): unknown;
+  end(chunk?: string | Buffer, encoding?: BufferEncoding): unknown;
+}
+
+const getErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error);
+};
+
+const readBody = async (request: NodeStyleRequest): Promise<Buffer | null> => {
+  const chunks: Buffer[] = [];
+  return await new Promise((resolve, reject) => {
+    request.on('data', (chunk: unknown) => {
+      if (typeof chunk === 'string') {
+        chunks.push(Buffer.from(chunk));
+        return;
+      }
+
+      if (chunk instanceof Buffer) {
+        chunks.push(chunk);
+        return;
+      }
+
+      if (chunk instanceof Uint8Array) {
+        chunks.push(
+          Buffer.from(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)),
+        );
+        return;
+      }
+
+      if (chunk instanceof ArrayBuffer) {
+        chunks.push(Buffer.from(chunk));
+        return;
+      }
+
+      if (chunk !== undefined) {
+        chunks.push(Buffer.from(String(chunk)));
+      }
+    });
+
+    request.on('end', () => {
+      if (chunks.length === 0) {
+        resolve(null);
+        return;
+      }
+      resolve(Buffer.concat(chunks));
+    });
+
+    request.on('error', (error: unknown) => {
+      reject(error);
+    });
+  });
+};
+
+const createNodeStyleHandler = (
+  domain: string,
+  handler: VerserBunDispatchRequestHandler,
+): ((request: NodeStyleRequest, response: NodeStyleResponse) => void) => {
+  return (request, response): void => {
+    void (async () => {
+      try {
+        const bodyBuffer = await readBody(request);
+        const bunRequest: VerserBunDispatchRequest = {
+          method: request.method,
+          path: request.url,
+          origin: `http://${domain}`,
+          headers: request.headers,
+          body: bodyBuffer === null ? undefined : bodyBuffer.toString('utf8'),
+        };
+
+        const dispatchResponse = await dispatchVerserBunRequest(handler, bunRequest);
+        response.statusCode = dispatchResponse.status;
+        response.writeHead(dispatchResponse.status, dispatchResponse.headers);
+        response.end(dispatchResponse.body);
+      } catch (error: unknown) {
+        response.writeHead(500, { 'content-type': 'text/plain' });
+        response.end(`Bun handler failed: ${getErrorMessage(error)}`);
+      }
+    })();
+  };
+};
+
 const DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE = 'Handler must return a Response instance.';
 
 const dispatchBunRequestMethodNotAllowed = (allowedMethods: readonly string[]): Response => {
@@ -158,44 +251,47 @@ export async function dispatchVerserBunRequest(
   return toVerserBunResponse(handlerResponse);
 }
 
-export function createVerserBunGuest(_options: VerserBunGuestOptions): VerserBunGuest {
-  let connected = false;
-  const lifecycleListeners: Array<(event: VerserBunGuestLifecycleEvent) => void> = [];
-
-  const notifyLifecycle = (name: string, reason?: string): void => {
-    const event = { name, guestId: _options.guestId, reason };
-    for (const listener of lifecycleListeners) {
-      listener(event);
+export function createVerserBunGuest(options: VerserBunGuestOptions): VerserBunGuest {
+  const nodeGuest: VerserNodeGuest = createVerserNodeGuest(options);
+  const getDispatchHandler = (
+    serverOrListener: VerserBunGuestServerLike,
+  ): VerserBunDispatchRequestHandler => {
+    if ('server' in serverOrListener) {
+      const fetchHandler = serverOrListener.fetch;
+      if (fetchHandler === undefined) {
+        throw new TypeError('Missing Bun fetch handler in server binding.');
+      }
+      return fetchHandler;
     }
+
+    return serverOrListener;
   };
 
   const guest: VerserBunGuest = {
-    get connected() {
-      return connected;
+    get connected(): boolean {
+      return nodeGuest.connected;
     },
 
-    async connect(): Promise<void> {
-      connected = true;
-      notifyLifecycle('connected');
-    },
-
-    async close(reason?: string): Promise<void> {
-      connected = false;
-      notifyLifecycle('closed', reason);
-    },
-
-    attach(_serverOrListener: VerserBunGuestServerLike, _domain?: string): VerserBunGuest {
+    attach(serverOrListener: VerserBunGuestServerLike, domain?: string): VerserBunGuest {
+      const domainName = domain ?? options.guestId;
+      const dispatchHandler = getDispatchHandler(serverOrListener);
+      const nodeHandler = createNodeStyleHandler(domainName, dispatchHandler);
+      nodeGuest.attach(nodeHandler, domainName);
       return guest;
     },
 
+    async connect(): Promise<void> {
+      await nodeGuest.connect();
+    },
+
+    async close(reason?: string): Promise<void> {
+      await nodeGuest.close(reason);
+    },
+
     onLifecycle(listener: (event: VerserBunGuestLifecycleEvent) => void): () => void {
-      lifecycleListeners.push(listener);
-      return () => {
-        const index = lifecycleListeners.indexOf(listener);
-        if (index >= 0) {
-          lifecycleListeners.splice(index, 1);
-        }
-      };
+      return nodeGuest.onLifecycle((event) => {
+        listener(event);
+      });
     },
   };
 

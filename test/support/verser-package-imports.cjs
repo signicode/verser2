@@ -21,8 +21,16 @@ function loadVerserGuestNode() {
   );
 }
 
+function loadVerserGuestBun() {
+  return loadPackage(
+    '@signicode/verser2-guest-bun',
+    '../../packages/verser2-guest-bun/dist/index.js',
+  );
+}
+
 module.exports = {
   loadVerserCommon,
+  loadVerserGuestBun,
   loadVerserGuestNode,
   loadVerserHost,
 };

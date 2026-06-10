@@ -1,7 +1,14 @@
+import type { VerserClientTlsOptions } from '@signicode/verser-common';
+
 export interface VerserBunGuestOptions {
   readonly hostUrl: string;
   readonly guestId: string;
   readonly routedDomains?: readonly string[];
+  readonly minWaitingStreams?: number;
+  readonly maxOpenStreams?: number;
+  readonly leaseAcquireTimeoutMs?: number;
+  readonly maxMetadataBytes?: number;
+  readonly tls?: VerserClientTlsOptions;
 }
 
 export interface VerserBunGuestLifecycleEvent {
@@ -20,17 +27,16 @@ export interface VerserBunGuest {
   onLifecycle(listener: (event: VerserBunGuestLifecycleEvent) => void): () => void;
 }
 
+export interface VerserBunGuestRequestHandler extends VerserBunDispatchRequestHandler {
+  readonly origin?: string;
+}
+
 export type VerserBunGuestServerLike =
   | VerserBunGuestRequestHandler
   | {
       readonly server: unknown;
-      readonly fetch?: VerserBunGuestRequestHandler;
+      readonly fetch?: VerserBunDispatchRequestHandler;
     };
-
-export interface VerserBunGuestRequestHandler {
-  readonly origin: string;
-  readonly fetch: (request: Record<string, unknown>) => Promise<unknown> | unknown;
-}
 
 export interface VerserBunGuestResponse {
   readonly status: number;

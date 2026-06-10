@@ -8,10 +8,11 @@
   "types": "dist/index.d.ts",
   "dependencies": {
     "@signicode/verser-common": "0.0.0",
-    "@signicode/verser2-guest-js-common": "0.0.0"
+    "@signicode/verser2-guest-js-common": "0.0.0",
+    "@signicode/verser2-guest-node": "0.0.0"
   },
   "scripts": {
     "test": "bun test ./test/adapter.test.ts",
-    "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common --external @signicode/verser2-guest-js-common && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
+    "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common --external @signicode/verser2-guest-js-common --external @signicode/verser2-guest-node && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
   }
 }
