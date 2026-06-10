@@ -107,4 +107,4 @@ export interface VerserBunGuestServer {
   upgrade: (request: Request) => boolean;
 }
 
-export const DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE = 'Handler must return a Response instance.';
+export { DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE } from './constants';
