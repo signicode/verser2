@@ -31,11 +31,43 @@ const sourcePackages = [
     stagedSafeName: 'signicode-verser2-guest-node',
   },
   {
+    name: '@signicode/verser2-guest-bun',
+    workspaceDirectory: path.join(rootDirectory, 'packages', 'verser2-guest-bun'),
+    stagedSafeName: 'signicode-verser2-guest-bun',
+  },
+  {
     name: '@signicode/verser2-guest-python',
     workspaceDirectory: path.join(rootDirectory, 'packages', 'verser2-guest-python'),
     stagedSafeName: 'signicode-verser2-guest-python',
   },
 ];
+
+const requiredExportsByPackage = {
+  '@signicode/verser2-guest-bun': [
+    'createVerserBunGuest',
+    'createVerserBroker',
+    'VERSER2_GUEST_BUN_PACKAGE_NAME',
+  ],
+};
+
+const forbiddenExportsByPackage = {
+  '@signicode/verser2-guest-bun': [
+    'dispatchVerserBunRequest',
+    'dispatchVerserBunRequestInternal',
+    '__internal',
+    'routeTable',
+    'RouteTable',
+    'route-table',
+  ],
+};
+
+function getRequiredExports(mode, packageName) {
+  return requiredExportsByPackage[packageName] || [];
+}
+
+function getForbiddenExports(mode, packageName) {
+  return forbiddenExportsByPackage[packageName] || [];
+}
 
 function usage() {
   return [
@@ -278,10 +310,28 @@ function getGithubPackageInstallSpec(packageName) {
   return `${packageName}@${version}`;
 }
 
-function writeProbeScripts(projectRoot, packageName) {
+function writeProbeScripts(projectRoot, packageName, mode) {
   const cjsPath = path.join(projectRoot, 'consumer.cjs');
   const mjsPath = path.join(projectRoot, 'consumer.mjs');
   const tsPath = path.join(projectRoot, 'consumer.ts');
+
+  const requiredExports = getRequiredExports(mode, packageName);
+  const forbiddenExports = getForbiddenExports(mode, packageName);
+  const requiredExportsAssertion = requiredExports
+    .map(
+      (name) => `if (!Object.prototype.hasOwnProperty.call(packageExports, '${name}')) {
+  throw new Error('Missing required export in ${packageName}: ${name}');
+}`,
+    )
+    .join('\n');
+
+  const forbiddenExportsAssertion = forbiddenExports
+    .map(
+      (name) => `if (Object.prototype.hasOwnProperty.call(packageExports, '${name}')) {
+  throw new Error('Forbidden runtime export in ${packageName}: ${name}');
+}`,
+    )
+    .join('\n');
 
   const cjs = `const packageExports = require('${packageName}');
 if (packageExports === undefined || packageExports === null) {
@@ -290,6 +340,8 @@ if (packageExports === undefined || packageExports === null) {
 if (typeof packageExports !== 'object' && typeof packageExports !== 'function') {
   throw new Error('Unexpected CJS import shape: ${packageName}');
 }
+${requiredExportsAssertion}
+${forbiddenExportsAssertion}
 `;
 
   const mjs = `import * as packageExports from '${packageName}';
@@ -299,9 +351,13 @@ if (packageExports === undefined || packageExports === null) {
 if (typeof packageExports !== 'object' && typeof packageExports !== 'function') {
   throw new Error('Unexpected ESM import shape: ${packageName}');
 }
+${requiredExportsAssertion}
+${forbiddenExportsAssertion}
 `;
 
   const ts = `import * as packageExports from '${packageName}';
+${requiredExportsAssertion}
+${forbiddenExportsAssertion}
 const _exports = packageExports;
 if (_exports === undefined || _exports === null) {
   throw new Error('Package import was empty: ${packageName}');
@@ -315,13 +371,13 @@ if (_exports === undefined || _exports === null) {
   return { cjsPath, mjsPath, tsPath };
 }
 
-function runConsumerChecks(projectRoot, packageName) {
+function runConsumerChecks(projectRoot, packageName, mode) {
   const runEnv = {
     ...process.env,
     NODE_PATH: `${nodeModulesDirectory}${path.delimiter}${process.env.NODE_PATH || ''}`,
   };
 
-  const scriptPaths = writeProbeScripts(projectRoot, packageName);
+  const scriptPaths = writeProbeScripts(projectRoot, packageName, mode);
 
   runCommand(process.execPath, [scriptPaths.cjsPath], {
     cwd: projectRoot,
@@ -362,12 +418,14 @@ function runConsumerChecks(projectRoot, packageName) {
   );
 }
 
-function buildReport(packageName) {
+function buildReport(packageName, mode) {
   return {
     packageName,
     cjs: true,
     mjs: true,
     typescript: true,
+    requiredExports: getRequiredExports(mode, packageName),
+    forbiddenExports: getForbiddenExports(mode, packageName),
   };
 }
 
@@ -399,8 +457,8 @@ function runSourceValidation(mode) {
     const targetPackages = sourcePackages.map((entry) => entry.name);
 
     for (const packageName of targetPackages) {
-      runConsumerChecks(projectRoot, packageName);
-      results.push(buildReport(packageName));
+      runConsumerChecks(projectRoot, packageName, mode);
+      results.push(buildReport(packageName, mode));
     }
 
     return {

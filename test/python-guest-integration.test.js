@@ -6,6 +6,7 @@ const test = require('node:test');
 
 const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
 const { trusted } = require('./support/tls-fixtures.cjs');
+const { terminateChildProcess } = require('./support/child-process.cjs');
 
 const { createVerserHost } = loadVerserHost();
 const { createVerserBroker } = loadVerserGuestNode();
@@ -97,7 +98,10 @@ test(
     try {
       await broker.connect();
       await waitForProcessOutput(guestProcess, /python guest ready/, 'Python Guest');
-      await broker.waitForRoute('python-basic.local.test');
+      await withTimeout(
+        broker.waitForRoute('python-basic.local.test'),
+        'Python Guest route registration',
+      );
 
       const response = await broker.request({
         targetId: 'python-guest-basic',
@@ -169,9 +173,9 @@ test(
       assert.equal(Buffer.concat(remainingResponseChunks).toString('utf8'), 'two');
     } finally {
       slowUpload?.end();
-      guestProcess.kill('SIGTERM');
-      await broker.close('test-complete');
-      await host.close('test-complete');
+      await withTimeout(broker.close('test-complete'), 'Broker close');
+      await withTimeout(terminateChildProcess(guestProcess), 'Python Guest termination');
+      await withTimeout(host.close('test-complete'), 'Host close');
     }
   },
 );
