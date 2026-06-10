@@ -181,6 +181,7 @@ test(
       'Bun runtime guest startup',
     );
     const streamUpload = new PassThrough();
+    const streamRequestUpload = new PassThrough();
 
     try {
       await withTimeout(broker.connect(), 'Bun broker connect', 5_000);
@@ -283,6 +284,68 @@ test(
       );
       assert.equal(fallbackResponse.statusCode, 214);
       assert.deepEqual(await readBody(fallbackResponse.body), Buffer.from('GET /fallback  '));
+
+      streamRequestUpload.write(Buffer.from('stream-'));
+      streamRequestUpload.write(Buffer.from('body'));
+      streamRequestUpload.end();
+      const requestEchoResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'PUT',
+          path: '/request-echo?x=streamed&mode=check',
+          headers: { 'x-input': 'header-value' },
+          body: streamRequestUpload,
+        }),
+        'Bun runtime request echo',
+      );
+      assert.equal(requestEchoResponse.statusCode, 222);
+      const requestEchoBody = (await readBody(requestEchoResponse.body)).toString('utf8');
+      const requestEchoJson = JSON.parse(requestEchoBody);
+      assert.equal(requestEchoJson.method, 'PUT');
+      assert.equal(requestEchoJson.path, '/request-echo');
+      assert.equal(requestEchoJson.query, '?x=streamed&mode=check');
+      assert.equal(requestEchoJson.header, 'header-value');
+      assert.equal(requestEchoJson.body, 'stream-body');
+
+      const jsonResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/response-json',
+        }),
+        'Bun runtime response json',
+      );
+      assert.equal(jsonResponse.statusCode, 200);
+      assert.equal(
+        (jsonResponse.headers['content-type'] ?? '').startsWith('application/json'),
+        true,
+      );
+      const jsonBody = JSON.parse((await readBody(jsonResponse.body)).toString('utf8'));
+      assert.equal(jsonBody.ok, true);
+
+      const iterableResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/response-iterable',
+        }),
+        'Bun runtime response iterable',
+      );
+      assert.equal(iterableResponse.statusCode, 219);
+      assert.equal(iterableResponse.headers['content-type'], 'text/plain');
+      assert.deepEqual(await readBody(iterableResponse.body), Buffer.from('onetwo'));
+
+      const readableResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/response-node-readable',
+        }),
+        'Bun runtime response readable',
+      );
+      assert.equal(readableResponse.statusCode, 220);
+      assert.equal(readableResponse.headers['content-type'], 'text/plain');
+      assert.deepEqual(await readBody(readableResponse.body), Buffer.from('node-readable'));
 
       const chunkedRequestResponse = await withTimeout(
         broker.request({
