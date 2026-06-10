@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { createVerserBunGuest } from '../src/index';
 
 const hostUrl = process.env.VERSER_HOST_URL;
@@ -27,10 +28,39 @@ guest.attach(
         GET: new Response('read', { status: 200 }),
         POST: () => new Response('create', { status: 201 }),
       },
+      '/response-json': Response.json({ ok: true }, { status: 200 }),
+      '/response-iterable': async () => {
+        const iterator = (async function* () {
+          yield new TextEncoder().encode('one');
+          yield new TextEncoder().encode('two');
+        })();
+
+        return new Response(iterator as unknown as BodyInit, {
+          status: 219,
+          headers: {
+            'content-type': 'text/plain',
+          },
+        });
+      },
+      '/response-node-readable': () => {
+        const stream = Readable.from([
+          Buffer.from('node'),
+          Buffer.from('-'),
+          Buffer.from('readable'),
+        ]);
+        return new Response(stream as unknown as BodyInit, {
+          status: 220,
+          headers: {
+            'content-type': 'text/plain',
+          },
+        });
+      },
     },
     fetch: async (request, server) => {
-      const path = new URL(request.url).pathname;
+      const requestUrl = new URL(request.url);
+      const path = requestUrl.pathname;
       const input = request.headers.get('x-input') ?? '';
+      const query = requestUrl.search;
 
       if (path === '/upgrade') {
         return new Response(String(server.upgrade(request)), { status: 200 });
@@ -72,6 +102,25 @@ guest.attach(
             'content-type': 'text/plain',
           },
         });
+      }
+
+      if (path === '/request-echo') {
+        const requestBody = await request.text();
+        return new Response(
+          JSON.stringify({
+            method: request.method,
+            path,
+            query,
+            header: input,
+            body: requestBody,
+          }),
+          {
+            status: 222,
+            headers: {
+              'content-type': 'application/json',
+            },
+          },
+        );
       }
 
       const body = Buffer.from(await request.arrayBuffer());

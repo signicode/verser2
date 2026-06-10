@@ -279,19 +279,26 @@
 
 ## Phase 4b: Rejected Review Corrective Bun Request and Body Coverage
 
-- [ ] Task: Add missing Bun request/fetch coverage
-    - [ ] Test that Bun runtime handlers receive `Request` method, URL, query, headers, and streamed body through public Guest attach paths.
-    - [ ] Test fallback `fetch(request, server)` behavior when no Bun route matches.
-    - [ ] Test route handler request behavior through static, function, method, param, and wildcard routes where supported.
-- [ ] Task: Add missing Bun response/body coverage
-    - [ ] Test JSON responses with `Response.json()`.
-    - [ ] Test iterable or async-iterable response bodies where Bun accepts them.
-    - [ ] Test Node.js stream response bodies where Bun accepts them.
-    - [ ] Preserve binary chunks without UTF-8 coercion across public Host/Broker/Bun runtime paths.
-- [ ] Task: Validate Phase 4b narrowly before continuing
-    - [ ] Run focused `bun test` coverage for Bun request/response shapes.
-    - [ ] Run spawned Bun runtime integration for public Host/Broker/Guest request behavior.
-    - [ ] Record validation results before any final readiness work.
+- [x] Task: Add missing Bun request/fetch coverage
+    - [x] Test that Bun runtime handlers receive `Request` method, URL, query, headers, and streamed body through public Guest attach paths.
+    - [x] Test fallback `fetch(request, server)` behavior when no Bun route matches.
+    - [x] Test route handler request behavior through static, function, method, param, and wildcard routes where supported.
+- [x] Task: Add missing Bun response/body coverage
+    - [x] Test JSON responses with `Response.json()`.
+    - [x] Test iterable or async-iterable response bodies where Bun accepts them.
+    - [x] Test Node.js stream response bodies where Bun accepts them.
+    - [x] Preserve binary chunks without UTF-8 coercion across public Host/Broker/Bun runtime paths.
+- [x] Task: Validate Phase 4b narrowly before continuing
+    - [x] Run focused `bun test` coverage for Bun request/response shapes.
+    - [x] Run spawned Bun runtime integration for public Host/Broker/Guest request behavior.
+    - [x] Record validation results before any final readiness work.
+
+### Phase 4b Notes
+
+- Spawned Bun runtime integration now verifies `Request` method, path, query, headers, and streamed request body through a public fallback `fetch(request, server)` path.
+- Runtime response coverage now includes `Response.json()`, async iterable response bodies, Node.js `Readable` response bodies, streamed Web `ReadableStream` response bodies, and binary preservation.
+- Route handler behavior remains covered through the spawned Bun runtime for static, param, wildcard, per-method, and fallback paths.
+- Validation passed before final readiness work: `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s npm run lint`.
 
 ### Phase 4 Corrective Notes
 
