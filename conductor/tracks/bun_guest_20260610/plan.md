@@ -2,9 +2,9 @@
 
 ## Phase 0: Track Branch, PR, Start Commit, and Baseline
 
-- [ ] Task: Create the dedicated Conductor track branch and PR review surface
-    - [ ] Confirm current branch, working tree state, and `origin/main` freshness before track implementation begins.
-    - [ ] Create a dedicated track branch named for the Bun Guest track from the up-to-date base branch.
+- [~] Task: Create the dedicated Conductor track branch and PR review surface
+    - [x] Confirm current branch, working tree state, and `origin/main` freshness before track implementation begins.
+    - [x] Create a dedicated track branch named for the Bun Guest track from the up-to-date base branch.
     - [ ] Ensure the track-start commit containing `spec.md`, `plan.md`, `metadata.json`, `index.md`, and the `tracks.md` registry update is present on the track branch.
     - [ ] Push the track branch and track-start commit to GitHub before requesting manual review.
     - [ ] Create a GitHub PR with `gh` using a real multiline body file, not escaped `\n` sequences.
