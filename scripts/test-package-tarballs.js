@@ -41,6 +41,10 @@ const sourcePackages = [
     name: '@signicode/verser2-guest-node',
     stagedSafeName: 'signicode-verser2-guest-node',
   },
+  {
+    name: '@signicode/verser2-guest-python',
+    stagedSafeName: 'signicode-verser2-guest-python',
+  },
 ];
 
 const includedGroups = [

@@ -11,6 +11,7 @@ const packageDirectories = [
   'packages/verser2-guest-js-common',
   'packages/verser2-host',
   'packages/verser2-guest-node',
+  'packages/verser2-guest-python',
 ];
 const forbiddenPublishFields = ['private', 'scripts', 'devDependencies', 'workspaces'];
 

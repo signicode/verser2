@@ -21,7 +21,7 @@ test('consumer matrix validates cjs, esm, and typescript imports from source pac
   assert.equal(report.source, 'source');
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 4);
+  assert.equal(report.packages.length, 5);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);
@@ -36,7 +36,7 @@ test('consumer matrix validates cjs, esm, and typescript imports from staged pac
   assert.equal(report.source, 'staging');
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 4);
+  assert.equal(report.packages.length, 5);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);
@@ -51,7 +51,7 @@ test('consumer matrix validates cjs, esm, and typescript imports from tarball pa
   assert.equal(report.source, 'tarball');
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 4);
+  assert.equal(report.packages.length, 5);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);
@@ -73,7 +73,7 @@ test('github mode does not fail when authentication token is absent', () => {
 
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 4);
+  assert.equal(report.packages.length, 5);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);
