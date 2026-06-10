@@ -2,20 +2,28 @@
 
 ## Phase 0: Track Branch, PR, Start Commit, and Baseline
 
-- [~] Task: Create the dedicated Conductor track branch and PR review surface
+- [x] Task: Create the dedicated Conductor track branch and PR review surface
     - [x] Confirm current branch, working tree state, and `origin/main` freshness before track implementation begins.
     - [x] Create a dedicated track branch named for the Bun Guest track from the up-to-date base branch.
-    - [ ] Ensure the track-start commit containing `spec.md`, `plan.md`, `metadata.json`, `index.md`, and the `tracks.md` registry update is present on the track branch.
-    - [ ] Push the track branch and track-start commit to GitHub before requesting manual review.
-    - [ ] Create a GitHub PR with `gh` using a real multiline body file, not escaped `\n` sequences.
-    - [ ] Use a PR title and description that describe the completed Bun Guest TO-BE state, not only the planning artifacts.
-- [ ] Task: Establish baseline repository validation
-    - [ ] Run the narrowest relevant baseline validation before changing implementation files.
-    - [ ] Record any preexisting failures, skipped checks, or environment constraints in the track notes.
-- [ ] Task: Review existing shared foundations before implementation
-    - [ ] Inspect `@signicode/verser-common` for reusable protocol, header, lifecycle, error, and stream helpers.
-    - [ ] Inspect `@signicode/verser2-guest-js-common` for reusable JavaScript Guest foundations.
-    - [ ] Inspect existing Node Guest and Python Guest package/test/docs patterns for conventions to mirror.
+    - [x] Ensure the track-start commit containing `spec.md`, `plan.md`, `metadata.json`, `index.md`, and the `tracks.md` registry update is present on the track branch.
+    - [x] Push the track branch and track-start commit to GitHub before requesting manual review.
+    - [x] Create a GitHub PR with `gh` using a real multiline body file, not escaped `\n` sequences.
+    - [x] Use a PR title and description that describe the completed Bun Guest TO-BE state, not only the planning artifacts.
+- [x] Task: Establish baseline repository validation
+    - [x] Run the narrowest relevant baseline validation before changing implementation files.
+    - [x] Record any preexisting failures, skipped checks, or environment constraints in the track notes.
+- [x] Task: Review existing shared foundations before implementation
+    - [x] Inspect `@signicode/verser-common` for reusable protocol, header, lifecycle, error, and stream helpers.
+    - [x] Inspect `@signicode/verser2-guest-js-common` for reusable JavaScript Guest foundations.
+    - [x] Inspect existing Node Guest and Python Guest package/test/docs patterns for conventions to mirror.
+
+### Phase 0 Notes
+
+- PR: https://github.com/signicode/verser2/pull/8.
+- Baseline validation: `npm run build` passed before implementation-file changes.
+- No preexisting baseline failures were observed. `dts-bundle-generator` emitted the repository's existing composite-project warning during package builds.
+- Shared scan: reuse `@signicode/verser-common` for package constants/protocol-neutral request, response, header, lifecycle, and error helpers where applicable; reuse `@signicode/verser2-guest-js-common` for JavaScript Guest foundations before adding Bun-local connection/lifecycle code.
+- Package convention scan: mirror `packages/verser2-guest-node` TypeScript package layout and update hardcoded package lists in staging, package consumer, tarball, docs, and package readiness tests when the Bun package is scaffolded.
 ## Phase 1: Package Scaffold and Tooling Recognition
 
 - [ ] Task: Write failing package-recognition tests first
