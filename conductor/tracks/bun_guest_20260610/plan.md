@@ -183,24 +183,47 @@
 
 ## Phase 5: Documentation, Package Consumer Validation, and Final Readiness
 
-- [ ] Task: Write failing documentation and package consumer tests
-    - [ ] Add tests requiring Bun Guest README examples and package entrypoint documentation.
-    - [ ] Add or update package consumer validation for `@signicode/verser2-guest-bun` imports.
-    - [ ] Add tests that docs state Bun apps do not call `listen()` for guest exposure.
-- [ ] Task: Complete Bun Guest documentation
-    - [ ] Add a tutorial-style Bun Guest example using a `Bun.serve`-style handler without opening a listening port.
-    - [ ] Document fetch handler, route handler, Node compatibility, streaming, and WebSocket limitations.
-    - [ ] Update root README, package lists, or tech-stack documentation to move Bun from roadmap to implemented where appropriate.
-- [ ] Task: Validate package readiness
-    - [ ] Run `bun test` for Bun-specific tests.
-    - [ ] Run the narrowest sufficient npm build, lint, package staging, package consumer, and test commands affected by the new package.
-    - [ ] Record any skipped validation and reason.
-- [ ] Task: Final review and cleanup
-    - [ ] Confirm all plan tasks are complete or explicitly deferred with rationale.
-    - [ ] Confirm docs, tests, package metadata, and implementation agree.
-    - [ ] Confirm no unrelated runtime guests, HTTP/3 behavior, auth policy, or public gateway behavior was introduced.
-    - [ ] Prepare final phase checkpoint commit and update `plan.md` with the checkpoint SHA.
+- [x] Task: Write failing documentation and package consumer tests
+    - [x] Add tests requiring Bun Guest README examples and package entrypoint documentation.
+    - [x] Add or update package consumer validation for `@signicode/verser2-guest-bun` imports.
+    - [x] Add tests that docs state Bun apps do not call `listen()` for guest exposure.
+- [x] Task: Complete Bun Guest documentation
+    - [x] Add a tutorial-style Bun Guest example using a `Bun.serve`-style handler without opening a listening port.
+    - [x] Document fetch handler, route handler, Node compatibility, streaming, and WebSocket limitations.
+    - [x] Update root README, package lists, and conductor docs to move Bun from roadmap to implemented where appropriate.
+- [x] Task: Validate package readiness
+    - [x] Run `bun test` for Bun-specific tests.
+    - [x] Run the narrowest sufficient npm build, lint, package staging, package consumer, and test commands affected by the new package.
+    - [x] Record any skipped validation and reason.
+- [x] Task: Final review and cleanup
+    - [x] Confirm all plan tasks are complete or explicitly deferred with rationale.
+    - [x] Confirm docs, tests, package metadata, and implementation agree.
+    - [x] Confirm no unrelated runtime guests, HTTP/3 behavior, auth policy, or public gateway behavior was introduced.
+    - [x] Prepare final phase checkpoint commit and update `plan.md` with the checkpoint SHA.
 - [ ] Task: Push Phase 5 checkpoint for GitHub review
     - [ ] Push the final phase checkpoint commit to the track PR branch before manual verification.
     - [ ] Confirm the PR contains final implementation, docs, validation notes, and package readiness updates.
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Documentation, Package Consumer Validation, and Final Readiness' (Protocol in workflow.md)
+
+### Phase 5 Notes
+
+- Documentation validation was expanded in `test/docs.test.js` to require Bun Guest
+  tutorial content, fetch and route behavior, streaming notes, WebSocket boundary
+  notes, and explicit non-listening (`listen()`) guidance in root + package docs.
+- Package consumer validation in `test/package-consumer-imports.test.js` now asserts
+  that the Bun package name is present in import checks across source/staged/tarball
+  matrix modes.
+- Validation run list (bounded):
+  - `timeout 20s node --test test/docs.test.js test/package-consumer-imports.test.js test/package-publish-readiness.test.js test/packages.test.js`
+  - `timeout 20s npm run test --workspace=@signicode/verser2-guest-bun`
+  - `timeout 20s node --test test/bun-guest-integration.test.js`
+  - `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`
+  - `timeout 20s npm run stage:packages`
+  - `timeout 20s npm run lint`
+- Skipped by scope: full suite and Python track/guest test sets, because this phase is
+  documentation/readiness-only and Python track behavior remains unchanged.
+- Project-level Conductor docs: synchronization is deferred to the required post-track
+  documentation synchronization protocol after the track is marked complete.
+- Readiness summary: docs, package consumer checks, and staging/build readiness agree
+  with implementation; no unrelated runtime guest, HTTP/3, auth policy, or public
+  gateway changes were introduced in this phase.

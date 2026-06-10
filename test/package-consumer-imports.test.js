@@ -6,6 +6,27 @@ const test = require('node:test');
 const rootDirectory = path.resolve(__dirname, '..');
 const scriptPath = path.join(rootDirectory, 'scripts', 'test-package-consumers.js');
 const runAuthenticatedGithubConsumers = process.env.VERSER_RUN_GITHUB_CONSUMER_TESTS === '1';
+const expectedPackageCount = 6;
+const expectedPackageNames = new Set([
+  '@signicode/verser-common',
+  '@signicode/verser2-guest-js-common',
+  '@signicode/verser2-guest-bun',
+  '@signicode/verser2-host',
+  '@signicode/verser2-guest-node',
+  '@signicode/verser2-guest-python',
+]);
+
+function assertPackageSet(report) {
+  const packageNames = new Set(
+    report.packages.map((packageReport) => packageReport.packageName || packageReport.package),
+  );
+  for (const expectedName of expectedPackageNames) {
+    assert.ok(
+      packageNames.has(expectedName),
+      `Expected package validation result to include ${expectedName}`,
+    );
+  }
+}
 
 function runConsumerChecks(sourceMode) {
   const output = execFileSync(process.execPath, [scriptPath, `--source=${sourceMode}`, '--json'], {
@@ -21,7 +42,8 @@ test('consumer matrix validates cjs, esm, and typescript imports from source pac
   assert.equal(report.source, 'source');
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 6);
+  assert.equal(report.packages.length, expectedPackageCount);
+  assertPackageSet(report);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);
@@ -36,7 +58,8 @@ test('consumer matrix validates cjs, esm, and typescript imports from staged pac
   assert.equal(report.source, 'staging');
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 6);
+  assert.equal(report.packages.length, expectedPackageCount);
+  assertPackageSet(report);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);
@@ -51,7 +74,8 @@ test('consumer matrix validates cjs, esm, and typescript imports from tarball pa
   assert.equal(report.source, 'tarball');
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 6);
+  assert.equal(report.packages.length, expectedPackageCount);
+  assertPackageSet(report);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);
@@ -73,7 +97,8 @@ test('github mode does not fail when authentication token is absent', () => {
 
   assert.equal(report.skipped, false);
   assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, 6);
+  assert.equal(report.packages.length, expectedPackageCount);
+  assertPackageSet(report);
 
   for (const packageReport of report.packages) {
     assert.equal(packageReport.cjs, true);

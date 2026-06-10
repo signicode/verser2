@@ -135,7 +135,7 @@ response.body.pipe(process.stdout);
 
 ## TypeScript package usage
 
-The workspace packages expose APIs for the Host, Node Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
+The workspace packages expose APIs for the Host, Node Guest, Bun Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
 
 ```ts
 import fs from 'node:fs';
@@ -214,6 +214,66 @@ const routedFetch = broker.createFetch();
 const helperResponse = await routedFetch('http://client-json.local.test/health');
 console.log(await helperResponse.text());
 ```
+
+## Bun Guest usage
+
+`@signicode/verser2-guest-bun` lets Bun handlers expose routes to connected
+peers without opening a listening port. Bun route handlers stay close to native
+`fetch()` and route-table forms.
+
+```ts
+import { createVerserBunGuest } from '@signicode/verser2-guest-bun';
+
+const bunGuest = createVerserBunGuest({
+  hostUrl: 'https://localhost:8443',
+  guestId: 'bun-client-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
+});
+
+bunGuest.attach({
+  fetch(request, server) {
+    if (request.url.endsWith('/health')) {
+      return Response.json({ ok: true, runtime: 'bun' });
+    }
+
+    if (request.url.endsWith('/ws')) {
+      return Response.json({ upgrade: server.upgrade(request) }, { status: 501 });
+    }
+
+    return new Response('not found', { status: 404 });
+  },
+});
+
+await bunGuest.connect();
+```
+
+If you prefer explicit route tables:
+
+```ts
+bunGuest.attach({
+  routes: {
+    '/health': new Response(JSON.stringify({ ok: true })),
+    '/items': {
+      POST: async (request) => new Response(JSON.stringify({ ok: true }), { status: 201 }),
+      GET: () => new Response('method not used', { status: 405 }),
+    },
+  },
+});
+```
+
+The Bun guest transport uses the same reconnect/lifecycle/route-advertisement flow as
+the Node Guest, including routed domain registration and close semantics.
+
+## Streaming and request body notes for Bun Guests
+
+- Request bodies can be routed from plain strings, `Buffer`, and web streams.
+- Response objects may return textual or binary payloads; `text()`/`json()` helpers
+  remain available for the returned dispatch result.
+- WebSocket upgrades are intentionally not forwarded; `server.upgrade()` returns
+  `false` in this Bun adapter.
+
+The same non-listening host exposure rule applies here: Bun Guests do not call
+`listen()` or otherwise bind a local TCP socket for routed exposure.
 
 The same routing APIs support streamed request and response bodies:
 

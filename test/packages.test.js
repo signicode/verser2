@@ -241,6 +241,7 @@ test('@signicode/verser2-guest-bun package exposes Bun Guest scaffold API', () =
   assert.equal(packageManifest.types, 'dist/index.d.ts');
   assert.deepEqual(Object.keys(guestPackage).sort(), [
     'VERSER2_GUEST_BUN_PACKAGE_NAME',
+    '__internal',
     'createVerserBunGuest',
     'dispatchVerserBunRequest',
   ]);
