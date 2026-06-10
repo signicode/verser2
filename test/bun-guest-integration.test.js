@@ -177,7 +177,7 @@ test(
     });
     const guestReady = waitForProcessOutput(
       guestProcess,
-      /bun guest ready/i,
+      /bun broker self-check ready/i,
       'Bun runtime guest startup',
     );
     const streamUpload = new PassThrough();

@@ -283,11 +283,16 @@
     - [x] Test that Bun runtime handlers receive `Request` method, URL, query, headers, and streamed body through public Guest attach paths.
     - [x] Test fallback `fetch(request, server)` behavior when no Bun route matches.
     - [x] Test route handler request behavior through static, function, method, param, and wildcard routes where supported.
+    - [x] Test Bun-originated Broker `request()` and `createFetch()` calls from inside the spawned Bun runtime.
 - [x] Task: Add missing Bun response/body coverage
     - [x] Test JSON responses with `Response.json()`.
     - [x] Test iterable or async-iterable response bodies where Bun accepts them.
     - [x] Test Node.js stream response bodies where Bun accepts them.
     - [x] Preserve binary chunks without UTF-8 coercion across public Host/Broker/Bun runtime paths.
+- [x] Task: Extend spawned Bun runtime readiness to self-check Bun-originating transport APIs
+    - [x] In the spawned Bun runtime, import `createVerserBroker` from `@signicode/verser2-guest-bun` and connect it to Host with TLS CA configuration.
+    - [x] From inside Bun runtime, call `broker.request()` against `/status` on the hosted guest and assert `ok`.
+    - [x] From inside Bun runtime, call `broker.createFetch()` against `http://<guestDomain>/response-json` and assert JSON `{ ok: true }` before reporting readiness.
 - [x] Task: Validate Phase 4b narrowly before continuing
     - [x] Run focused `bun test` coverage for Bun request/response shapes.
     - [x] Run spawned Bun runtime integration for public Host/Broker/Guest request behavior.
@@ -296,7 +301,9 @@
 ### Phase 4b Notes
 
 - Spawned Bun runtime integration now verifies `Request` method, path, query, headers, and streamed request body through a public fallback `fetch(request, server)` path.
+- The spawned Bun runtime now creates a Bun-package Broker and self-checks both `broker.request()` and `broker.createFetch()` through the Host before printing readiness. The Bun package wraps `createFetch()` so Bun-originated fetches route through `broker.request()` instead of falling back to direct TCP/DNS behavior.
 - Runtime response coverage now includes `Response.json()`, async iterable response bodies, Node.js `Readable` response bodies, streamed Web `ReadableStream` response bodies, and binary preservation.
+- Spawned Bun runtime now also performs Bun-originating self-checks from inside the spawned process using Bun package `createVerserBroker`: both a direct `broker.request()` and a `createFetch()` assertion are executed before emitting `bun broker self-check ready`.
 - Route handler behavior remains covered through the spawned Bun runtime for static, param, wildcard, per-method, and fallback paths.
 - Validation passed before final readiness work: `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s npm run lint`.
 - Phase checkpoint commit: `2f81923`.
