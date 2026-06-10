@@ -414,3 +414,5 @@
 - Phase 5 verification status: not accepted by user. Corrective Phase 2b, Phase 3b,
   Phase 4 streaming parity tasks, and final parity review tasks were added to address
   public API parity, Host-owned routing, streaming, Bun-runtime validation, and public/internal boundary issues before track completion.
+- Corrective final validation passed: `npm run build` (passed after constraining default repo ambient types to Node and rerunning after dependency declarations were refreshed); `npm run stage:packages`; `npm test`; `npm run lint`; `npm run test:package-consumers -- --source=source`; `npm run test:package-consumers -- --source=staging`; `npm run test:package-consumers -- --source=tarball`; `npm run test:package-tarballs`; `bun test packages/verser2-guest-bun/test/*.test.ts`.
+- Validation recovery classification: initial full `npm run build` failure was session-introduced and in scope because adding Bun test types exposed Bun ambient declarations to all package declaration builds. Fix was to set root `tsconfig.json` default `types` to `['node']` and keep Bun ambient types scoped to `packages/verser2-guest-bun/test/tsconfig.json`.

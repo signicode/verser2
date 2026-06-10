@@ -14,7 +14,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
-    "target": "ES2019"
+    "target": "ES2019",
+    "types": ["node"]
   },
   "files": [],
   "references": [
