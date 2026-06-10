@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { createVerserBunGuest } from '../src/index';
+import { createVerserBroker, createVerserBunGuest } from '../src/index';
 
 const hostUrl = process.env.VERSER_HOST_URL;
 const guestId = process.env.VERSER_GUEST_ID;
@@ -10,11 +10,16 @@ if (!hostUrl || !guestId || !guestDomain || !tlsCaFile) {
   throw new Error('Missing required Bun guest runtime env vars');
 }
 
+const resolvedHostUrl = hostUrl;
+const resolvedGuestId = guestId;
+const resolvedGuestDomain = guestDomain;
+const resolvedTlsCaFile = tlsCaFile;
+
 const guest = createVerserBunGuest({
-  hostUrl,
-  guestId,
+  hostUrl: resolvedHostUrl,
+  guestId: resolvedGuestId,
   tls: {
-    caFile: tlsCaFile,
+    caFile: resolvedTlsCaFile,
   },
 });
 
@@ -132,16 +137,143 @@ guest.attach(
       });
     },
   },
-  guestDomain,
+  resolvedGuestDomain,
 );
 
-await guest.connect();
-
-console.log('bun guest ready', JSON.stringify({ hostUrl, guestId, guestDomain }));
-
-await new Promise<void>((resolve) => {
-  process.once('SIGINT', () => resolve());
-  process.once('SIGTERM', () => resolve());
+const bunBroker = createVerserBroker({
+  hostUrl: resolvedHostUrl,
+  brokerId: 'bun-runtime-self-check',
+  tls: {
+    caFile: resolvedTlsCaFile,
+  },
 });
 
-await guest.close('runtime complete');
+const selfCheckTimeoutMs = 15_000;
+
+async function waitWithTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs: number,
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => {
+        reject(new Error(`Bun self-check timed out: ${label}`));
+      }, timeoutMs),
+    ),
+  ]);
+}
+
+async function readResponseText(stream: Readable): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function closeRuntime(reason: string): Promise<void> {
+  await Promise.all([guest.close(reason).catch(() => {}), bunBroker.close(reason).catch(() => {})]);
+}
+
+async function waitForGuestDomain(domain: string, timeoutMs: number): Promise<void> {
+  await waitWithTimeout(
+    bunBroker.waitForRoute(domain),
+    `bun broker route ready for ${domain}`,
+    timeoutMs,
+  );
+}
+
+async function requestSelfCheckResponse(): Promise<string> {
+  const selfCheckRequest = await waitWithTimeout(
+    bunBroker.request({
+      targetId: resolvedGuestId,
+      method: 'GET',
+      path: '/status',
+    }),
+    'bun broker request self-check',
+    selfCheckTimeoutMs,
+  );
+  if (selfCheckRequest.statusCode !== 200) {
+    throw new Error(`Bun broker request self-check failed status: ${selfCheckRequest.statusCode}`);
+  }
+
+  return await readResponseText(selfCheckRequest.body);
+}
+
+async function fetchSelfCheckResponse(domain: string): Promise<unknown> {
+  const deadline = Date.now() + selfCheckTimeoutMs;
+  let lastError: unknown;
+  const routedFetch = bunBroker.createFetch();
+
+  while (Date.now() < deadline) {
+    try {
+      const fetchResponse = await waitWithTimeout(
+        routedFetch(new URL(`http://${domain}/response-json`)),
+        'bun createFetch self-check',
+        2_500,
+      );
+      if (fetchResponse.status !== 200) {
+        throw new Error(`Bun createFetch self-check failed status: ${fetchResponse.status}`);
+      }
+
+      return await waitWithTimeout(fetchResponse.json(), 'bun createFetch body parse', 2_500);
+    } catch (error) {
+      lastError = error;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
+    }
+  }
+
+  throw new Error(`Bun createFetch self-check failed: ${String(lastError)}`);
+}
+
+try {
+  await bunBroker.connect();
+  await guest.connect();
+  await waitForGuestDomain(resolvedGuestDomain, selfCheckTimeoutMs);
+  if (process.env.VERSER_SELF_CHECK_DEBUG === '1') {
+    const brokerRoutes = (
+      bunBroker as { getRoutes?: () => unknown[] }
+    )?.getRoutes?.() as unknown as unknown;
+    console.log('bun broker routes at self-check', JSON.stringify(brokerRoutes));
+  }
+
+  {
+    const selfCheckRequestText = await requestSelfCheckResponse();
+    if (selfCheckRequestText !== 'ok') {
+      throw new Error(
+        `Bun broker request self-check failed with unexpected body: ${selfCheckRequestText}`,
+      );
+    }
+  }
+
+  {
+    const fetchResponse = await fetchSelfCheckResponse(resolvedGuestDomain);
+    const fetchBody = fetchResponse as {
+      ok: unknown;
+    };
+    if (fetchBody?.ok !== true) {
+      throw new Error(`Bun createFetch self-check failed body: ${JSON.stringify(fetchBody)}`);
+    }
+  }
+
+  console.log('bun broker self-check ready');
+  console.log(
+    'bun guest ready',
+    JSON.stringify({
+      hostUrl: resolvedHostUrl,
+      guestId: resolvedGuestId,
+      guestDomain: resolvedGuestDomain,
+    }),
+  );
+
+  await new Promise<void>((resolve) => {
+    process.once('SIGINT', () => resolve());
+    process.once('SIGTERM', () => resolve());
+  });
+} finally {
+  await closeRuntime('runtime complete');
+}
