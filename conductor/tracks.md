@@ -29,5 +29,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [~] **Track: bun guest**
+- [x] **Track: bun guest**
 *Link: [./tracks/bun_guest_20260610/](./tracks/bun_guest_20260610/)*
