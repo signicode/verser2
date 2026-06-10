@@ -26,3 +26,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: package buildability and ability to publish**
 *Link: [./tracks/package_publish_readiness_20260608/](./tracks/package_publish_readiness_20260608/)*
+
+---
+
+- [ ] **Track: bun guest**
+*Link: [./tracks/bun_guest_20260610/](./tracks/bun_guest_20260610/)*
