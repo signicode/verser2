@@ -91,6 +91,7 @@
 - Validation passed: `npm run test --workspace=@signicode/verser2-guest-bun`; `npm run build`; `npm run stage:packages`; `node --test test/packages.test.js`; `npm run lint`; `bun test --coverage packages/verser2-guest-bun/test/adapter.test.ts`.
 - Coverage: Bun coverage reported 100% function coverage and 99.21% line coverage across the Bun package files included by the Phase 2 test.
 - Deduplication result: request/response conversion and exact Bun route dispatch remain package-local because they are runtime-adapter behavior and are not yet repeated across JavaScript guest runtimes. No common library changes were needed.
+- Phase checkpoint commit: `d47c2f6`.
 
 ## Phase 3: Outbound Guest Integration
 
