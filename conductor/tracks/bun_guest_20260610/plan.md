@@ -119,9 +119,9 @@
     - [x] Confirm public API no longer exposes internal dispatch/test hooks.
     - [x] Confirm Bun tests use public APIs rather than implementation internals.
     - [x] Record validation and any intentionally private adapter helper locations.
-- [ ] Task: Push Phase 2b checkpoint for GitHub review
-    - [ ] Push the Phase 2b checkpoint commit to the track PR branch before manual verification.
-    - [ ] Confirm the PR reflects the public/internal boundary cleanup and Bun public-runtime validation work.
+- [x] Task: Push Phase 2b checkpoint for GitHub review
+    - [x] Push the Phase 2b checkpoint commit to the track PR branch before manual verification.
+    - [x] Confirm the PR reflects the public/internal boundary cleanup and Bun public-runtime validation work.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2b: Public API Surface and Bun Runtime Test Migration' (Protocol in workflow.md)
 
 ### Phase 2b Notes
@@ -197,9 +197,9 @@
     - [x] Confirm no HTTP/2 session, control stream, or lease stream pool implementation was duplicated in the Bun package.
     - [x] Record that Bun uses the existing Node transport internally for compatibility while exposing a Bun-first public package surface.
     - [x] Confirm no HTTP/3, authentication, authorization, public gateway, or unrelated runtime guest behavior was introduced.
-- [ ] Task: Push Phase 3b checkpoint for GitHub review
-    - [ ] Push the Phase 3b checkpoint commit to the track PR branch before manual verification.
-    - [ ] Confirm the PR reflects public API parity, strict route removal, Host-owned routing, and transport reuse.
+- [x] Task: Push Phase 3b checkpoint for GitHub review
+    - [x] Push the Phase 3b checkpoint commit to the track PR branch before manual verification.
+    - [x] Confirm the PR reflects public API parity, strict route removal, Host-owned routing, and transport reuse.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3b: Public API Parity, Broker Surface, and Host-Owned Routing' (Protocol in workflow.md)
 
 ### Phase 3b Notes
@@ -246,9 +246,9 @@
     - [x] Remove internal-hook WebSocket tests and cover unsupported upgrade behavior through public Guest/Broker request paths.
     - [x] Keep `server.upgrade()` behavior explicit and false unless a future track implements WebSocket forwarding.
     - [x] Confirm no WebSocket forwarding, CONNECT, HTTP/3, or unrelated upgrade behavior is introduced.
-- [ ] Task: Push Phase 4 corrective checkpoint for GitHub review
-    - [ ] Push the Phase 4 streaming parity and public-surface WebSocket boundary checkpoint to the track PR branch before manual verification.
-    - [ ] Confirm the PR reflects true streaming behavior, binary preservation, public-surface tests, and no adapter pre-aggregation.
+- [x] Task: Push Phase 4 corrective checkpoint for GitHub review
+    - [x] Push the Phase 4 streaming parity and public-surface WebSocket boundary checkpoint to the track PR branch before manual verification.
+    - [x] Confirm the PR reflects true streaming behavior, binary preservation, public-surface tests, and no adapter pre-aggregation.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4 Corrective: Streaming Parity and Public WebSocket Boundary' (Protocol in workflow.md)
 
 ### Phase 4 Corrective Notes
@@ -323,9 +323,9 @@
     - [x] Confirm response/request bodies stream through the Bun public path without adapter pre-aggregation.
     - [x] Confirm tests use public surfaces and Bun runtime where Bun behavior is being validated.
     - [x] Confirm final docs, tests, package metadata, and implementation agree after Phase 2b/3b/4 streaming corrections.
-- [ ] Task: Push corrective final checkpoint for GitHub review
-    - [ ] Push the corrective Phase 2b, Phase 3b, Phase 4 streaming, and Phase 5 parity updates to the track PR branch before requesting final manual verification again.
-    - [ ] Confirm the PR reflects the revised public API parity, Host-owned routing, streaming, Bun-runtime validation, and public/internal boundary requirements.
+- [x] Task: Push corrective final checkpoint for GitHub review
+    - [x] Push the corrective Phase 2b, Phase 3b, Phase 4 streaming, and Phase 5 parity updates to the track PR branch before requesting final manual verification again.
+    - [x] Confirm the PR reflects the revised public API parity, Host-owned routing, streaming, Bun-runtime validation, and public/internal boundary requirements.
 - [x] Task: Push Phase 5 checkpoint for GitHub review
     - [x] Push the final phase checkpoint commit to the track PR branch before manual verification.
     - [x] Confirm the PR contains final implementation, docs, validation notes, and package readiness updates.
