@@ -124,6 +124,11 @@ const createNodeStyleHandler = (
   };
 };
 
+const bodyToBuffer = async (response: Response): Promise<Buffer> => {
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+};
+
 const DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE = 'Handler must return a Response instance.';
 
 const dispatchBunRequestMethodNotAllowed = (allowedMethods: readonly string[]): Response => {
@@ -143,13 +148,14 @@ const toHeadersRecord = (headers: Headers): Record<string, string> => {
 };
 
 const toVerserBunResponse = async (response: Response): Promise<VerserBunDispatchResponse> => {
-  const body = await response.text();
+  const bodyBytes = await bodyToBuffer(response);
+  const body = bodyBytes.toString('utf8');
   const headers = toHeadersRecord(response.headers);
   return {
     status: response.status,
     statusText: response.statusText,
     headers,
-    body,
+    body: bodyBytes,
     text: async () => body,
     json: async () => {
       return JSON.parse(body) as unknown;
@@ -250,6 +256,11 @@ export async function dispatchVerserBunRequest(
 
   return toVerserBunResponse(handlerResponse);
 }
+
+export const __internal = {
+  readBody,
+  createNodeStyleHandler,
+};
 
 export function createVerserBunGuest(options: VerserBunGuestOptions): VerserBunGuest {
   const nodeGuest: VerserNodeGuest = createVerserNodeGuest(options);

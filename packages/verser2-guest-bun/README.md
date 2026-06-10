@@ -23,4 +23,12 @@ Phase 2 adds a tiny Bun runtime adapter helper:
   optional `routes` table.
 - Builds a web-standard `Request` from `{ method, path, headers, body, origin }`.
 - Returns a typed data response with `status`, `statusText`, `headers`, `body`,
-  `text()` and `json()`.
+  `text()` and `json()`. `body` is exposed as `string` for text workflows and
+  `Buffer` when the upstream Web `Response` body is binary/stream.
+
+### WebSocket boundary
+
+WebSocket upgrade is intentionally not supported by this track. The Bun handler
+adapter intentionally passes a minimal server object to Bun-style handlers where
+`server.upgrade()` always returns `false`; WebSocket forwarding is therefore not
+implemented.
