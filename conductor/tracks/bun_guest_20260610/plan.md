@@ -95,27 +95,37 @@
 
 ## Phase 3: Outbound Guest Integration
 
-- [ ] Task: Write failing integration tests for Host-routed Bun Guest requests
-    - [ ] Test connecting a Bun Guest outbound to an existing Verser2 Host.
-    - [ ] Test a Broker or Host-routed request reaching a Bun `fetch(req)` handler.
-    - [ ] Test status, headers, and body returning through the existing Host/Guest route.
-    - [ ] Confirm the Bun handler does not open an inbound listening port.
-- [ ] Task: Implement Bun Guest connection lifecycle
-    - [ ] Reuse JavaScript Guest foundations for Host connection, registration, route advertisement, and request dispatch where possible.
-    - [ ] Add Bun Guest create/connect helpers with explicit endpoint, guest identity, route, and lifecycle options.
-    - [ ] Surface lifecycle errors with useful Host/Guest/path context.
-    - [ ] Preserve existing transport behavior and avoid HTTP/3 or unrelated Host/Broker changes.
-- [ ] Task: Validate integrated request/response behavior
-    - [ ] Run focused Bun integration tests.
-    - [ ] Run relevant npm integration or build checks affected by the new package.
-    - [ ] Record coverage status or limitations for Bun integration paths.
-- [ ] Task: Perform Phase 3 deduplication and lifecycle review
-    - [ ] Confirm shared connection/lifecycle code was reused rather than duplicated.
-    - [ ] Move repeated JavaScript Guest helper code into `@signicode/verser2-guest-js-common` if reuse emerges.
+- [x] Task: Write failing integration tests for Host-routed Bun Guest requests
+    - [x] Test connecting a Bun Guest outbound to an existing Verser2 Host.
+    - [x] Test a Broker or Host-routed request reaching a Bun `fetch(req)` handler.
+    - [x] Test status, headers, and body returning through the existing Host/Guest route.
+    - [x] Confirm the Bun handler does not open an inbound listening port.
+- [x] Task: Implement Bun Guest connection lifecycle
+    - [x] Reuse JavaScript Guest foundations for Host connection, registration, route advertisement, and request dispatch where possible.
+    - [x] Add Bun Guest create/connect helpers with explicit endpoint, guest identity, route, and lifecycle options.
+    - [x] Surface lifecycle errors with useful Host/Guest/path context.
+    - [x] Preserve existing transport behavior and avoid HTTP/3 or unrelated Host/Broker changes.
+- [x] Task: Validate integrated request/response behavior
+    - [x] Run focused Bun integration tests.
+    - [x] Run relevant npm integration or build checks affected by the new package.
+    - [x] Record coverage status or limitations for Bun integration paths.
+- [x] Task: Perform Phase 3 deduplication and lifecycle review
+    - [x] Confirm shared connection/lifecycle code was reused rather than duplicated.
+    - [x] Move repeated JavaScript Guest helper code into `@signicode/verser2-guest-js-common` if reuse emerges.
 - [ ] Task: Push Phase 3 checkpoint for GitHub review
     - [ ] Push the Phase 3 checkpoint commit to the track PR branch before manual verification.
     - [ ] Confirm the PR contains the package scaffold, handler adapter, and outbound integration work for review.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Outbound Guest Integration' (Protocol in workflow.md)
+
+### Phase 3 Notes
+
+- Failing test confirmation: `npm run build && npm run stage:packages && node --test test/bun-guest-integration.test.js` failed before implementation with `bun route advertisement timed out`, confirming the Bun Guest did not yet connect/register routes.
+- Integration implementation reuses `@signicode/verser2-guest-node`'s Node Guest transport for Host connection, registration, route advertisements, lease management, lifecycle, and close behavior. Bun-specific code adapts Node-style routed requests into `dispatchVerserBunRequest` and writes the serialized Bun response back to the Node-style response shim.
+- No inbound listener is opened by the Bun package; `attach()` wires an in-process adapter function into the reused Node Guest transport.
+- Validation passed with bounded/narrow commands only: `timeout 20s node --test test/packages.test.js`; `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s npm run test --workspace=@signicode/verser2-guest-bun`; `timeout 20s npm run lint`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s npm run stage:packages`.
+- Coverage status: `timeout 20s bun test --coverage packages/verser2-guest-bun/test/adapter.test.ts` passed but now includes the reused Node Guest/common dependency graph because the Bun Guest imports the Node Guest transport. The reported aggregate coverage is therefore not a meaningful measure of the Phase 3 integration slice. Meaningful Phase 3 behavior is covered by the focused Host/Broker/Bun Guest integration test plus existing Node Guest transport coverage.
+- Validation recovery: a package smoke test initially called real `guest.connect()` after `createVerserBunGuest` became a real transport wrapper, causing a self-signed certificate failure and timeout. This session-introduced in-scope test issue was fixed by keeping `test/packages.test.js` as an export/attach smoke test and leaving real transport verification to `test/bun-guest-integration.test.js`.
+- Deduplication result: connection/lifecycle/lease code is reused from `@signicode/verser2-guest-node`; no duplicate HTTP/2 transport implementation was introduced. The Bun adapter remains package-local because it maps Bun/Web handler shapes to the existing JavaScript transport path.
 
 ## Phase 4: Streaming, Node Compatibility, and Unsupported WebSocket Boundary
 

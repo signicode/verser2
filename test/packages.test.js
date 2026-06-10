@@ -247,39 +247,21 @@ test('@signicode/verser2-guest-bun package exposes Bun Guest scaffold API', () =
   assert.equal(guestPackage.VERSER2_GUEST_BUN_PACKAGE_NAME, '@signicode/verser2-guest-bun');
   assert.equal(typeof guestPackage.createVerserBunGuest, 'function');
   assert.equal(typeof guestPackage.dispatchVerserBunRequest, 'function');
+  const lifecycleEvents = [];
   const guest = guestPackage.createVerserBunGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'bun-package-test',
   });
-  const lifecycleEvents = [];
   const unsubscribe = guest.onLifecycle((event) => lifecycleEvents.push(event));
 
   assert.equal(guest.connected, false);
   assert.equal(
-    guest.attach({ origin: 'http://bun-package-test.local', fetch: () => undefined }),
+    guest.attach({ origin: 'http://bun-package-test.local', fetch: () => new Response() }),
     guest,
   );
   assert.equal(typeof unsubscribe, 'function');
+  assert.equal(lifecycleEvents.length, 0);
   assertSingleFileDist('packages/verser2-guest-bun');
-
-  return guest
-    .connect()
-    .then(() => {
-      assert.equal(guest.connected, true);
-      return guest.close('done');
-    })
-    .then(() => {
-      assert.equal(guest.connected, false);
-      assert.deepEqual(lifecycleEvents, [
-        { name: 'connected', guestId: 'bun-package-test', reason: undefined },
-        { name: 'closed', guestId: 'bun-package-test', reason: 'done' },
-      ]);
-      unsubscribe();
-      return guest.connect();
-    })
-    .then(() => {
-      assert.equal(lifecycleEvents.length, 2);
-    });
 });
 
 test('routed body transport no longer contains bodyBase64 control-frame paths', () => {

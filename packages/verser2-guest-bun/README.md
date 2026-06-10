@@ -1,19 +1,18 @@
 # @signicode/verser2-guest-bun
 
-This package is a **Phase 1 scaffold** for the Bun Guest API.
+This package provides the Bun Guest outbound adapter. It reuses the established
+`@signicode/verser2-guest-node` transport for Host connection, route
+registration, lease management, lifecycle events, and close behavior while adapting
+the local handler model to Bun-style `fetch` request handling.
 
-Phase 1 intentionally provides only package wiring and type-safe public exports,
-not a connected transport implementation. The runtime behavior (registration,
-routing handoff, and stream handling) is deferred to later Conductor phases.
-
-- Guests connect to Host and route local handlers without calling `listen()`.
-- Bun fetch-style request handling is the intended runtime shape for this guest.
-- WebSocket forwarding is explicitly out of scope for this phase.
+- Guests connect to Host and route handlers without calling `listen()`.
+- Local handlers use Bun-style `fetch` (and optional route-table) behavior via
+  `dispatchVerserBunRequest`.
 
 ## Public API (scaffold)
 
 - `VERSER2_GUEST_BUN_PACKAGE_NAME`
-- `createVerserBunGuest(options)`
+- `createVerserBunGuest(options)` delegates to the Node Guest transport.
 - `dispatchVerserBunRequest(handler, request)`
 
 ## `dispatchVerserBunRequest`
