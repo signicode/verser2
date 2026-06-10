@@ -227,3 +227,4 @@
 - Readiness summary: docs, package consumer checks, and staging/build readiness agree
   with implementation; no unrelated runtime guest, HTTP/3, auth policy, or public
   gateway changes were introduced in this phase.
+- Phase checkpoint commit: `7254ea5`.
