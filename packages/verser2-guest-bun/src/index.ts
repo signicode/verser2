@@ -8,6 +8,12 @@ export type {
   VerserBunGuest,
   VerserBunGuestLifecycleEvent,
   VerserBunGuestOptions,
+  VerserBunRequest,
+  VerserBunRoutes,
+  VerserBunRouteMethod,
+  VerserBunRouteHandler,
+  VerserBunRouteValue,
+  VerserBunRoutesPerMethod,
   VerserBunGuestRequestHandler,
 } from './lib/types';
 

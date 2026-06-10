@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@types/bun": "^1.3.14",
     "@types/node": "^20.14.0",
     "dts-bundle-generator": "^9.5.1",
     "tsup": "^8.5.0",

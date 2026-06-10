@@ -1,4 +1,12 @@
-import type { VerserBunGuestRequestHandler, VerserBunGuestServer } from './types';
+import type {
+  VerserBunGuestRequestHandler,
+  VerserBunGuestServer,
+  VerserBunRequest,
+  VerserBunRouteMethod,
+  VerserBunRouteValue,
+  VerserBunRoutes,
+  VerserBunRoutesPerMethod,
+} from './types';
 
 export interface NodeStyleRequest {
   readonly method: string;
@@ -15,6 +23,40 @@ export interface NodeStyleResponse {
 }
 
 const DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE = 'Handler must return a Response instance.';
+
+const VERSER_BUN_METHODS: readonly VerserBunRouteMethod[] = [
+  'ACL',
+  'BIND',
+  'CHECKOUT',
+  'CONNECT',
+  'COPY',
+  'DELETE',
+  'GET',
+  'HEAD',
+  'LINK',
+  'LOCK',
+  'M-SEARCH',
+  'MERGE',
+  'MKACTIVITY',
+  'MKCOL',
+  'MKREDIRECTREF',
+  'MKWORKSPACE',
+  'MOVE',
+  'OPTIONS',
+  'PATCH',
+  'POST',
+  'PROPFIND',
+  'PROPPATCH',
+  'PURGE',
+  'PUT',
+  'REBIND',
+  'REPORT',
+  'SEARCH',
+  'TRACE',
+  'UNBIND',
+  'UNLINK',
+  'UNLOCK',
+];
 
 const getErrorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
@@ -40,13 +82,17 @@ interface VerserBunDispatchResponse {
   readonly status: number;
   readonly statusText: string;
   readonly headers: Record<string, string>;
-  readonly body: string | Buffer;
+  readonly body: ReadableStream<Uint8Array> | null;
   readonly text: () => Promise<string>;
   readonly json: () => Promise<unknown>;
 }
 
 interface VerserBunDispatchRequestHandler {
-  readonly fetch?: (request: Request, server: VerserBunGuestServer) => Promise<unknown> | unknown;
+  readonly routes?: VerserBunRoutes;
+  readonly fetch?: (
+    request: VerserBunRequest,
+    server: VerserBunGuestServer,
+  ) => Promise<unknown> | unknown;
 }
 
 const asRequestUrl = (request: VerserBunDispatchRequest): string => {
@@ -59,7 +105,7 @@ const isResponseLike = (value: unknown): value is Response => {
 
 const resolveResponse = (value: unknown): Promise<Response> => {
   if (isResponseLike(value)) {
-    return Promise.resolve(value);
+    return Promise.resolve(value.clone());
   }
   return Promise.reject(new TypeError(DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE));
 };
@@ -103,7 +149,32 @@ const hasRequestBody = (method: string): boolean => {
   return normalized !== 'GET' && normalized !== 'HEAD';
 };
 
-const toWebRequest = (request: VerserBunDispatchRequest): Request => {
+const splitRoutePath = (path: string): readonly string[] => {
+  if (path === '/') {
+    return [];
+  }
+
+  return path.split('/').filter((segment) => segment.length > 0);
+};
+
+const isPotentialRouteMethodObject = (value: unknown): value is VerserBunRoutesPerMethod => {
+  if (value === null || typeof value !== 'object' || isResponseLike(value)) {
+    return false;
+  }
+
+  const routeMethodObject = value as Record<string, unknown>;
+  const keys = Object.keys(routeMethodObject);
+
+  return (
+    keys.length > 0 &&
+    keys.every((methodName) => VERSER_BUN_METHODS.includes(methodName as VerserBunRouteMethod))
+  );
+};
+
+const toWebRequest = (
+  request: VerserBunDispatchRequest,
+  params?: Record<string, string>,
+): VerserBunRequest => {
   const requestInit: RequestInit = {
     method: request.method,
     headers: request.headers,
@@ -114,17 +185,29 @@ const toWebRequest = (request: VerserBunDispatchRequest): Request => {
     (requestInit as RequestInit & { duplex: 'half' }).duplex = 'half';
   }
 
-  return new Request(asRequestUrl(request), requestInit);
+  const webRequest = new Request(asRequestUrl(request), requestInit);
+  return Object.assign(webRequest, {
+    params: params ?? {},
+  }) as VerserBunRequest;
 };
 
 const toVerserBunResponse = async (response: Response): Promise<VerserBunDispatchResponse> => {
-  const bodyBytes = Buffer.from(await response.arrayBuffer());
-  const body = bodyBytes.toString('utf8');
+  const responseBody = response.body?.tee();
+  const bodyResponse =
+    responseBody === undefined
+      ? response
+      : new Response(responseBody[1], {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+
+  const body = await bodyResponse.text();
   return {
     status: response.status,
     statusText: response.statusText,
     headers: toHeadersRecord(response.headers),
-    body: bodyBytes,
+    body: responseBody?.[0] ?? null,
     text: async () => body,
     json: async () => {
       return JSON.parse(body) as unknown;
@@ -132,20 +215,257 @@ const toVerserBunResponse = async (response: Response): Promise<VerserBunDispatc
   };
 };
 
+type VerserBunMatchedRoute = {
+  readonly value?: VerserBunRouteValue;
+  readonly params: Record<string, string>;
+  readonly allow?: string;
+};
+
+const isWildcardRoutePath = (routePath: string): boolean => {
+  return routePath === '*' || routePath === '/*' || routePath.endsWith('/*');
+};
+
+const tryMatchExactRoute = (
+  routePath: string,
+  requestPath: string,
+): { params: Record<string, string> } | undefined => {
+  if (routePath === requestPath) {
+    return { params: {} };
+  }
+
+  return undefined;
+};
+
+const tryMatchParamRoute = (
+  routePath: string,
+  requestPath: string,
+): { params: Record<string, string> } | undefined => {
+  const routeParts = splitRoutePath(routePath);
+  const requestParts = splitRoutePath(requestPath);
+
+  if (routeParts.length !== requestParts.length) {
+    return undefined;
+  }
+
+  const params: Record<string, string> = {};
+
+  for (let index = 0; index < routeParts.length; index++) {
+    const routePart = routeParts[index];
+    const requestPart = requestParts[index] ?? '';
+
+    if (routePart.startsWith(':')) {
+      const paramName = routePart.slice(1);
+      try {
+        params[paramName] = decodeURIComponent(requestPart);
+      } catch {
+        params[paramName] = requestPart;
+      }
+      continue;
+    }
+
+    if (routePart !== requestPart) {
+      return undefined;
+    }
+  }
+
+  return { params };
+};
+
+const tryMatchWildcardRoute = (
+  routePath: string,
+  requestPath: string,
+): { params: Record<string, string> } | undefined => {
+  if (routePath === '*') {
+    return { params: { '*': requestPath === '/' ? '' : requestPath.slice(1) } };
+  }
+
+  const routeParts = splitRoutePath(routePath);
+  if (routeParts.length === 0 || routeParts[routeParts.length - 1] !== '*') {
+    return undefined;
+  }
+
+  const prefixParts = routeParts.slice(0, routeParts.length - 1);
+  const requestParts = splitRoutePath(requestPath);
+
+  if (prefixParts.length > requestParts.length) {
+    return undefined;
+  }
+
+  for (let index = 0; index < prefixParts.length; index++) {
+    if (prefixParts[index] !== requestParts[index]) {
+      return undefined;
+    }
+  }
+
+  const wildcardParts = requestParts.slice(prefixParts.length);
+  const wildcardValue = wildcardParts.join('/');
+
+  return { params: { '*': wildcardValue } };
+};
+
+const resolveRouteMethodValues = (route: VerserBunRoutesPerMethod): string[] => {
+  const allow: string[] = [];
+
+  for (const method of VERSER_BUN_METHODS) {
+    if (route[method] !== undefined) {
+      allow.push(method);
+    }
+  }
+
+  return allow;
+};
+
+const resolveRoute = (
+  routes: VerserBunRoutes,
+  requestPath: string,
+  requestMethod: string,
+): VerserBunMatchedRoute | undefined => {
+  const method = requestMethod.toUpperCase();
+
+  const exactEntries: Array<[string, VerserBunRouteValue | VerserBunRoutesPerMethod]> = [];
+  const paramEntries: Array<[string, VerserBunRouteValue | VerserBunRoutesPerMethod]> = [];
+  const wildcardEntries: Array<[string, VerserBunRouteValue | VerserBunRoutesPerMethod]> = [];
+
+  for (const entry of Object.entries(routes) as Array<
+    [string, VerserBunRouteValue | VerserBunRoutesPerMethod]
+  >) {
+    const [routePath] = entry;
+    if (routePath.includes(':') || routePath.includes('*')) {
+      if (isWildcardRoutePath(routePath)) {
+        wildcardEntries.push(entry);
+        continue;
+      }
+
+      paramEntries.push(entry);
+      continue;
+    }
+
+    exactEntries.push(entry);
+  }
+
+  const resolveMethodRoute = (
+    routeValue: VerserBunRoutesPerMethod,
+    params: Record<string, string>,
+  ): VerserBunMatchedRoute | undefined => {
+    const routeMethod = routeValue[method as VerserBunRouteMethod];
+    if (routeMethod !== undefined) {
+      return {
+        value: routeMethod,
+        params,
+      };
+    }
+
+    const allow = resolveRouteMethodValues(routeValue);
+    if (allow.length === 0) {
+      return undefined;
+    }
+
+    return {
+      params,
+      allow: allow.join(', '),
+    };
+  };
+  for (const [routePath, routeValue] of exactEntries) {
+    const match = tryMatchExactRoute(routePath, requestPath);
+    if (match === undefined) {
+      continue;
+    }
+
+    if (isPotentialRouteMethodObject(routeValue)) {
+      const resolved = resolveMethodRoute(routeValue, match.params);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+      continue;
+    }
+
+    return {
+      value: routeValue,
+      params: match.params,
+    };
+  }
+
+  for (const [routePath, routeValue] of paramEntries) {
+    const match = tryMatchParamRoute(routePath, requestPath);
+    if (match === undefined) {
+      continue;
+    }
+
+    if (isPotentialRouteMethodObject(routeValue)) {
+      const resolved = resolveMethodRoute(routeValue, match.params);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+      continue;
+    }
+
+    return {
+      value: routeValue,
+      params: match.params,
+    };
+  }
+
+  for (const [routePath, routeValue] of wildcardEntries) {
+    const match = tryMatchWildcardRoute(routePath, requestPath);
+    if (match === undefined) {
+      continue;
+    }
+
+    if (isPotentialRouteMethodObject(routeValue)) {
+      const resolved = resolveMethodRoute(routeValue, match.params);
+      if (resolved !== undefined) {
+        return resolved;
+      }
+      continue;
+    }
+
+    return {
+      value: routeValue,
+      params: match.params,
+    };
+  }
+
+  return undefined;
+};
+
 export async function dispatchVerserBunRequestInternal(
   handler: VerserBunDispatchRequestHandler,
   request: VerserBunDispatchRequest,
 ): Promise<VerserBunDispatchResponse> {
-  const webRequest = toWebRequest(request);
   const server: VerserBunGuestServer = {
     upgrade: () => false,
   };
 
-  if (handler.fetch === undefined) {
-    throw new TypeError('No fetch handler is available for the Bun Guest request.');
+  const requestPath = new URL(asRequestUrl(request)).pathname;
+  if (handler.routes !== undefined) {
+    const routeMatch = resolveRoute(handler.routes, requestPath, request.method);
+    if (routeMatch !== undefined) {
+      if (routeMatch.allow !== undefined) {
+        const headers = new Headers();
+        headers.set('Allow', routeMatch.allow);
+        const notAllowed = new Response('Method Not Allowed', {
+          status: 405,
+          headers,
+        });
+        return toVerserBunResponse(notAllowed);
+      }
+
+      if (routeMatch.value !== undefined) {
+        const routeResult = isResponseLike(routeMatch.value)
+          ? routeMatch.value
+          : routeMatch.value(toWebRequest(request, routeMatch.params), server);
+        return toVerserBunResponse(await resolveResponse(await routeResult));
+      }
+    }
   }
 
-  return toVerserBunResponse(await resolveResponse(await handler.fetch(webRequest, server)));
+  if (handler.fetch === undefined) {
+    return toVerserBunResponse(await resolveResponse(new Response('Not Found', { status: 404 })));
+  }
+
+  return toVerserBunResponse(
+    await resolveResponse(await handler.fetch(toWebRequest(request), server)),
+  );
 }
 
 const writeResponseBody = async (
@@ -187,11 +507,10 @@ export const createNodeStyleHandler = (
           body: hasRequestBody(request.method) ? streamRequestBody(request) : undefined,
         };
 
-        const webResponse = await resolveResponse(
-          await handler.fetch?.(toWebRequest(bunRequest), { upgrade: () => false }),
-        );
+        const webResponse = await dispatchVerserBunRequestInternal(handler, bunRequest);
+
         response.statusCode = webResponse.status;
-        response.writeHead(webResponse.status, toHeadersRecord(webResponse.headers));
+        response.writeHead(webResponse.status, webResponse.headers);
         await writeResponseBody(webResponse.body, response);
       } catch (error: unknown) {
         response.writeHead(500, { 'content-type': 'text/plain' });

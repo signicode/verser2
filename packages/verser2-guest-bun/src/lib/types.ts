@@ -35,8 +35,64 @@ export interface VerserBunGuest {
   onLifecycle(listener: (event: VerserBunGuestLifecycleEvent) => void): () => void;
 }
 
+export interface VerserBunRequest extends Request {
+  readonly params: Record<string, string>;
+}
+
+export type VerserBunRouteMethod =
+  | 'ACL'
+  | 'BIND'
+  | 'CHECKOUT'
+  | 'CONNECT'
+  | 'COPY'
+  | 'DELETE'
+  | 'GET'
+  | 'HEAD'
+  | 'LINK'
+  | 'LOCK'
+  | 'M-SEARCH'
+  | 'MERGE'
+  | 'MKACTIVITY'
+  | 'MKCOL'
+  | 'MKREDIRECTREF'
+  | 'MKWORKSPACE'
+  | 'MOVE'
+  | 'OPTIONS'
+  | 'PATCH'
+  | 'POST'
+  | 'PROPFIND'
+  | 'PROPPATCH'
+  | 'PURGE'
+  | 'PUT'
+  | 'REBIND'
+  | 'REPORT'
+  | 'SEARCH'
+  | 'TRACE'
+  | 'UNBIND'
+  | 'UNLINK'
+  | 'UNLOCK';
+
+export type VerserBunRouteHandler = (
+  request: VerserBunRequest,
+  server: VerserBunGuestServer,
+) => Promise<Response> | Response;
+
+export type VerserBunRouteValue = Response | VerserBunRouteHandler;
+
+export type VerserBunRoutesPerMethod = {
+  readonly [METHOD in VerserBunRouteMethod]?: VerserBunRouteValue;
+};
+
+export type VerserBunRoutes = {
+  readonly [pathname: string]: VerserBunRouteValue | VerserBunRoutesPerMethod;
+};
+
 export interface VerserBunGuestRequestHandler {
-  readonly fetch: (request: Request, server: VerserBunGuestServer) => Promise<unknown> | unknown;
+  readonly fetch?: (
+    request: VerserBunRequest,
+    server: VerserBunGuestServer,
+  ) => Promise<unknown> | unknown;
+  readonly routes?: VerserBunRoutes;
 }
 
 export interface VerserBunGuestResponse {

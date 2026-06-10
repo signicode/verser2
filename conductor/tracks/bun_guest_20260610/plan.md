@@ -202,6 +202,31 @@
     - [x] Confirm the PR reflects public API parity, strict route removal, Host-owned routing, and transport reuse.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3b: Public API Parity, Broker Surface, and Host-Owned Routing' (Protocol in workflow.md)
 
+## Phase 3c: Rejected Review Corrective Routes and Phase-Gated Validation
+
+- [x] Task: Fix Bun test TypeScript editor/runtime typing
+    - [x] Add Bun type declarations so `bun:test` resolves in local TypeScript tooling.
+    - [x] Add a test-scoped tsconfig for Bun runtime tests without changing package build inputs.
+    - [x] Validate the Bun test tsconfig before changing route behavior.
+- [x] Task: Restore Bun-compatible route table support
+    - [x] Reintroduce public `routes` support using the Bun `Bun.serve({ routes })` contract instead of the earlier simplified route shape.
+    - [x] Support static `Response` routes, function routes, and per-method route handlers for exact paths.
+    - [x] Support practical Bun-style param and wildcard route keys where feasible without changing Host-owned route advertisement semantics.
+    - [x] Keep Host/Broker route advertisements as the only Verser routing state; local Bun routes dispatch only inside the advertised Guest handler.
+- [x] Task: Validate Phase 3c routes narrowly before continuing
+    - [x] Run focused Bun runtime tests for route table dispatch.
+    - [x] Run package export/declaration smoke tests for the restored public route types.
+    - [x] Record validation results before moving to Phase 4 corrective follow-up.
+
+### Phase 3c Notes
+
+- Review correction: public Bun `routes` support was restored because route tables are part of the Bun `Bun.serve({ routes })` contract, but they remain local handler dispatch only and do not create Host/Broker route advertisements.
+- Route support covers exact static `Response` routes, function routes, per-method route objects, param routes, wildcard routes, fallback `fetch`, 405 `Allow`, and 404 when no route or fallback exists.
+- Static `Response` routes are cloned before consumption so repeated requests to the same route remain reusable.
+- Runtime route behavior is validated through the spawned Bun process integration rather than private adapter imports.
+- Bun test TypeScript tooling was fixed with `@types/bun` and `packages/verser2-guest-bun/test/tsconfig.json`; the package build keeps tests out of production declarations through `tsconfig.build.json`.
+- Validation passed before moving to Phase 4b: `timeout 20s node node_modules/typescript/bin/tsc --project packages/verser2-guest-bun/test/tsconfig.json`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s node --test test/packages.test.js test/docs.test.js`; `timeout 20s npm run lint`.
+
 ### Phase 3b Notes
 
 - Bun package public API now includes `createVerserBroker`, Bun Guest/Broker option/result types, and the Bun package constant while preserving Node transport reuse as an implementation detail.
@@ -250,6 +275,22 @@
     - [x] Push the Phase 4 streaming parity and public-surface WebSocket boundary checkpoint to the track PR branch before manual verification.
     - [x] Confirm the PR reflects true streaming behavior, binary preservation, public-surface tests, and no adapter pre-aggregation.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4 Corrective: Streaming Parity and Public WebSocket Boundary' (Protocol in workflow.md)
+
+## Phase 4b: Rejected Review Corrective Bun Request and Body Coverage
+
+- [ ] Task: Add missing Bun request/fetch coverage
+    - [ ] Test that Bun runtime handlers receive `Request` method, URL, query, headers, and streamed body through public Guest attach paths.
+    - [ ] Test fallback `fetch(request, server)` behavior when no Bun route matches.
+    - [ ] Test route handler request behavior through static, function, method, param, and wildcard routes where supported.
+- [ ] Task: Add missing Bun response/body coverage
+    - [ ] Test JSON responses with `Response.json()`.
+    - [ ] Test iterable or async-iterable response bodies where Bun accepts them.
+    - [ ] Test Node.js stream response bodies where Bun accepts them.
+    - [ ] Preserve binary chunks without UTF-8 coercion across public Host/Broker/Bun runtime paths.
+- [ ] Task: Validate Phase 4b narrowly before continuing
+    - [ ] Run focused `bun test` coverage for Bun request/response shapes.
+    - [ ] Run spawned Bun runtime integration for public Host/Broker/Guest request behavior.
+    - [ ] Record validation results before any final readiness work.
 
 ### Phase 4 Corrective Notes
 
