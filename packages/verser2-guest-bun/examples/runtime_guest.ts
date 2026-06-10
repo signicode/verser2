@@ -19,12 +19,25 @@ const guest = createVerserBunGuest({
 
 guest.attach(
   {
+    routes: {
+      '/status': new Response('ok', { status: 200 }),
+      '/users/:id': (request) => new Response(`user:${request.params.id ?? ''}`),
+      '/files/*': new Response('wildcard', { status: 200 }),
+      '/items': {
+        GET: new Response('read', { status: 200 }),
+        POST: () => new Response('create', { status: 201 }),
+      },
+    },
     fetch: async (request, server) => {
       const path = new URL(request.url).pathname;
       const input = request.headers.get('x-input') ?? '';
 
       if (path === '/upgrade') {
         return new Response(String(server.upgrade(request)), { status: 200 });
+      }
+
+      if (path === '/status') {
+        return new Response('fetched-status', { status: 200 });
       }
 
       if (path === '/binary') {

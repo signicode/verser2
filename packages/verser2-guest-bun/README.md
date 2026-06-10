@@ -93,6 +93,30 @@ guest.attach({
 }, 'bun-client-a.local.test');
 ```
 
+### Bun-style `routes` contract (local dispatch)
+
+`attach()` also accepts a local `routes` map following Bun-style matching. This
+is only local dispatch on the attached Bun handler and does not affect host route
+advertisement.
+
+```ts
+guest.attach({
+  routes: {
+    '/health': new Response('ok', { status: 200 }),
+    '/users/:id': (request) => new Response(request.params.id),
+    '/files/*': () => new Response('wildcard', { status: 200 }),
+    '/items': {
+      GET: new Response('read', { status: 200 }),
+      POST: () => new Response('created', { status: 201 }),
+    },
+  },
+  fetch: (request) => new Response('fallback', { status: 404 }),
+}, 'bun-client-a.local.test');
+```
+
+Matching precedence is exact path, then parameter (`:id`) routes, then wildcard
+(`*`). `fetch(request, server)` is only used when no route entry matches the path.
+
 ## Fetch and response semantics
 
 - Incoming `body` inputs are accepted as strings, `Buffer`, and Web

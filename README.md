@@ -246,9 +246,27 @@ bunGuest.attach({
 await bunGuest.connect();
 ```
 
-Route handling here is your normal Bun handler logic. Host/Broker route
-advertisements remain the source of advertised routes; `fetch()` dispatch does not
-create local route entries.
+Route handling is local Bun-style dispatch on the attached peer. The `routes` table
+provides local path dispatch (`exact`, `:param`, and `*` wildcard patterns) and
+`fetch` remains the fallback for unmatched paths. This local dispatch does not
+change host/agent route advertisements.
+
+```ts
+bunGuest.attach({
+  routes: {
+    '/health': new Response('ok'),
+    '/users/:id': (request) => Response.json({ id: request.params.id }),
+    '/api/*': () => Response.json({ wildcard: true }),
+    '/items': {
+      GET: new Response('read', { status: 200 }),
+      POST: () => new Response('created', { status: 201 }),
+    },
+  },
+  fetch: (request) => {
+    return Response.json({ path: new URL(request.url).pathname, fallback: true });
+  },
+}, 'bun-client-a.local.test');
+```
 
 Use Bun peers through the standard Broker APIs:
 

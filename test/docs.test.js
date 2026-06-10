@@ -37,7 +37,7 @@ test('root README documents Bun Guest usage and non-listen behavior', () => {
   assert.match(readme, /route-advert|route advert/);
   assert.match(readme, /Request bodies can be routed/i);
   assert.doesNotMatch(readme, /dispatchVerserBunRequest/);
-  assert.doesNotMatch(readme, /\broutes:/);
+  assert.match(readme, /routes\s*:/);
   assert.match(readme, /WebSocket upgrades are intentionally not forwarded/i);
   assert.match(readme, /server\.upgrade\(\)[\s\S]*`false`/i);
   assert.match(readme, /Bun Guests do not call/i);
@@ -59,8 +59,6 @@ test('Bun package README documents handler and entrypoint semantics', () => {
   assert.match(bunReadme, /createFetch\(\)/);
   assert.match(bunReadme, /fetch\(request, server\)/);
   assert.doesNotMatch(bunReadme, /dispatchVerserBunRequest/);
-  assert.doesNotMatch(bunReadme, /\broutes\[/);
-  assert.doesNotMatch(bunReadme, /\broutes:/);
   assert.match(bunReadme, /Node compatibility/i);
   assert.match(bunReadme, /Streaming behavior/i);
   assert.match(bunReadme, /WebSocket/i);

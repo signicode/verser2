@@ -206,6 +206,84 @@ test(
         'POST /from-broker abc payload',
       );
 
+      const repeatedStatusFirst = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/status',
+          headers: { 'x-input': 'ignored' },
+        }),
+        'Bun runtime static route first hit',
+      );
+      assert.equal(repeatedStatusFirst.statusCode, 200);
+      assert.deepEqual(await readBody(repeatedStatusFirst.body), Buffer.from('ok'));
+
+      const repeatedStatusSecond = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/status',
+        }),
+        'Bun runtime static route second hit',
+      );
+      assert.equal(repeatedStatusSecond.statusCode, 200);
+      assert.deepEqual(await readBody(repeatedStatusSecond.body), Buffer.from('ok'));
+
+      const paramResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/users/abc-123',
+        }),
+        'Bun runtime param route',
+      );
+      assert.equal(paramResponse.statusCode, 200);
+      assert.deepEqual(await readBody(paramResponse.body), Buffer.from('user:abc-123'));
+
+      const wildcardResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/files/prefix/tree.txt',
+        }),
+        'Bun runtime wildcard route',
+      );
+      assert.equal(wildcardResponse.statusCode, 200);
+      assert.deepEqual(await readBody(wildcardResponse.body), Buffer.from('wildcard'));
+
+      const itemsGetResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/items',
+        }),
+        'Bun runtime method route GET',
+      );
+      assert.equal(itemsGetResponse.statusCode, 200);
+      assert.deepEqual(await readBody(itemsGetResponse.body), Buffer.from('read'));
+
+      const itemsPostResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'POST',
+          path: '/items',
+        }),
+        'Bun runtime method route POST',
+      );
+      assert.equal(itemsPostResponse.statusCode, 201);
+      assert.deepEqual(await readBody(itemsPostResponse.body), Buffer.from('create'));
+
+      const fallbackResponse = await withTimeout(
+        broker.request({
+          targetId: 'guest-bun-runtime',
+          method: 'GET',
+          path: '/fallback',
+        }),
+        'Bun runtime fetch fallback',
+      );
+      assert.equal(fallbackResponse.statusCode, 214);
+      assert.deepEqual(await readBody(fallbackResponse.body), Buffer.from('GET /fallback  '));
+
       const chunkedRequestResponse = await withTimeout(
         broker.request({
           targetId: 'guest-bun-runtime',

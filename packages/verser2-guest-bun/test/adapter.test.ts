@@ -38,3 +38,26 @@ describe('createVerserBunGuest API', () => {
     expect(events).toHaveLength(0);
   });
 });
+
+describe('createVerserBunGuest routes API', () => {
+  test('accepts routes and fetch handlers through public attach API', () => {
+    const guest = createVerserBunGuest({
+      hostUrl: 'https://localhost:1',
+      guestId: 'bun-route-api-test',
+    });
+
+    expect(
+      guest.attach({
+        routes: {
+          '/status': new Response('ok', { status: 200 }),
+          '/users/:id': (request) => new Response(request.params.id, { status: 200 }),
+          '/items': {
+            GET: new Response('read', { status: 200 }),
+            POST: () => new Response('create', { status: 201 }),
+          },
+        },
+        fetch: () => new Response('fallback', { status: 404 }),
+      }),
+    ).toBe(guest);
+  });
+});
