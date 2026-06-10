@@ -31,6 +31,11 @@ const sourcePackages = [
     stagedSafeName: 'signicode-verser2-guest-node',
   },
   {
+    name: '@signicode/verser2-guest-bun',
+    workspaceDirectory: path.join(rootDirectory, 'packages', 'verser2-guest-bun'),
+    stagedSafeName: 'signicode-verser2-guest-bun',
+  },
+  {
     name: '@signicode/verser2-guest-python',
     workspaceDirectory: path.join(rootDirectory, 'packages', 'verser2-guest-python'),
     stagedSafeName: 'signicode-verser2-guest-python',
