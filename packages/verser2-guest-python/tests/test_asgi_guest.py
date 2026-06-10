@@ -4,7 +4,7 @@ import struct
 import unittest
 
 from verser2_guest_python import create_verser_guest
-from verser2_guest_python.protocol import encode_envelope
+from verser2_guest_python.protocol import decode_envelope, encode_envelope, normalize_headers
 
 
 class AsgiDispatchTest(unittest.TestCase):
@@ -172,6 +172,40 @@ class AsgiDispatchTest(unittest.TestCase):
         self.assertEqual(response.headers, {"x-stream": "yes"})
         self.assertEqual(response.body, b"one-two")
 
+    def test_dispatch_routed_request_uses_latin1_response_header_decoding(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"x-binary", bytes([0xE9]))],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1",
+            guest_id="python-latin1-response",
+            app=app,
+        )
+
+        response = asyncio.run(
+            guest.dispatch_routed_request(
+                {
+                    "requestId": "req-python-latin1-response",
+                    "sourceId": "broker-unit",
+                    "targetId": "python-latin1-response",
+                    "method": "GET",
+                    "path": "/latin1-response",
+                    "headers": {},
+                },
+                b"",
+            )
+        )
+
+        self.assertEqual(response.headers, {"x-binary": "é"})
+
 
 class ProtocolEnvelopeTest(unittest.TestCase):
     def test_encode_response_envelope_matches_verser_prefix(self) -> None:
@@ -192,6 +226,45 @@ class ProtocolEnvelopeTest(unittest.TestCase):
         self.assertEqual(metadata["requestId"], "req-python-envelope")
         self.assertEqual(metadata["statusCode"], 204)
         self.assertEqual(metadata["headers"], {"x-python": "yes"})
+
+    def test_decode_envelope_preserves_body_remainder(self) -> None:
+        envelope = encode_envelope(
+            "request",
+            {
+                "requestId": "req-python-envelope-remainder",
+                "sourceId": "broker-unit",
+                "targetId": "python-envelope-guest",
+                "method": "POST",
+                "path": "/remainder",
+                "headers": {},
+            },
+        )
+
+        envelope_type, metadata, remainder = decode_envelope(envelope + b"first-body")
+
+        self.assertEqual(envelope_type, "request")
+        self.assertEqual(metadata["requestId"], "req-python-envelope-remainder")
+        self.assertEqual(remainder, b"first-body")
+
+    def test_normalize_headers_joins_lists_without_spaces_for_node_parity(self) -> None:
+        self.assertEqual(normalize_headers({"x-list": ["one", "two"]}), {"x-list": "one,two"})
+
+
+class LeaseTaskTest(unittest.TestCase):
+    def test_completed_lease_tasks_are_pruned(self) -> None:
+        async def run() -> int:
+            guest = create_verser_guest(host_url="https://127.0.0.1:1", guest_id="task-prune")
+
+            async def complete_lease() -> None:
+                return None
+
+            guest._open_lease_stream = complete_lease
+            guest._start_lease_task()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return len(guest._lease_tasks)
+
+        self.assertEqual(asyncio.run(run()), 0)
 
 
 if __name__ == "__main__":

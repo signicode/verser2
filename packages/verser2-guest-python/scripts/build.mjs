@@ -31,5 +31,4 @@ writeFileSync(
   'utf8',
 );
 
-copyFileSync(resolve(repositoryDirectory, 'LICENSE'), resolve(packageDirectory, 'LICENSE'));
 copyFileSync(resolve(repositoryDirectory, 'LICENSE'), resolve(distDirectory, 'LICENSE'));
