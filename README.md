@@ -463,7 +463,7 @@ process.on('SIGUSR1', () => {
   } catch (error) {
     console.error('Failed to reload Verser TLS certificate:', error);
   }
-}, 'bun-client-a.local.test');
+});
 ```
 
 Configure Guest and Broker trust with direct CA PEM values:

@@ -124,7 +124,8 @@ export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
           }
         },
         cancel(reason) {
-          body.destroy(reason as Error);
+          const destroyReason: unknown = reason instanceof Error ? reason : String(reason);
+          body.destroy(destroyReason as Error);
         },
       });
 
