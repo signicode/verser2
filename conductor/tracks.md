@@ -29,5 +29,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: Python Guest**
+- [x] **Track: Python Guest**
 *Link: [./tracks/python_guest_20260609/](./tracks/python_guest_20260609/)*

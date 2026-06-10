@@ -39,7 +39,7 @@ Delegate when the task is separable, read-only research can run in parallel, or 
 
 Recommended delegation patterns:
 
-- Use `explore` or `explorer` for fast read-only codebase searches, file discovery, dependency tracing, and locating existing behavior before implementation.
+- Use `explore` for larger read-only codebase searches, dependency tracing, or searches that need broader repository context; use `explorer` only for narrow file discovery or small pattern lookups where limited context is sufficient.
 - Use `fixer` for small, well-specified code changes after tests, scope, and expected behavior are clear.
 - Use `librarian` for external documentation, API behavior, and public examples.
 - Use `oracle` for architecture tradeoffs, complex debugging, code review, and risk analysis.
@@ -55,6 +55,8 @@ Delegation rules:
 4. Record meaningful delegated findings, validation results, and unresolved risks in the active track notes or phase validation summary.
 5. Do not let delegated agents commit changes unless the current phase checkpoint explicitly authorizes a commit.
 6. Do not use delegation to bypass TDD, coverage, deduplication, documentation, or Conductor checkpoint requirements.
+7. When delegating to `explore` or `oracle`, keep prompts specific and bounded: include exact goals, files or directories of interest, required output format, and whether edits are forbidden or allowed.
+8. Explicitly tell delegated agents not to subdelegate unless the task requires it and the delegation boundary is intentional; avoid delegation loops by default.
 
 ## Common Library Usage and Deduplication
 

@@ -12,6 +12,7 @@ const packageDirectories = [
   path.join(packagesRootDirectory, 'verser2-guest-js-common'),
   path.join(packagesRootDirectory, 'verser2-host'),
   path.join(packagesRootDirectory, 'verser2-guest-node'),
+  path.join(packagesRootDirectory, 'verser2-guest-python'),
 ];
 
 if (process.argv.includes('--help')) {
