@@ -30,4 +30,4 @@ This file tracks all major tracks for the project. Each track has its own detail
 ---
 
 - [x] **Track: bun guest**
-*Link: [./tracks/bun_guest_20260610/](./tracks/bun_guest_20260610/)*
+*Link: [./archive/bun_guest_20260610/](./archive/bun_guest_20260610/)*
