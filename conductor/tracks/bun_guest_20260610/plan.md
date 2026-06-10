@@ -227,6 +227,7 @@
 - Bun test TypeScript tooling was fixed with `@types/bun` and `packages/verser2-guest-bun/test/tsconfig.json`; the package build keeps tests out of production declarations through `tsconfig.build.json`.
 - Validation passed before moving to Phase 4b: `timeout 20s node node_modules/typescript/bin/tsc --project packages/verser2-guest-bun/test/tsconfig.json`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s node --test test/packages.test.js test/docs.test.js`; `timeout 20s npm run lint`.
 - Phase checkpoint commit: `b1005dd`.
+- Manual verification: confirmed by user after Phase 3c changes were pushed for review.
 
 ### Phase 3b Notes
 
@@ -307,6 +308,7 @@
 - Route handler behavior remains covered through the spawned Bun runtime for static, param, wildcard, per-method, and fallback paths.
 - Validation passed before final readiness work: `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s npm run lint`.
 - Phase checkpoint commits: `2f81923`, `443826a`.
+- Manual verification: confirmed by user after Bun-originated `broker.request()` and `createFetch()` coverage was pushed for review.
 
 ### Phase 4 Corrective Notes
 
