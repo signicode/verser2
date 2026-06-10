@@ -112,10 +112,10 @@
 - [x] Task: Perform Phase 3 deduplication and lifecycle review
     - [x] Confirm shared connection/lifecycle code was reused rather than duplicated.
     - [x] Move repeated JavaScript Guest helper code into `@signicode/verser2-guest-js-common` if reuse emerges.
-- [ ] Task: Push Phase 3 checkpoint for GitHub review
-    - [ ] Push the Phase 3 checkpoint commit to the track PR branch before manual verification.
-    - [ ] Confirm the PR contains the package scaffold, handler adapter, and outbound integration work for review.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Outbound Guest Integration' (Protocol in workflow.md)
+- [x] Task: Push Phase 3 checkpoint for GitHub review
+    - [x] Push the Phase 3 checkpoint commit to the track PR branch before manual verification.
+    - [x] Confirm the PR contains the package scaffold, handler adapter, and outbound integration work for review.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Outbound Guest Integration' (Protocol in workflow.md)
 
 ### Phase 3 Notes
 
@@ -127,6 +127,7 @@
 - Validation recovery: a package smoke test initially called real `guest.connect()` after `createVerserBunGuest` became a real transport wrapper, causing a self-signed certificate failure and timeout. This session-introduced in-scope test issue was fixed by keeping `test/packages.test.js` as an export/attach smoke test and leaving real transport verification to `test/bun-guest-integration.test.js`.
 - Deduplication result: connection/lifecycle/lease code is reused from `@signicode/verser2-guest-node`; no duplicate HTTP/2 transport implementation was introduced. The Bun adapter remains package-local because it maps Bun/Web handler shapes to the existing JavaScript transport path.
 - Phase checkpoint commit: `a549ddf`.
+- Manual verification: confirmed by user after Phase 3 changes were pushed for review.
 
 ## Phase 4: Streaming, Node Compatibility, and Unsupported WebSocket Boundary
 
