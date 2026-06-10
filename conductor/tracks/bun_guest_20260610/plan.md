@@ -131,6 +131,7 @@
 - Bun package tests now exercise the public `createVerserBunGuest()` surface instead of importing private helpers.
 - Spawned Bun runtime validation mirrors the Python pattern: `test/bun-guest-integration.test.js` starts Node Host/Broker, spawns `bun packages/verser2-guest-bun/examples/runtime_guest.ts`, waits for `bun guest ready`, then sends routed Broker requests to the Bun process.
 - Validation passed: `timeout 20s npm run test --workspace=@signicode/verser2-guest-bun`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s node --test test/packages.test.js`; `timeout 20s npm run lint`.
+- Phase checkpoint commit: `27aaeb2`.
 
 ## Phase 3: Outbound Guest Integration
 
@@ -208,6 +209,7 @@
 - Public Bun `routes` support was removed from source, docs, examples, tests, and generated declarations for this track.
 - Package consumer probes now require Bun parity exports and forbid internal dispatch/test-hook exports across source, staged, tarball, and authenticated GitHub modes.
 - Validation passed: `timeout 20s node --test test/package-consumer-imports.test.js`; `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s node --test test/packages.test.js test/docs.test.js test/package-consumer-imports.test.js`; `timeout 20s npm run stage:packages`; `timeout 20s npm run lint`.
+- Phase checkpoint commit: `27aaeb2`.
 
 ## Phase 4: Streaming, Node Compatibility, and Unsupported WebSocket Boundary
 
@@ -255,6 +257,7 @@
 - WebSocket boundary coverage now uses the public Host/Broker/Guest route path. The Bun handler calls `server.upgrade(request)` and the routed response proves it returns `false`.
 - No WebSocket forwarding, CONNECT handling, HTTP/3, authentication, authorization, public gateway behavior, or unrelated runtime guest behavior was introduced.
 - Validation passed: `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 20s npm run lint`.
+- Phase checkpoint commit: `27aaeb2`.
 
 ### Phase 4 Notes
 
