@@ -299,6 +299,7 @@
 - Runtime response coverage now includes `Response.json()`, async iterable response bodies, Node.js `Readable` response bodies, streamed Web `ReadableStream` response bodies, and binary preservation.
 - Route handler behavior remains covered through the spawned Bun runtime for static, param, wildcard, per-method, and fallback paths.
 - Validation passed before final readiness work: `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s npm run lint`.
+- Phase checkpoint commit: `2f81923`.
 
 ### Phase 4 Corrective Notes
 
