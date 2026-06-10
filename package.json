@@ -6,7 +6,7 @@
   "license": "MIT",
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-guest-js-common && npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run build --workspace=@signicode/verser2-guest-bun && npm run build --workspace=@signicode/verser2-guest-python",
     "stage:packages": "node ./scripts/stage-packages.js",
     "package:version-policy": "node ./scripts/package-version-policy.js",
     "test:package-consumers": "node ./scripts/test-package-consumers.js",
@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@types/bun": "^1.3.14",
     "@types/node": "^20.14.0",
     "dts-bundle-generator": "^9.5.1",
     "tsup": "^8.5.0",
