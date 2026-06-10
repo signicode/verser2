@@ -242,9 +242,11 @@ test('@signicode/verser2-guest-bun package exposes Bun Guest scaffold API', () =
   assert.deepEqual(Object.keys(guestPackage).sort(), [
     'VERSER2_GUEST_BUN_PACKAGE_NAME',
     'createVerserBunGuest',
+    'dispatchVerserBunRequest',
   ]);
   assert.equal(guestPackage.VERSER2_GUEST_BUN_PACKAGE_NAME, '@signicode/verser2-guest-bun');
   assert.equal(typeof guestPackage.createVerserBunGuest, 'function');
+  assert.equal(typeof guestPackage.dispatchVerserBunRequest, 'function');
   const guest = guestPackage.createVerserBunGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'bun-package-test',

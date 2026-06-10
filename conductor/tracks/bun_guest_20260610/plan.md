@@ -59,28 +59,38 @@
 
 ## Phase 2: Bun Handler Adapter API
 
-- [ ] Task: Write failing unit tests for Bun handler adaptation
-    - [ ] Test `fetch(req)` handler invocation with method, URL/path/query, headers, and body.
-    - [ ] Test async handler response handling.
-    - [ ] Test status, response headers, and response body serialization.
-    - [ ] Test clear failure behavior for unsupported or invalid handler results.
-- [ ] Task: Write failing tests for Bun route/method handlers
-    - [ ] Test dispatch to route/method handlers for ordinary HTTP methods.
-    - [ ] Test not-found or unsupported-method behavior.
-    - [ ] Test route handler body/header propagation.
-- [ ] Task: Implement the Bun handler adapter
-    - [ ] Define minimal public types for Bun fetch handlers and route handlers.
-    - [ ] Convert routed Verser2 requests into Web-standard `Request` objects.
-    - [ ] Invoke fetch and route handlers without starting a Bun listening server.
-    - [ ] Convert Web-standard `Response` objects into Verser2-compatible response data.
-    - [ ] Keep Bun-specific behavior in the Bun package and reuse common helpers where available.
-- [ ] Task: Validate adapter behavior narrowly
-    - [ ] Run Bun-specific unit tests with `bun test`.
-    - [ ] Run npm build or type-check validation needed for TypeScript package correctness.
-    - [ ] Record any Bun runtime limitations discovered during adapter work.
-- [ ] Task: Perform Phase 2 deduplication and documentation check
-    - [ ] Review whether request/response conversion helpers belong in common JavaScript foundations.
-    - [ ] Update docs or notes for any intentionally package-local Bun behavior.
+- [x] Task: Write failing unit tests for Bun handler adaptation
+    - [x] Test `fetch(req)` handler invocation with method, URL/path/query, headers, and body.
+    - [x] Test async handler response handling.
+    - [x] Test status, response headers, and response body serialization.
+    - [x] Test clear failure behavior for unsupported or invalid handler results.
+- [x] Task: Write failing tests for Bun route/method handlers
+    - [x] Test dispatch to route/method handlers for ordinary HTTP methods.
+    - [x] Test not-found or unsupported-method behavior.
+    - [x] Test route handler body/header propagation.
+- [x] Task: Implement the Bun handler adapter
+    - [x] Define minimal public types for Bun fetch handlers and route handlers.
+    - [x] Convert routed Verser2 requests into Web-standard `Request` objects.
+    - [x] Invoke fetch and route handlers without starting a Bun listening server.
+    - [x] Convert Web-standard `Response` objects into Verser2-compatible response data.
+    - [x] Keep Bun-specific behavior in the Bun package and reuse common helpers where available.
+- [x] Task: Validate adapter behavior narrowly
+    - [x] Run Bun-specific unit tests with `bun test`.
+    - [x] Run npm build or type-check validation needed for TypeScript package correctness.
+    - [x] Record any Bun runtime limitations discovered during adapter work.
+- [x] Task: Perform Phase 2 deduplication and documentation check
+    - [x] Review whether request/response conversion helpers belong in common JavaScript foundations.
+    - [x] Update docs or notes for any intentionally package-local Bun behavior.
+
+### Phase 2 Notes
+
+- Bun documentation scan: `Bun.serve` supports `fetch(req)` and `fetch(req, server)` handler forms; `routes` supports exact/static paths, dynamic/wildcard forms, and per-method handlers in Bun 1.2.3+. Phase 2 implements exact path route dispatch only and leaves dynamic/wildcard routing for later if needed.
+- Failing test confirmation: `bun test packages/verser2-guest-bun/test/adapter.test.ts` failed before implementation because `dispatchVerserBunRequest` was not exported.
+- Adapter implementation added `dispatchVerserBunRequest`, Web `Request` construction, `Response` serialization, fetch handler dispatch, `fetch(req, server)` compatibility with `server.upgrade()` returning `false`, exact route dispatch, 404 missing-route responses, 405 unsupported-method responses with `Allow`, and clear non-`Response` errors.
+- Runtime limitation: Phase 2 does not start a Bun server, does not call `listen()`, and does not support WebSocket upgrades; upgrade-oriented handlers receive a minimal server object whose `upgrade()` returns `false`.
+- Validation passed: `npm run test --workspace=@signicode/verser2-guest-bun`; `npm run build`; `npm run stage:packages`; `node --test test/packages.test.js`; `npm run lint`; `bun test --coverage packages/verser2-guest-bun/test/adapter.test.ts`.
+- Coverage: Bun coverage reported 100% function coverage and 99.21% line coverage across the Bun package files included by the Phase 2 test.
+- Deduplication result: request/response conversion and exact Bun route dispatch remain package-local because they are runtime-adapter behavior and are not yet repeated across JavaScript guest runtimes. No common library changes were needed.
 
 ## Phase 3: Outbound Guest Integration
 
