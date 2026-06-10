@@ -44,7 +44,7 @@ def normalize_headers(headers: dict[str, Any] | None) -> dict[str, str]:
         if value is None:
             continue
         if isinstance(value, list):
-            normalized[str(name).lower()] = ", ".join(str(item) for item in value)
+            normalized[str(name).lower()] = ",".join(str(item) for item in value)
             continue
         normalized[str(name).lower()] = str(value)
     return normalized

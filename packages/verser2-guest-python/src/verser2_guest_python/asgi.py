@@ -77,7 +77,7 @@ async def dispatch_asgi_request(
             started = True
             status_code = int(event.get("status") or 200)
             response_headers = {
-                name.decode("ascii", "ignore").lower(): value.decode("utf-8")
+                name.decode("ascii", "ignore").lower(): value.decode("latin-1")
                 for name, value in event.get("headers", [])
             }
             return

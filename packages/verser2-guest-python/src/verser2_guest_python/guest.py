@@ -14,7 +14,7 @@ import h2.config
 import h2.events
 
 from .asgi import ASGIApp, DispatchResponse, build_http_scope, dispatch_asgi_request
-from .protocol import VERSER_ENVELOPE_PREFIX_BYTES, decode_envelope, encode_envelope, normalize_headers
+from .protocol import VERSER_ENVELOPE_PREFIX_BYTES, decode_envelope, encode_envelope
 
 
 class VerserGuest:
@@ -91,7 +91,7 @@ class VerserGuest:
         await self._register()
         await self._open_control_stream()
         for _ in range(self.min_waiting_streams):
-            self._lease_tasks.append(asyncio.create_task(self._open_lease_stream()))
+            self._start_lease_task()
 
     async def close(self, reason: str = "guest-close") -> None:
         del reason
@@ -120,8 +120,11 @@ class VerserGuest:
             ],
             end_stream=False,
         )
-        await self._send_data(stream_id, body, end_stream=True)
-        response_body = await self._collect_response_body(stream_id)
+        try:
+            await self._send_data(stream_id, body, end_stream=True)
+            response_body = await self._collect_response_body(stream_id)
+        finally:
+            self._events.pop(stream_id, None)
         response = json.loads(response_body.decode("utf-8"))
         if response.get("status") != "registered":
             raise RuntimeError("Host did not register Python Guest")
@@ -136,7 +139,20 @@ class VerserGuest:
                 ("x-verser-peer-id", self.guest_id),
             ],
             end_stream=False,
+            create_queue=False,
         )
+
+    def _start_lease_task(self) -> None:
+        task = asyncio.create_task(self._open_lease_stream())
+        self._lease_tasks.append(task)
+
+        def prune(completed_task: asyncio.Task[None]) -> None:
+            try:
+                self._lease_tasks.remove(completed_task)
+            except ValueError:
+                pass
+
+        task.add_done_callback(prune)
 
     async def _open_lease_stream(self) -> None:
         self._lease_counter += 1
@@ -152,12 +168,15 @@ class VerserGuest:
             ],
             end_stream=False,
         )
-        await self._wait_for_success_response(stream_id)
-        while not self._closed:
-            await self._dispatch_leased_request_stream(stream_id)
-            if not self._closed:
-                self._lease_tasks.append(asyncio.create_task(self._open_lease_stream()))
-            return
+        try:
+            await self._wait_for_success_response(stream_id)
+            while not self._closed:
+                await self._dispatch_leased_request_stream(stream_id)
+                if not self._closed:
+                    self._start_lease_task()
+                return
+        finally:
+            self._events.pop(stream_id, None)
 
     async def _dispatch_leased_request_stream(self, stream_id: int) -> None:
         if self.app is None:
@@ -199,7 +218,7 @@ class VerserGuest:
                             "requestId": str((metadata or {}).get("requestId") or ""),
                             "statusCode": int(event.get("status") or 200),
                             "headers": {
-                                name.decode("ascii", "ignore").lower(): value.decode("utf-8")
+                                name.decode("ascii", "ignore").lower(): value.decode("latin-1")
                                 for name, value in event.get("headers", [])
                             },
                         },
@@ -255,7 +274,7 @@ class VerserGuest:
             envelope_end = VERSER_ENVELOPE_PREFIX_BYTES + metadata_length
             if len(buffer) < envelope_end:
                 return
-            envelope_type, parsed_metadata, remainder = decode_envelope(buffer[:envelope_end])
+            envelope_type, parsed_metadata, remainder = decode_envelope(buffer)
             if envelope_type != "request":
                 raise RuntimeError("Lease stream received a non-request envelope")
             metadata = parsed_metadata
@@ -285,11 +304,14 @@ class VerserGuest:
             raise RuntimeError("Lease stream ended before request metadata arrived")
         await app_task
 
-    async def _send_headers(self, headers: list[tuple[str, str]], end_stream: bool) -> int:
+    async def _send_headers(
+        self, headers: list[tuple[str, str]], end_stream: bool, create_queue: bool = True
+    ) -> int:
         conn = self._require_conn()
         async with self._io_lock:
             stream_id = conn.get_next_available_stream_id()
-            self._events[stream_id] = asyncio.Queue()
+            if create_queue:
+                self._events[stream_id] = asyncio.Queue()
             conn.send_headers(stream_id, headers, end_stream=end_stream)
             await self._flush_unlocked()
             return stream_id
