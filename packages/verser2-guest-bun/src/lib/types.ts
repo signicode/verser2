@@ -69,7 +69,7 @@ export interface VerserBunDispatchResponse {
   readonly status: number;
   readonly statusText: string;
   readonly headers: Record<string, string>;
-  readonly body: string;
+  readonly body: string | Buffer;
   readonly text: () => Promise<string>;
   readonly json: () => Promise<unknown>;
 }
