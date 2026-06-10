@@ -306,7 +306,7 @@
 - Spawned Bun runtime now also performs Bun-originating self-checks from inside the spawned process using Bun package `createVerserBroker`: both a direct `broker.request()` and a `createFetch()` assertion are executed before emitting `bun broker self-check ready`.
 - Route handler behavior remains covered through the spawned Bun runtime for static, param, wildcard, per-method, and fallback paths.
 - Validation passed before final readiness work: `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s npm run lint`.
-- Phase checkpoint commit: `2f81923`.
+- Phase checkpoint commits: `2f81923`, `443826a`.
 
 ### Phase 4 Corrective Notes
 
