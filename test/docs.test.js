@@ -28,10 +28,18 @@ test('root README documents Bun Guest usage and non-listen behavior', () => {
 
   assert.match(readme, /## Bun Guest usage/);
   assert.match(readme, /createVerserBunGuest/);
+  assert.match(readme, /createVerserBroker/);
+  assert.match(readme, /broker.createAgent/);
+  assert.match(readme, /broker\.createDispatcher/);
+  assert.match(readme, /broker\.createFetch/);
+  assert.match(readme, /route-advertis|route advertisement/);
   assert.match(readme, /fetch\(request, server\)/);
-  assert.match(readme, /routes:/);
+  assert.match(readme, /route-advert|route advert/);
   assert.match(readme, /Request bodies can be routed/i);
+  assert.doesNotMatch(readme, /dispatchVerserBunRequest/);
+  assert.doesNotMatch(readme, /\broutes:/);
   assert.match(readme, /WebSocket upgrades are intentionally not forwarded/i);
+  assert.match(readme, /server\.upgrade\(\)[\s\S]*`false`/i);
   assert.match(readme, /Bun Guests do not call/i);
   assert.match(readme, /listen\(\)/);
 });
@@ -43,14 +51,24 @@ test('Bun package README documents handler and entrypoint semantics', () => {
   );
 
   assert.match(bunReadme, /## Bun Guest usage/);
+  assert.match(bunReadme, /VERSER2_GUEST_BUN_PACKAGE_NAME/);
   assert.match(bunReadme, /createVerserBunGuest/);
-  assert.match(bunReadme, /dispatchVerserBunRequest/);
+  assert.match(bunReadme, /createVerserBroker/);
+  assert.match(bunReadme, /createAgent\(\)/);
+  assert.match(bunReadme, /createDispatcher\(\)/);
+  assert.match(bunReadme, /createFetch\(\)/);
   assert.match(bunReadme, /fetch\(request, server\)/);
-  assert.match(bunReadme, /routes\[path\]/);
+  assert.doesNotMatch(bunReadme, /dispatchVerserBunRequest/);
+  assert.doesNotMatch(bunReadme, /\broutes\[/);
+  assert.doesNotMatch(bunReadme, /\broutes:/);
   assert.match(bunReadme, /Node compatibility/i);
   assert.match(bunReadme, /Streaming behavior/i);
   assert.match(bunReadme, /WebSocket/i);
   assert.match(bunReadme, /does \*\*not\*\* call/i);
   assert.match(bunReadme, /`Bun\.serve\(\)`/);
   assert.match(bunReadme, /`listen\(\)`/);
+  assert.match(
+    bunReadme,
+    /upgrade forwarding is not implemented|server\.upgrade\(request\) returns `false`/i,
+  );
 });

@@ -95,30 +95,42 @@
 
 ## Phase 2b: Public API Surface and Bun Runtime Test Migration
 
-- [ ] Task: Write failing public-surface tests for Bun API exposure
-    - [ ] Assert `dispatchVerserBunRequest` is not exported as a public API.
-    - [ ] Assert no `__internal` testing hook or internal adapter helper is exported.
-    - [ ] Assert handler conversion behavior is reachable only through supported public surfaces such as Guest attach and Broker request/fetch/dispatcher paths.
-- [ ] Task: Move Bun adapter validation onto Bun public-runtime execution
-    - [ ] Replace Node-only adapter validation with `bun test` coverage that exercises public Bun package APIs.
-    - [ ] Ensure tests do not import private helpers, generated internals, or Node-only test hooks.
-    - [ ] Keep bounded timeouts so hangs indicate implementation problems quickly.
-- [ ] Task: Implement public/internal boundary cleanup
-    - [ ] Remove `dispatchVerserBunRequest` from `packages/verser2-guest-bun/src/index.ts` public exports.
-    - [ ] Remove `__internal` from public exports and generated declarations.
-    - [ ] Move adapter request/response conversion into package-local internal modules used by Guest/Broker parity implementations.
-- [ ] Task: Validate Phase 2b behavior narrowly
-    - [ ] Run focused `bun test` public-surface tests.
-    - [ ] Run package export smoke tests and declaration checks proving internal helpers are not public.
-    - [ ] Run `npm run lint` and Bun package build validation.
-- [ ] Task: Perform Phase 2b review
-    - [ ] Confirm public API no longer exposes internal dispatch/test hooks.
-    - [ ] Confirm Bun tests use public APIs rather than implementation internals.
-    - [ ] Record validation and any intentionally private adapter helper locations.
+- [x] Task: Write failing public-surface tests for Bun API exposure
+    - [x] Assert `dispatchVerserBunRequest` is not exported as a public API.
+    - [x] Assert no `__internal` testing hook or internal adapter helper is exported.
+    - [x] Assert handler conversion behavior is reachable only through supported public surfaces such as Guest attach and Broker request/fetch/dispatcher paths.
+- [x] Task: Move Bun adapter validation onto Bun public-runtime execution
+    - [x] Replace Node-only adapter validation with a Bun-process runtime harness that mirrors the Python pattern:
+        - Start Host/Broker in Node test code.
+        - Spawn `bun runtime_guest.ts` as a separate process.
+        - Wait for a readiness message from the child process before proceeding.
+        - Assert routed requests pass through Host/Broker to that spawned runtime.
+    - [x] Ensure tests do not import private helpers, generated internals, or Node-only test hooks.
+    - [x] Keep bounded timeouts so hangs indicate implementation problems quickly.
+- [x] Task: Implement public/internal boundary cleanup
+    - [x] Remove `dispatchVerserBunRequest` from `packages/verser2-guest-bun/src/index.ts` public exports.
+    - [x] Remove `__internal` from public exports and generated declarations.
+    - [x] Move adapter request/response conversion into package-local internal modules used by Guest/Broker parity implementations.
+- [x] Task: Validate Phase 2b behavior narrowly
+    - [x] Run focused `bun test` public-surface tests.
+    - [x] Run package export smoke tests and declaration checks proving internal helpers are not public.
+    - [x] Run `npm run lint` and Bun package build validation.
+- [x] Task: Perform Phase 2b review
+    - [x] Confirm public API no longer exposes internal dispatch/test hooks.
+    - [x] Confirm Bun tests use public APIs rather than implementation internals.
+    - [x] Record validation and any intentionally private adapter helper locations.
 - [ ] Task: Push Phase 2b checkpoint for GitHub review
     - [ ] Push the Phase 2b checkpoint commit to the track PR branch before manual verification.
     - [ ] Confirm the PR reflects the public/internal boundary cleanup and Bun public-runtime validation work.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2b: Public API Surface and Bun Runtime Test Migration' (Protocol in workflow.md)
+
+### Phase 2b Notes
+
+- Public surface cleanup removed `dispatchVerserBunRequest`, `__internal`, ignored handler `origin`, route-table types, and dispatch-named public server types from the Bun package entrypoint/declarations.
+- Adapter conversion code now lives in `packages/verser2-guest-bun/src/lib/adapter.ts` as package-local implementation detail used by `createVerserBunGuest().attach()`.
+- Bun package tests now exercise the public `createVerserBunGuest()` surface instead of importing private helpers.
+- Spawned Bun runtime validation mirrors the Python pattern: `test/bun-guest-integration.test.js` starts Node Host/Broker, spawns `bun packages/verser2-guest-bun/examples/runtime_guest.ts`, waits for `bun guest ready`, then sends routed Broker requests to the Bun process.
+- Validation passed: `timeout 20s npm run test --workspace=@signicode/verser2-guest-bun`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s node --test test/packages.test.js`; `timeout 20s npm run lint`.
 
 ## Phase 3: Outbound Guest Integration
 
@@ -158,33 +170,44 @@
 
 ## Phase 3b: Public API Parity, Broker Surface, and Host-Owned Routing
 
-- [ ] Task: Write failing public API parity tests
-    - [ ] Assert `@signicode/verser2-guest-bun` exports Bun equivalents for the Node package public surface: `createVerserBunGuest`, `createVerserBroker`, package constants, and public Broker/Guest option and result types.
-    - [ ] Assert Bun Broker exposes `connect`, `close`, `request`, `getRoutes`, `waitForRoute`, `createAgent`, `createDispatcher`, and `createFetch` behavior compatible with the Node Broker surface.
-    - [ ] Assert Bun package consumer import checks can import the parity exports from source, staged packages, and tarballs.
-- [ ] Task: Implement Bun public API parity over the existing transport
-    - [ ] Reuse the existing Node Guest/Broker HTTP/2 transport internally as the compatibility substrate for Host connection, registration, session, lease stream pool, Agent, Dispatcher, and wrapped fetch behavior.
-    - [ ] Export `createVerserBroker` from the Bun package and delegate to the existing Broker implementation without exposing Node-only internals.
-    - [ ] Export or alias Bun-appropriate Broker/Guest types so Bun users can consume the package without importing `@signicode/verser2-guest-node` directly.
-    - [ ] Keep the Node transport reuse an implementation detail; public docs and tests should treat Bun as a first-class package surface, not a second-grade wrapper.
-- [ ] Task: Strictly remove local route table ownership from Verser routing semantics
-    - [ ] Ensure Host/Broker route resolution remains based on Host-advertised Guest domains and Broker route state.
-    - [ ] Remove public Bun `routes` support from `@signicode/verser2-guest-bun` for this track; do not preserve it as a documented local-dispatch feature.
-    - [ ] Remove docs and examples that present developer-controlled Bun `routes` as a supported package API.
-    - [ ] Add tests proving Bun `routes` are not part of the public package API and cannot influence Host/Broker route state.
-    - [ ] Add tests proving Broker `getRoutes()` and `waitForRoute()` use Host route advertisements only.
-- [ ] Task: Validate Phase 3b parity and route ownership narrowly
-    - [ ] Run bounded Bun runtime tests for Guest/Broker route behavior.
-    - [ ] Run bounded package consumer tests for Bun parity exports.
-    - [ ] Run focused package build, staging, and lint checks.
-- [ ] Task: Perform Phase 3b deduplication and transport review
-    - [ ] Confirm no HTTP/2 session, control stream, or lease stream pool implementation was duplicated in the Bun package.
-    - [ ] Record that Bun uses the existing Node transport internally for compatibility while exposing a Bun-first public package surface.
-    - [ ] Confirm no HTTP/3, authentication, authorization, public gateway, or unrelated runtime guest behavior was introduced.
+- [x] Task: Write failing public API parity tests
+    - [x] Assert `@signicode/verser2-guest-bun` exports Bun equivalents for the Node package public surface: `createVerserBunGuest`, `createVerserBroker`, package constants, and public Broker/Guest option and result types.
+    - [x] Assert Bun Broker exposes `connect`, `close`, `request`, `getRoutes`, `waitForRoute`, `createAgent`, `createDispatcher`, and `createFetch` behavior compatible with the Node Broker surface.
+    - [x] Assert Bun package consumer import checks can import the parity exports from source, staged packages, and tarballs.
+- [x] Task: Implement Bun public API parity over the existing transport
+    - [x] Reuse the existing Node Guest/Broker HTTP/2 transport internally as the compatibility substrate for Host connection, registration, session, lease stream pool, Agent, Dispatcher, and wrapped fetch behavior.
+    - [x] Export `createVerserBroker` from the Bun package and delegate to the existing Broker implementation without exposing Node-only internals.
+    - [x] Export or alias Bun-appropriate Broker/Guest types so Bun users can consume the package without importing `@signicode/verser2-guest-node` directly.
+    - [x] Keep the Node transport reuse an implementation detail; public docs and tests should treat Bun as a first-class package surface, not a second-grade wrapper.
+- [x] Task: Strictly remove local route table ownership from Verser routing semantics
+    - [x] Ensure Host/Broker route resolution remains based on Host-advertised Guest domains and Broker route state.
+    - [x] Remove public Bun `routes` support from `@signicode/verser2-guest-bun` for this track; do not preserve it as a documented local-dispatch feature.
+    - [x] Remove docs and examples that present developer-controlled Bun `routes` as a supported package API.
+    - [x] Add tests proving Bun `routes` are not part of the public package API and cannot influence Host/Broker route state.
+    - [x] Add tests proving Broker `getRoutes()` and `waitForRoute()` use Host route advertisements only.
+- [x] Task: Add process-hosted runtime regression test coverage for parity checks
+    - [x] Add/confirm a Bun runtime integration test that validates `bun runtime_guest.ts` + Host/Broker flow used with spawned process.
+    - [x] Keep the process test bounded and fail-fast, including startup timeout and `waitForRoute` synchronization.
+- [x] Task: Validate Phase 3b parity and route ownership narrowly
+    - [x] Run bounded Bun runtime tests for Guest/Broker route behavior.
+    - [x] Run bounded package consumer tests for Bun parity exports.
+    - [x] Run focused package build, staging, and lint checks.
+- [x] Task: Perform Phase 3b deduplication and transport review
+    - [x] Confirm no HTTP/2 session, control stream, or lease stream pool implementation was duplicated in the Bun package.
+    - [x] Record that Bun uses the existing Node transport internally for compatibility while exposing a Bun-first public package surface.
+    - [x] Confirm no HTTP/3, authentication, authorization, public gateway, or unrelated runtime guest behavior was introduced.
 - [ ] Task: Push Phase 3b checkpoint for GitHub review
     - [ ] Push the Phase 3b checkpoint commit to the track PR branch before manual verification.
     - [ ] Confirm the PR reflects public API parity, strict route removal, Host-owned routing, and transport reuse.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3b: Public API Parity, Broker Surface, and Host-Owned Routing' (Protocol in workflow.md)
+
+### Phase 3b Notes
+
+- Bun package public API now includes `createVerserBroker`, Bun Guest/Broker option/result types, and the Bun package constant while preserving Node transport reuse as an implementation detail.
+- Host-owned route semantics are covered by docs and tests: examples pass an explicit advertised domain to `attach(..., domain)`, and Broker `getRoutes()`/`waitForRoute()` assertions use Host-advertised domains rather than local Bun route tables.
+- Public Bun `routes` support was removed from source, docs, examples, tests, and generated declarations for this track.
+- Package consumer probes now require Bun parity exports and forbid internal dispatch/test-hook exports across source, staged, tarball, and authenticated GitHub modes.
+- Validation passed: `timeout 20s node --test test/package-consumer-imports.test.js`; `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s node --test test/packages.test.js test/docs.test.js test/package-consumer-imports.test.js`; `timeout 20s npm run stage:packages`; `timeout 20s npm run lint`.
 
 ## Phase 4: Streaming, Node Compatibility, and Unsupported WebSocket Boundary
 
@@ -211,20 +234,27 @@
 - [x] Task: Perform Phase 4 deduplication and protocol compatibility check
     - [x] Confirm method, path, headers, body, status, and response semantics remain compatible.
     - [x] Centralize repeated stream/header/body helpers if reuse emerges.
-- [ ] Task: Replace adapter aggregation with end-to-end streaming behavior
-    - [ ] Write failing tests proving Host-routed request bodies reach Bun `Request.body` as a stream instead of being pre-buffered.
-    - [ ] Write failing tests proving Bun `Response.body` streams back through Broker/Agent/Dispatcher/fetch paths without pre-aggregating in the Bun adapter.
-    - [ ] Preserve binary chunks without UTF-8 coercion across the Bun Guest bridge.
-    - [ ] Allow helper methods such as `text()` or `json()` to aggregate only when explicitly called by consumers.
-    - [ ] Validate streaming behavior with bounded Bun runtime integration tests, not internal helper tests.
-- [ ] Task: Re-test WebSocket boundary through public surfaces only
-    - [ ] Remove internal-hook WebSocket tests and cover unsupported upgrade behavior through public Guest/Broker request paths.
-    - [ ] Keep `server.upgrade()` behavior explicit and false unless a future track implements WebSocket forwarding.
-    - [ ] Confirm no WebSocket forwarding, CONNECT, HTTP/3, or unrelated upgrade behavior is introduced.
+- [x] Task: Replace adapter aggregation with end-to-end streaming behavior
+    - [x] Write failing tests proving Host-routed request bodies reach Bun `Request.body` as a stream instead of being pre-buffered.
+    - [x] Write failing tests proving Bun `Response.body` streams back through Broker/Agent/Dispatcher/fetch paths without pre-aggregating in the Bun adapter.
+    - [x] Preserve binary chunks without UTF-8 coercion across the Bun Guest bridge.
+    - [x] Allow helper methods such as `text()` or `json()` to aggregate only when explicitly called by consumers.
+    - [x] Validate streaming behavior with bounded Bun runtime integration tests, not internal helper tests.
+- [x] Task: Re-test WebSocket boundary through public surfaces only
+    - [x] Remove internal-hook WebSocket tests and cover unsupported upgrade behavior through public Guest/Broker request paths.
+    - [x] Keep `server.upgrade()` behavior explicit and false unless a future track implements WebSocket forwarding.
+    - [x] Confirm no WebSocket forwarding, CONNECT, HTTP/3, or unrelated upgrade behavior is introduced.
 - [ ] Task: Push Phase 4 corrective checkpoint for GitHub review
     - [ ] Push the Phase 4 streaming parity and public-surface WebSocket boundary checkpoint to the track PR branch before manual verification.
     - [ ] Confirm the PR reflects true streaming behavior, binary preservation, public-surface tests, and no adapter pre-aggregation.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4 Corrective: Streaming Parity and Public WebSocket Boundary' (Protocol in workflow.md)
+
+### Phase 4 Corrective Notes
+
+- Streaming and binary behavior are now covered through the public, spawned Bun runtime path instead of private adapter hooks. Routed requests reach Bun `Request.body`; Bun `Response.body` streams back through the Broker response path; binary bytes are asserted without UTF-8 coercion.
+- WebSocket boundary coverage now uses the public Host/Broker/Guest route path. The Bun handler calls `server.upgrade(request)` and the routed response proves it returns `false`.
+- No WebSocket forwarding, CONNECT handling, HTTP/3, authentication, authorization, public gateway behavior, or unrelated runtime guest behavior was introduced.
+- Validation passed: `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 20s npm run lint`.
 
 ### Phase 4 Notes
 
@@ -257,39 +287,39 @@
     - [x] Add tests requiring Bun Guest README examples and package entrypoint documentation.
     - [x] Add or update package consumer validation for `@signicode/verser2-guest-bun` imports.
     - [x] Add tests that docs state Bun apps do not call `listen()` for guest exposure.
-- [ ] Task: Write failing final parity documentation tests
-    - [ ] Require docs to show Bun package `createVerserBroker`, `createAgent`, `createDispatcher`, and `createFetch` usage.
-    - [ ] Require docs to state Host/Broker route advertisements own Verser route resolution.
-    - [ ] Require docs to avoid presenting local Bun `routes` as Host-controlled Verser routing.
-    - [ ] Require docs to describe streaming as implemented behavior, not as a limitation or body aggregation caveat.
+- [x] Task: Write failing final parity documentation tests
+    - [x] Require docs to show Bun package `createVerserBroker`, `createAgent`, `createDispatcher`, and `createFetch` usage.
+    - [x] Require docs to state Host/Broker route advertisements own Verser route resolution.
+    - [x] Require docs to avoid presenting local Bun `routes` as Host-controlled Verser routing.
+    - [x] Require docs to describe streaming as implemented behavior, not as a limitation or body aggregation caveat.
 - [x] Task: Complete Bun Guest documentation
     - [x] Add a tutorial-style Bun Guest example using a `Bun.serve`-style handler without opening a listening port.
     - [x] Document fetch handler, route handler, Node compatibility, streaming, and WebSocket limitations.
     - [x] Update root README and package lists for the initial Bun Guest documentation slice.
-- [ ] Task: Revise documentation for first-class Bun parity
-    - [ ] Document Bun Guest and Bun Broker APIs as first-class package exports while noting the Node transport reuse is internal compatibility infrastructure.
-    - [ ] Document `createFetch()` and Dispatcher usage from the Bun package.
-    - [ ] Document local Bun handler dispatch separately from Host/Broker route advertisement.
-    - [ ] Remove or correct any docs that describe body buffering as a permanent limitation after streaming parity is implemented.
+- [x] Task: Revise documentation for first-class Bun parity
+    - [x] Document Bun Guest and Bun Broker APIs as first-class package exports while noting the Node transport reuse is internal compatibility infrastructure.
+    - [x] Document `createFetch()` and Dispatcher usage from the Bun package.
+    - [x] Document local Bun handler dispatch separately from Host/Broker route advertisement.
+    - [x] Remove or correct any docs that describe body buffering as a permanent limitation after streaming parity is implemented.
 - [x] Task: Validate package readiness
     - [x] Run `bun test` for Bun-specific tests.
     - [x] Run the narrowest sufficient npm build, lint, package staging, package consumer, and test commands affected by the new package.
     - [x] Record any skipped validation and reason.
-- [ ] Task: Validate final Bun runtime readiness
-    - [ ] Run bounded `bun test` integration that connects Bun Guest outbound to Host and routes via Bun package Broker/fetch/Dispatcher APIs.
-    - [ ] Run bounded source/staged/tarball package consumer checks proving Bun parity exports import correctly.
-    - [ ] Run bounded build, staging, lint, and focused Node compatibility checks.
+- [x] Task: Validate final Bun runtime readiness
+    - [x] Run bounded Node-orchestrated Bun runtime integration that starts Host/Broker, spawns Bun process, waits for readiness, and issues routed requests to verify method/path/header/body/status/headers/body behavior.
+    - [x] Run bounded source/staged/tarball package consumer checks proving Bun parity exports import correctly.
+    - [x] Run bounded build, staging, lint, and focused Node compatibility checks.
 - [x] Task: Final review and cleanup
     - [x] Confirm all plan tasks are complete or explicitly deferred with rationale.
     - [x] Confirm docs, tests, package metadata, and implementation agree.
     - [x] Confirm no unrelated runtime guests, HTTP/3 behavior, auth policy, or public gateway behavior was introduced.
     - [x] Prepare final phase checkpoint commit and update `plan.md` with the checkpoint SHA.
-- [ ] Task: Final parity review and cleanup
-    - [ ] Confirm no `dispatchVerserBunRequest` or `__internal` export remains public.
-    - [ ] Confirm Bun package public API has parity with the Node package where applicable.
-    - [ ] Confirm response/request bodies stream through the Bun public path without adapter pre-aggregation.
-    - [ ] Confirm tests use public surfaces and Bun runtime where Bun behavior is being validated.
-    - [ ] Confirm final docs, tests, package metadata, and implementation agree after Phase 2b/3b/4 streaming corrections.
+- [x] Task: Final parity review and cleanup
+    - [x] Confirm no `dispatchVerserBunRequest` or `__internal` export remains public.
+    - [x] Confirm Bun package public API has parity with the Node package where applicable.
+    - [x] Confirm response/request bodies stream through the Bun public path without adapter pre-aggregation.
+    - [x] Confirm tests use public surfaces and Bun runtime where Bun behavior is being validated.
+    - [x] Confirm final docs, tests, package metadata, and implementation agree after Phase 2b/3b/4 streaming corrections.
 - [ ] Task: Push corrective final checkpoint for GitHub review
     - [ ] Push the corrective Phase 2b, Phase 3b, Phase 4 streaming, and Phase 5 parity updates to the track PR branch before requesting final manual verification again.
     - [ ] Confirm the PR reflects the revised public API parity, Host-owned routing, streaming, Bun-runtime validation, and public/internal boundary requirements.

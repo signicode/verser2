@@ -1,4 +1,12 @@
 import type { VerserClientTlsOptions } from '@signicode/verser-common';
+import type {
+  VerserBroker,
+  VerserBrokerOptions,
+  VerserBrokerRequest,
+  VerserBrokerResponse,
+} from '@signicode/verser2-guest-node';
+
+export type { VerserBroker, VerserBrokerOptions, VerserBrokerRequest, VerserBrokerResponse };
 
 export interface VerserBunGuestOptions {
   readonly hostUrl: string;
@@ -23,20 +31,13 @@ export interface VerserBunGuest {
   readonly connected: boolean;
   connect(): Promise<void>;
   close(reason?: string): Promise<void>;
-  attach(serverOrListener: VerserBunGuestServerLike, domain?: string): this;
+  attach(handler: VerserBunGuestRequestHandler, domain?: string): this;
   onLifecycle(listener: (event: VerserBunGuestLifecycleEvent) => void): () => void;
 }
 
-export interface VerserBunGuestRequestHandler extends VerserBunDispatchRequestHandler {
-  readonly origin?: string;
+export interface VerserBunGuestRequestHandler {
+  readonly fetch: (request: Request, server: VerserBunGuestServer) => Promise<unknown> | unknown;
 }
-
-export type VerserBunGuestServerLike =
-  | VerserBunGuestRequestHandler
-  | {
-      readonly server: unknown;
-      readonly fetch?: VerserBunDispatchRequestHandler;
-    };
 
 export interface VerserBunGuestResponse {
   readonly status: number;
@@ -46,59 +47,8 @@ export interface VerserBunGuestResponse {
   readonly json: () => Promise<unknown>;
 }
 
-export type VerserBunDispatchMethod =
-  | 'GET'
-  | 'HEAD'
-  | 'POST'
-  | 'PUT'
-  | 'DELETE'
-  | 'PATCH'
-  | 'OPTIONS'
-  | 'TRACE'
-  | 'CONNECT';
-
-export interface VerserBunDispatchRequest {
-  readonly method: string;
-  readonly path: string;
-  readonly origin: string;
-  readonly headers?: Record<string, string>;
-  readonly body?: BodyInit | null;
-}
-
-export interface VerserBunDispatchResponse {
-  readonly status: number;
-  readonly statusText: string;
-  readonly headers: Record<string, string>;
-  readonly body: string | Buffer;
-  readonly text: () => Promise<string>;
-  readonly json: () => Promise<unknown>;
-}
-
-export interface VerserBunDispatchServer {
+export interface VerserBunGuestServer {
   upgrade: (request: Request) => boolean;
-}
-
-export type VerserBunDispatchRouteMethodHandler = (
-  request: Request,
-) => Promise<Response> | Response;
-
-export type VerserBunDispatchRouteHandlers = Partial<{
-  [method in VerserBunDispatchMethod]: VerserBunDispatchRouteMethodHandler;
-}>;
-
-export type VerserBunDispatchRouteEntry =
-  | Response
-  | VerserBunDispatchRouteMethodHandler
-  | VerserBunDispatchRouteHandlers;
-
-export type VerserBunDispatchRoutes = Readonly<Record<string, VerserBunDispatchRouteEntry>>;
-
-export interface VerserBunDispatchRequestHandler {
-  readonly fetch?: (
-    request: Request,
-    server: VerserBunDispatchServer,
-  ) => Promise<unknown> | unknown;
-  readonly routes?: VerserBunDispatchRoutes;
 }
 
 export const DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE = 'Handler must return a Response instance.';
