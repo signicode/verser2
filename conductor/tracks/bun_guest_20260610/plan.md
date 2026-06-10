@@ -26,26 +26,34 @@
 - Package convention scan: mirror `packages/verser2-guest-node` TypeScript package layout and update hardcoded package lists in staging, package consumer, tarball, docs, and package readiness tests when the Bun package is scaffolded.
 ## Phase 1: Package Scaffold and Tooling Recognition
 
-- [ ] Task: Write failing package-recognition tests first
-    - [ ] Add or update tests that expect `packages/verser2-guest-bun` to exist as a workspace package.
-    - [ ] Add tests for package metadata, entrypoint exports, README presence, and staging/publishing expectations.
-    - [ ] Run the narrowest test command and confirm failures identify the missing Bun package scaffold.
-- [ ] Task: Implement the Bun package scaffold
-    - [ ] Add `packages/verser2-guest-bun/package.json` following monorepo package conventions.
-    - [ ] Add TypeScript build configuration and entrypoint structure consistent with existing TypeScript packages.
-    - [ ] Export package constants and placeholder public types needed by scaffold tests.
-    - [ ] Add initial README documenting intended Bun Guest scope and current scaffold status.
-- [ ] Task: Integrate tooling and package staging
-    - [ ] Ensure build, lint, staging, and package readiness flows recognize the Bun package.
-    - [ ] Update package publishing or consumer test fixtures only as needed for the new package.
-    - [ ] Run the narrowest validation proving scaffold recognition.
-- [ ] Task: Perform Phase 1 deduplication and documentation check
-    - [ ] Confirm no shared helper was duplicated during scaffold work.
-    - [ ] Update Conductor notes with validation results and common-library scan outcome.
+- [x] Task: Write failing package-recognition tests first
+    - [x] Add or update tests that expect `packages/verser2-guest-bun` to exist as a workspace package.
+    - [x] Add tests for package metadata, entrypoint exports, README presence, and staging/publishing expectations.
+    - [x] Run the narrowest test command and confirm failures identify the missing Bun package scaffold.
+- [x] Task: Implement the Bun package scaffold
+    - [x] Add `packages/verser2-guest-bun/package.json` following monorepo package conventions.
+    - [x] Add TypeScript build configuration and entrypoint structure consistent with existing TypeScript packages.
+    - [x] Export package constants and placeholder public types needed by scaffold tests.
+    - [x] Add initial README documenting intended Bun Guest scope and current scaffold status.
+- [x] Task: Integrate tooling and package staging
+    - [x] Ensure build, lint, staging, and package readiness flows recognize the Bun package.
+    - [x] Update package publishing or consumer test fixtures only as needed for the new package.
+    - [x] Run the narrowest validation proving scaffold recognition.
+- [x] Task: Perform Phase 1 deduplication and documentation check
+    - [x] Confirm no shared helper was duplicated during scaffold work.
+    - [x] Update Conductor notes with validation results and common-library scan outcome.
 - [ ] Task: Push Phase 1 checkpoint for GitHub review
     - [ ] Push the Phase 1 checkpoint commit to the track PR branch before manual verification.
     - [ ] Confirm the PR reflects the current plan, baseline notes, track-start commit, and package scaffold.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Package Scaffold and Tooling Recognition' (Protocol in workflow.md)
+
+### Phase 1 Notes
+
+- Failing test confirmation: `node --test test/docs.test.js test/packages.test.js test/package-publish-readiness.test.js test/package-consumer-imports.test.js` failed as expected before scaffold implementation because `packages/verser2-guest-bun` and package list updates were missing.
+- Scaffold implementation added `@signicode/verser2-guest-bun` with TypeScript build configuration, public package constant, `createVerserBunGuest` placeholder helper, scaffold public types, README, package license, npm workspace lockfile entry, root project reference, staging recognition, package consumer recognition, tarball recognition, package publish readiness coverage, and root README package inventory.
+- Validation passed: `npm run build && npm run stage:packages && node --test test/docs.test.js test/packages.test.js test/package-publish-readiness.test.js test/package-consumer-imports.test.js && npm run lint`.
+- Coverage check passed for changed scaffold behavior: `node --test --experimental-test-coverage test/docs.test.js test/packages.test.js test/package-publish-readiness.test.js test/package-consumer-imports.test.js` reported `packages/verser2-guest-bun/dist/index.js` at 97.26% line coverage and 100% function coverage. The lower duplicate staged-package coverage entry reflects package-consumer import-only checks against `dist/packages` staging output, not the source workspace scaffold behavior.
+- Deduplication result: no shared helper was duplicated; Phase 1 introduced only package-local scaffold types/constants and package enumeration updates. Existing common libraries remain the intended reuse point for later protocol, lifecycle, header, stream, and routed request helpers.
 
 ## Phase 2: Bun Handler Adapter API
 

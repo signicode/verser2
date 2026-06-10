@@ -19,4 +19,6 @@ test('README documents workspace setup commands', () => {
   assert.match(readme, /packages\/verser2-host/);
   assert.match(readme, /@signicode\/verser2-guest-node/);
   assert.match(readme, /packages\/verser2-guest-node/);
+  assert.match(readme, /@signicode\/verser2-guest-bun/);
+  assert.match(readme, /packages\/verser2-guest-bun/);
 });

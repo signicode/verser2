@@ -14,6 +14,7 @@ Implemented packages:
 - `@signicode/verser2-guest-js-common` in `packages/verser2-guest-js-common`
 - `@signicode/verser2-host` in `packages/verser2-host`
 - `@signicode/verser2-guest-node` in `packages/verser2-guest-node`
+- `@signicode/verser2-guest-bun` in `packages/verser2-guest-bun`
 - `@signicode/verser2-guest-python` in `packages/verser2-guest-python`
 
 Install dependencies:
