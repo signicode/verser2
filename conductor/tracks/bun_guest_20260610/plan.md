@@ -226,6 +226,7 @@
 - Runtime route behavior is validated through the spawned Bun process integration rather than private adapter imports.
 - Bun test TypeScript tooling was fixed with `@types/bun` and `packages/verser2-guest-bun/test/tsconfig.json`; the package build keeps tests out of production declarations through `tsconfig.build.json`.
 - Validation passed before moving to Phase 4b: `timeout 20s node node_modules/typescript/bin/tsc --project packages/verser2-guest-bun/test/tsconfig.json`; `timeout 20s bun test packages/verser2-guest-bun/test/*.test.ts`; `timeout 20s node --test test/bun-guest-integration.test.js`; `timeout 60s npm run build --workspace=@signicode/verser2-guest-bun`; `timeout 20s node --test test/packages.test.js test/docs.test.js`; `timeout 20s npm run lint`.
+- Phase checkpoint commit: `b1005dd`.
 
 ### Phase 3b Notes
 
