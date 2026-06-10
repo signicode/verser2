@@ -37,6 +37,60 @@ function withTimeout(promise, label, timeoutMs = 30_000) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
 }
 
+function terminateChildProcess(
+  childProcess,
+  { timeoutMs = 10_000, terminationSignal = 'SIGTERM', killSignal = 'SIGKILL' } = {},
+) {
+  if (!childProcess || childProcess.exitCode !== null) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let terminated = false;
+
+    const finalize = () => {
+      if (terminated) {
+        return;
+      }
+      terminated = true;
+      clearTimeout(terminationTimeoutId);
+      clearTimeout(forceKillTimeoutId);
+      childProcess.off('exit', onExit);
+      resolve();
+    };
+
+    const onExit = () => {
+      finalize();
+    };
+
+    const forceKillTimeoutId = setTimeout(() => {
+      if (!terminated && childProcess.exitCode === null) {
+        try {
+          childProcess.kill(killSignal);
+        } catch {
+          // Ignore and allow timeout to resolve cleanup.
+        }
+      }
+    }, timeoutMs / 2);
+
+    const terminationTimeoutId = setTimeout(() => {
+      finalize();
+    }, timeoutMs);
+
+    childProcess.once('exit', onExit);
+    if (childProcess.exitCode !== null) {
+      finalize();
+      return;
+    }
+
+    try {
+      childProcess.kill(terminationSignal);
+    } catch {
+      finalize();
+    }
+  });
+}
+
 function waitForProcessOutput(process, pattern, label) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error(`${label} timed out`)), 15_000);
@@ -97,7 +151,10 @@ test(
     try {
       await broker.connect();
       await waitForProcessOutput(guestProcess, /python guest ready/, 'Python Guest');
-      await broker.waitForRoute('python-basic.local.test');
+      await withTimeout(
+        broker.waitForRoute('python-basic.local.test'),
+        'Python Guest route registration',
+      );
 
       const response = await broker.request({
         targetId: 'python-guest-basic',
@@ -169,9 +226,9 @@ test(
       assert.equal(Buffer.concat(remainingResponseChunks).toString('utf8'), 'two');
     } finally {
       slowUpload?.end();
-      guestProcess.kill('SIGTERM');
-      await broker.close('test-complete');
-      await host.close('test-complete');
+      await withTimeout(broker.close('test-complete'), 'Broker close');
+      await withTimeout(terminateChildProcess(guestProcess), 'Python Guest termination');
+      await withTimeout(host.close('test-complete'), 'Host close');
     }
   },
 );
