@@ -179,6 +179,7 @@
   of helper-package reuse.
 - Deduplication result: no repeated stream/request/response helper duplicated outside this adapter; helper code
   remains Bun-package-local as currently runtime-specific conversion behavior.
+- Phase checkpoint commit: `9c8b9b6`.
 
 ## Phase 5: Documentation, Package Consumer Validation, and Final Readiness
 
