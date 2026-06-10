@@ -9,15 +9,16 @@ style handler semantics.
 
 - `VERSER2_GUEST_BUN_PACKAGE_NAME`
 - `createVerserBunGuest(options)`
-- `dispatchVerserBunRequest(handler, request)`
+- `createVerserBroker(options)`
+
 
 ## Bun Guest usage
 
-Unlike a normal Bun server, a Bun Guest does **not** call `Bun.serve()` without a
-port or `listen()` for this routing path.
+Unlike a normal Bun server, a Bun Guest does **not** call `Bun.serve()` or
+`listen()` for this routing path.
 
 ```ts
-import { createVerserBunGuest } from '@signicode/verser2-guest-bun';
+import { VERSER2_GUEST_BUN_PACKAGE_NAME, createVerserBunGuest } from '@signicode/verser2-guest-bun';
 
 const guest = createVerserBunGuest({
   hostUrl: 'https://localhost:8443',
@@ -39,22 +40,34 @@ guest.attach({
 
     return new Response('not found', { status: 404 });
   },
-});
+}, 'bun-client-a.local.test');
 
 await guest.connect();
+console.log(VERSER2_GUEST_BUN_PACKAGE_NAME);
 ```
 
-Then send traffic through an existing Broker as you would with any other guest
-domain:
+Send traffic through a standard Broker API:
 
 ```ts
-const response = await fetch('http://bun-client-a.local.test/health', {
-  method: 'GET',
-  headers: { 'accept': 'application/json' },
-  dispatcher: broker.createDispatcher(),
+import { createVerserBroker } from '@signicode/verser2-guest-bun';
+import http from 'node:http';
+
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
 });
 
-console.log(response.status);
+const agent = broker.createAgent();
+const dispatcher = broker.createDispatcher();
+const routedFetch = broker.createFetch();
+
+await broker.connect();
+await broker.waitForRoute('bun-client-a.local.test');
+
+http.get('http://bun-client-a.local.test/health', { agent }, (response) => response.resume());
+await routedFetch('http://bun-client-a.local.test/health');
+await fetch('http://bun-client-a.local.test/health', { dispatcher });
 ```
 
 To detach from the Host:
@@ -65,35 +78,19 @@ await guest.close();
 
 ### Route handler examples
 
-`dispatchVerserBunRequest` and `attach()` support Bun-style route tables.
+`createVerserBunGuest()` attaches a Bun handler object with a normal `fetch`
+entrypoint.
 
 ```ts
-import { dispatchVerserBunRequest } from '@signicode/verser2-guest-bun';
+guest.attach({
+  fetch(request, server) {
+    if (request.method === 'GET' && request.url.endsWith('/health')) {
+      return Response.json({ ok: true });
+    }
 
-const routeTable = {
-  '/health': new Response('ok'),
-  '/upload': {
-    POST: async (request) => {
-      const payload = await request.text();
-      return Response.json({ uploaded: payload.length });
-    },
-    GET: () => new Response('method required', { status: 405 }),
+    return Response.json({ ok: false }, { status: 404 });
   },
-  '/items': (request) => new Response(`items ${request.url}`),
-};
-
-const routeResponse = await dispatchVerserBunRequest(
-  { routes: routeTable },
-  {
-    method: 'POST',
-    path: '/upload',
-    origin: 'http://bun-client-a.local.test',
-    body: 'hello',
-    headers: { 'content-type': 'text/plain' },
-  },
-);
-
-console.log(routeResponse.status, await routeResponse.text());
+}, 'bun-client-a.local.test');
 ```
 
 ## Fetch and response semantics
@@ -102,14 +99,8 @@ console.log(routeResponse.status, await routeResponse.text());
   `ReadableStream` values.
 - Incoming `method`, `path`, `query string`, and `headers` are preserved in the
   generated Bun `Request`.
-- Outgoing `Response` bodies are materialized as a `Buffer`, while helpers still
-  expose `text()` and `json()` for common use.
-- Route dispatch supports:
-  - exact-path `routes[path] = Response`
-  - exact-path function handler `routes[path] = (request) => Response`
-  - per-method handlers `routes[path] = { GET, POST, ... }`
-- Unsupported route/method pairs return `404`/`405` with the expected `Allow`
-  header.
+- Outgoing `Response` bodies remain available through standard `Response` stream
+  access plus `text()`/`json()` helpers.
 
 ## Node compatibility and boundary notes
 
@@ -126,8 +117,8 @@ start a listening server.
 - Request bodies stream into a Web `Request` where supported by Bun.
 - Response helper methods keep text/JSON ergonomics while still returning binary
   data through `body` when a response body is not directly text-oriented.
-- Streaming behavior follows the current adapter limits in this package; large
-  responses are currently materialized in memory during response conversion.
+- Streaming behavior follows the established routing path behavior and does not rely
+  on permanent adapter buffering.
 
 ### WebSocket limitation
 

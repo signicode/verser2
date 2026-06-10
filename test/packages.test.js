@@ -232,7 +232,7 @@ test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   );
 });
 
-test('@signicode/verser2-guest-bun package exposes Bun Guest scaffold API', () => {
+test('@signicode/verser2-guest-bun package exposes Bun Guest and Broker API without internals', () => {
   const packageManifest = readJson('packages/verser2-guest-bun/package.json');
   const guestPackage = require('../packages/verser2-guest-bun/dist/index.js');
 
@@ -241,25 +241,45 @@ test('@signicode/verser2-guest-bun package exposes Bun Guest scaffold API', () =
   assert.equal(packageManifest.types, 'dist/index.d.ts');
   assert.deepEqual(Object.keys(guestPackage).sort(), [
     'VERSER2_GUEST_BUN_PACKAGE_NAME',
-    '__internal',
+    'createVerserBroker',
     'createVerserBunGuest',
-    'dispatchVerserBunRequest',
   ]);
   assert.equal(guestPackage.VERSER2_GUEST_BUN_PACKAGE_NAME, '@signicode/verser2-guest-bun');
   assert.equal(typeof guestPackage.createVerserBunGuest, 'function');
-  assert.equal(typeof guestPackage.dispatchVerserBunRequest, 'function');
+  assert.equal(typeof guestPackage.createVerserBroker, 'function');
+  assert.equal('dispatchVerserBunRequest' in guestPackage, false);
+  assert.equal('__internal' in guestPackage, false);
+  assert.doesNotMatch(
+    readText('packages/verser2-guest-bun/dist/index.d.ts'),
+    /dispatchVerserBunRequest|__internal/,
+  );
+  assertDeclarationOmits('packages/verser2-guest-bun', [
+    /VerserBunDispatchServer/,
+    /VerserBunDispatchRequest/,
+    /VerserBunDispatchResponse/,
+    /VerserBunDispatchRequestHandler/,
+  ]);
   const lifecycleEvents = [];
   const guest = guestPackage.createVerserBunGuest({
     hostUrl: 'https://localhost:1',
     guestId: 'bun-package-test',
   });
+  const broker = guestPackage.createVerserBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'bun-package-broker-test',
+  });
   const unsubscribe = guest.onLifecycle((event) => lifecycleEvents.push(event));
 
   assert.equal(guest.connected, false);
-  assert.equal(
-    guest.attach({ origin: 'http://bun-package-test.local', fetch: () => new Response() }),
-    guest,
-  );
+  assert.equal(typeof broker.connect, 'function');
+  assert.equal(typeof broker.close, 'function');
+  assert.equal(typeof broker.request, 'function');
+  assert.equal(typeof broker.getRoutes, 'function');
+  assert.equal(typeof broker.waitForRoute, 'function');
+  assert.equal(typeof broker.createAgent, 'function');
+  assert.equal(typeof broker.createDispatcher, 'function');
+  assert.equal(typeof broker.createFetch, 'function');
+  assert.equal(guest.attach({ fetch: () => new Response() }), guest);
   assert.equal(typeof unsubscribe, 'function');
   assert.equal(lifecycleEvents.length, 0);
   assertSingleFileDist('packages/verser2-guest-bun');

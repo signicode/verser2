@@ -16,6 +16,21 @@ const expectedPackageNames = new Set([
   '@signicode/verser2-guest-python',
 ]);
 
+const expectedBunRequiredExports = new Set([
+  'createVerserBunGuest',
+  'createVerserBroker',
+  'VERSER2_GUEST_BUN_PACKAGE_NAME',
+]);
+
+const expectedBunForbiddenExports = new Set([
+  'dispatchVerserBunRequest',
+  'dispatchVerserBunRequestInternal',
+  '__internal',
+  'routeTable',
+  'RouteTable',
+  'route-table',
+]);
+
 function assertPackageSet(report) {
   const packageNames = new Set(
     report.packages.map((packageReport) => packageReport.packageName || packageReport.package),
@@ -24,6 +39,36 @@ function assertPackageSet(report) {
     assert.ok(
       packageNames.has(expectedName),
       `Expected package validation result to include ${expectedName}`,
+    );
+  }
+}
+
+function assertRequiredExportsForMode(packageReport) {
+  if (packageReport.packageName !== '@signicode/verser2-guest-bun') {
+    return;
+  }
+
+  assert.ok(Array.isArray(packageReport.requiredExports));
+  assert.equal(packageReport.requiredExports.length, expectedBunRequiredExports.size);
+  for (const expectedExport of expectedBunRequiredExports) {
+    assert.ok(
+      packageReport.requiredExports.includes(expectedExport),
+      `Expected ${packageReport.packageName} required export list to include ${expectedExport}`,
+    );
+  }
+}
+
+function assertForbiddenExportsForMode(packageReport) {
+  if (packageReport.packageName !== '@signicode/verser2-guest-bun') {
+    return;
+  }
+
+  assert.ok(Array.isArray(packageReport.forbiddenExports));
+  assert.equal(packageReport.forbiddenExports.length, expectedBunForbiddenExports.size);
+  for (const expectedExport of expectedBunForbiddenExports) {
+    assert.ok(
+      packageReport.forbiddenExports.includes(expectedExport),
+      `Expected ${packageReport.packageName} forbidden export list to include ${expectedExport}`,
     );
   }
 }
@@ -49,6 +94,8 @@ test('consumer matrix validates cjs, esm, and typescript imports from source pac
     assert.equal(packageReport.cjs, true);
     assert.equal(packageReport.mjs, true);
     assert.equal(packageReport.typescript, true);
+    assertRequiredExportsForMode(packageReport);
+    assertForbiddenExportsForMode(packageReport);
   }
 });
 
@@ -65,6 +112,8 @@ test('consumer matrix validates cjs, esm, and typescript imports from staged pac
     assert.equal(packageReport.cjs, true);
     assert.equal(packageReport.mjs, true);
     assert.equal(packageReport.typescript, true);
+    assertRequiredExportsForMode(packageReport);
+    assertForbiddenExportsForMode(packageReport);
   }
 });
 
@@ -81,6 +130,8 @@ test('consumer matrix validates cjs, esm, and typescript imports from tarball pa
     assert.equal(packageReport.cjs, true);
     assert.equal(packageReport.mjs, true);
     assert.equal(packageReport.typescript, true);
+    assertRequiredExportsForMode(packageReport);
+    assertForbiddenExportsForMode(packageReport);
   }
 });
 
@@ -104,5 +155,7 @@ test('github mode does not fail when authentication token is absent', () => {
     assert.equal(packageReport.cjs, true);
     assert.equal(packageReport.mjs, true);
     assert.equal(packageReport.typescript, true);
+    assertRequiredExportsForMode(packageReport);
+    assertForbiddenExportsForMode(packageReport);
   }
 });

@@ -217,9 +217,8 @@ console.log(await helperResponse.text());
 
 ## Bun Guest usage
 
-`@signicode/verser2-guest-bun` lets Bun handlers expose routes to connected
-peers without opening a listening port. Bun route handlers stay close to native
-`fetch()` and route-table forms.
+`@signicode/verser2-guest-bun` lets Bun handlers expose requests to connected
+peers without opening a listening port.
 
 ```ts
 import { createVerserBunGuest } from '@signicode/verser2-guest-bun';
@@ -242,23 +241,37 @@ bunGuest.attach({
 
     return new Response('not found', { status: 404 });
   },
-});
+}, 'bun-client-a.local.test');
 
 await bunGuest.connect();
 ```
 
-If you prefer explicit route tables:
+Route handling here is your normal Bun handler logic. Host/Broker route
+advertisements remain the source of advertised routes; `fetch()` dispatch does not
+create local route entries.
+
+Use Bun peers through the standard Broker APIs:
 
 ```ts
-bunGuest.attach({
-  routes: {
-    '/health': new Response(JSON.stringify({ ok: true })),
-    '/items': {
-      POST: async (request) => new Response(JSON.stringify({ ok: true }), { status: 201 }),
-      GET: () => new Response('method not used', { status: 405 }),
-    },
-  },
+import { createVerserBroker, createVerserBunGuest } from '@signicode/verser2-guest-bun';
+import http from 'node:http';
+
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  tls: { caFile: '/etc/verser/ca.crt' },
 });
+
+const agent = broker.createAgent();
+const dispatcher = broker.createDispatcher();
+const routedFetch = broker.createFetch();
+
+await broker.connect();
+await broker.waitForRoute('bun-client-a.local.test');
+
+await routedFetch('http://bun-client-a.local.test/health');
+http.get('http://bun-client-a.local.test/health', { agent }, (response) => response.resume());
+await fetch('http://bun-client-a.local.test/health', { dispatcher });
 ```
 
 The Bun guest transport uses the same reconnect/lifecycle/route-advertisement flow as
@@ -275,7 +288,10 @@ the Node Guest, including routed domain registration and close semantics.
 The same non-listening host exposure rule applies here: Bun Guests do not call
 `listen()` or otherwise bind a local TCP socket for routed exposure.
 
-The same routing APIs support streamed request and response bodies:
+Streaming is forwarded through the public routing paths (not pre-aggregated in a
+legacy adapter step), including request/response bodies.
+
+The same public paths support streamed request and response bodies:
 
 ```ts
 const uploadResponse = await broker.request({
@@ -429,7 +445,7 @@ process.on('SIGUSR1', () => {
   } catch (error) {
     console.error('Failed to reload Verser TLS certificate:', error);
   }
-});
+}, 'bun-client-a.local.test');
 ```
 
 Configure Guest and Broker trust with direct CA PEM values:
