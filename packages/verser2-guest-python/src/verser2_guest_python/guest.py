@@ -13,7 +13,13 @@ import h2.connection
 import h2.config
 import h2.events
 
-from .asgi import ASGIApp, DispatchResponse, build_http_scope, dispatch_asgi_request
+from .asgi import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    ASGIApp,
+    DispatchResponse,
+    build_http_scope,
+    dispatch_asgi_request,
+)
 from .protocol import VERSER_ENVELOPE_PREFIX_BYTES, decode_envelope, encode_envelope
 
 
@@ -27,6 +33,7 @@ class VerserGuest:
         routed_domains: list[str] | None = None,
         tls_ca_file: str | None = None,
         min_waiting_streams: int = 1,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         self.host_url = host_url
         self.guest_id = guest_id
@@ -34,6 +41,7 @@ class VerserGuest:
         self.routed_domains = routed_domains or []
         self.tls_ca_file = tls_ca_file
         self.min_waiting_streams = max(1, min_waiting_streams)
+        self.max_response_bytes = max_response_bytes
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._conn: h2.connection.H2Connection | None = None
@@ -66,7 +74,13 @@ class VerserGuest:
                     },
                 },
             )
-        return await dispatch_asgi_request(self.app, self.guest_id, metadata, body)
+        return await dispatch_asgi_request(
+            self.app,
+            self.guest_id,
+            metadata,
+            body,
+            self.max_response_bytes,
+        )
 
     async def connect(self) -> None:
         if self._conn is not None:
@@ -197,13 +211,18 @@ class VerserGuest:
 
         buffer = b""
         metadata: dict[str, Any] | None = None
+        pending_metadata_flow_controlled_length = 0
         request_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         app_task: asyncio.Task[None] | None = None
         response_started = False
         response_ended = False
 
         async def receive() -> dict[str, Any]:
-            return await request_events.get()
+            event = await request_events.get()
+            flow_controlled_length = int(event.pop("_flow_controlled_length", 0) or 0)
+            if flow_controlled_length > 0:
+                await self._acknowledge_received_data(stream_id, flow_controlled_length)
+            return event
 
         async def send(event: dict[str, Any]) -> None:
             nonlocal response_started, response_ended
@@ -267,7 +286,7 @@ class VerserGuest:
                 response_ended = True
 
         def try_start_app() -> None:
-            nonlocal buffer, metadata, app_task
+            nonlocal app_task, buffer, metadata, pending_metadata_flow_controlled_length
             if metadata is not None or len(buffer) < VERSER_ENVELOPE_PREFIX_BYTES:
                 return
             metadata_length = struct.unpack(">I", buffer[2:6])[0]
@@ -281,19 +300,37 @@ class VerserGuest:
             buffer = b""
             if remainder:
                 request_events.put_nowait(
-                    {"type": "http.request", "body": remainder, "more_body": True}
+                    {
+                        "type": "http.request",
+                        "body": remainder,
+                        "more_body": True,
+                        "_flow_controlled_length": pending_metadata_flow_controlled_length,
+                    }
                 )
+            elif pending_metadata_flow_controlled_length:
+                asyncio.create_task(
+                    self._acknowledge_received_data(
+                        stream_id, pending_metadata_flow_controlled_length
+                    )
+                )
+            pending_metadata_flow_controlled_length = 0
             app_task = asyncio.create_task(run_app())
 
         while True:
             event = await self._events[stream_id].get()
             if isinstance(event, h2.events.DataReceived):
                 if metadata is None:
+                    pending_metadata_flow_controlled_length += int(event.flow_controlled_length)
                     buffer += event.data
                     try_start_app()
                 else:
                     request_events.put_nowait(
-                        {"type": "http.request", "body": event.data, "more_body": True}
+                        {
+                            "type": "http.request",
+                            "body": event.data,
+                            "more_body": True,
+                            "_flow_controlled_length": event.flow_controlled_length,
+                        }
                     )
             if isinstance(event, h2.events.StreamEnded):
                 try_start_app()
@@ -340,15 +377,6 @@ class VerserGuest:
                     raise RuntimeError(f"Lease stream was rejected with status {status}")
                 return
 
-    async def _read_request_envelope_and_body(self, stream_id: int) -> tuple[str, dict[str, Any], bytes]:
-        chunks: list[bytes] = []
-        while True:
-            event = await self._events[stream_id].get()
-            if isinstance(event, h2.events.DataReceived):
-                chunks.append(event.data)
-            if isinstance(event, h2.events.StreamEnded):
-                return decode_envelope(b"".join(chunks))
-
     async def _read_loop(self) -> None:
         reader = self._reader
         if reader is None:
@@ -361,13 +389,16 @@ class VerserGuest:
                 events = self._require_conn().receive_data(data)
                 for event in events:
                     stream_id = getattr(event, "stream_id", None)
-                    if isinstance(event, h2.events.DataReceived):
-                        self._require_conn().acknowledge_received_data(
-                            event.flow_controlled_length, event.stream_id
-                        )
                     if stream_id in self._events:
                         self._events[stream_id].put_nowait(event)
                 await self._flush_unlocked()
+
+    async def _acknowledge_received_data(
+        self, stream_id: int, flow_controlled_length: int
+    ) -> None:
+        async with self._io_lock:
+            self._require_conn().acknowledge_received_data(flow_controlled_length, stream_id)
+            await self._flush_unlocked()
 
     async def _flush(self) -> None:
         async with self._io_lock:

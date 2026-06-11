@@ -10,6 +10,11 @@ from .protocol import normalize_headers
 
 
 ASGIApp = Callable[[dict[str, Any], Callable[[], Awaitable[dict[str, Any]]], Callable[[dict[str, Any]], Awaitable[None]]], Awaitable[None]]
+DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+
+
+class ResponseBodyTooLargeError(RuntimeError):
+    """Raised when direct ASGI dispatch exceeds the buffered response limit."""
 
 
 @dataclass(frozen=True)
@@ -49,12 +54,14 @@ async def dispatch_asgi_request(
     guest_id: str,
     metadata: dict[str, Any],
     body: bytes | list[bytes],
+    max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> DispatchResponse:
     request_id = str(metadata.get("requestId") or "")
     started = False
     status_code = 200
     response_headers: dict[str, str] = {}
     response_chunks: list[bytes] = []
+    response_bytes = 0
     body_chunks = body if isinstance(body, list) else [body]
     receive_index = 0
 
@@ -71,7 +78,7 @@ async def dispatch_asgi_request(
         }
 
     async def send(event: dict[str, Any]) -> None:
-        nonlocal started, status_code, response_headers
+        nonlocal response_bytes, response_headers, started, status_code
         event_type = event.get("type")
         if event_type == "http.response.start":
             started = True
@@ -82,12 +89,18 @@ async def dispatch_asgi_request(
             }
             return
         if event_type == "http.response.body":
-            response_chunks.append(bytes(event.get("body") or b""))
+            chunk = bytes(event.get("body") or b"")
+            response_bytes += len(chunk)
+            if response_bytes > max_response_bytes:
+                raise ResponseBodyTooLargeError(
+                    f"Response body bytes exceed limit: {response_bytes} > {max_response_bytes}"
+                )
+            response_chunks.append(chunk)
 
     try:
         await app(build_http_scope(metadata), receive, send)
     except Exception as error:  # noqa: BLE001 - app exceptions are converted to protocol errors.
-        if started:
+        if started and not isinstance(error, ResponseBodyTooLargeError):
             raise
         return DispatchResponse(
             request_id=request_id,

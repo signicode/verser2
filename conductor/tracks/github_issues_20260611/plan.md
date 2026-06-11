@@ -71,39 +71,45 @@
 
 ## Phase 3: Python Guest Direct Dispatch Bounds, HTTP/2 Body ACK Backpressure, and Cleanup (Issues Python part of #10, #12, and #13)
 
-- [ ] Task: Confirm Python Guest scope, entrypoints, and package-specific validation
-    - [ ] Review `packages/verser2-guest-python/src/verser2_guest_python/asgi.py` and `guest.py`.
-    - [ ] Review Python Guest tests for ASGI direct dispatch, leased request/response streaming, and HTTP/2 flow-control behavior.
-    - [ ] Scan existing common or Python-local helpers for reusable bounded-buffer or error behavior before adding new package-local code.
-- [ ] Task: Write failing tests for Python direct-dispatch response bounds (Issue #10)
-    - [ ] Add tests proving `dispatch_asgi_request(...)` rejects responses over configured/default `max_response_bytes`.
-    - [ ] Add assertions that leased streaming response paths still stream chunks before response completion.
-    - [ ] Confirm the new direct-dispatch response-limit test fails before implementation.
-- [ ] Task: Implement Python direct-dispatch response bounds and documentation (Issue #10)
-    - [ ] Add configurable/default max buffered response size behavior for direct Python ASGI dispatch.
-    - [ ] Enforce the limit while ASGI response chunks are appended, before `b''.join(...)`.
-    - [ ] Document direct ASGI dispatch as batch-only and distinguish it from leased streaming response behavior.
-- [ ] Task: Write failing tests for Python HTTP/2 request-body ACK backpressure (Issue #12)
-    - [ ] Add tests with delayed ASGI `receive()` consumption to prove `WINDOW_UPDATE` credit is not sent when data is merely parsed.
-    - [ ] Add tests proving credit is sent after the corresponding queued body event is consumed.
-    - [ ] Verify tests use `event.flow_controlled_length` semantics rather than `len(event.data)` assumptions.
-    - [ ] Confirm the tests fail for the expected immediate-ACK behavior before implementation.
-- [ ] Task: Implement Python HTTP/2 request-body ACK backpressure (Issue #12)
-    - [ ] Remove request-body `DataReceived` ACKs from the HTTP/2 read loop.
-    - [ ] Store `event.flow_controlled_length` with each queued ASGI body event.
-    - [ ] Acknowledge received data only after ASGI `receive()` dequeues/consumes the body event.
-    - [ ] Preserve existing leased request/response streaming behavior and error handling.
-- [ ] Task: Remove unused Python full-body request reader (Issue #13)
-    - [ ] Confirm `_read_request_envelope_and_body(...)` has no call sites.
-    - [ ] Remove the helper without adding a replacement full-body request reader.
-    - [ ] Ensure imports and type references remain clean after removal.
-- [ ] Task: Validate Python Guest changes
-    - [ ] Run the narrowest Python Guest tests covering ASGI direct dispatch, leased streaming, flow-control ACK behavior, and cleanup.
-    - [ ] Run package-level validation with `uv` if needed for Python package commands.
-    - [ ] Run repository build/test/lint validation if touched docs or shared integration paths require it.
-    - [ ] Record coverage status or why coverage could not be measured for changed behavior.
-    - [ ] Perform a deduplication check and record whether common code was added, adapted, or intentionally deferred.
-- [ ] Task: Conductor - User Manual Verification 'Python Guest Direct Dispatch Bounds, HTTP/2 Body ACK Backpressure, and Cleanup (Issues Python part of #10, #12, and #13)' (Protocol in workflow.md)
+- [x] Task: Confirm Python Guest scope, entrypoints, and package-specific validation
+    - [x] Review `packages/verser2-guest-python/src/verser2_guest_python/asgi.py` and `guest.py`.
+    - [x] Review Python Guest tests for ASGI direct dispatch, leased request/response streaming, and HTTP/2 flow-control behavior.
+    - [x] Scan existing common or Python-local helpers for reusable bounded-buffer or error behavior before adding new package-local code.
+      - Python direct-dispatch response bounds and HTTP/2 ACK timing are package-specific; no common extraction is needed.
+- [x] Task: Write failing tests for Python direct-dispatch response bounds (Issue #10)
+    - [x] Add tests proving `dispatch_asgi_request(...)` rejects responses over configured/default `max_response_bytes`.
+    - [x] Add assertions that leased streaming response paths still stream chunks before response completion.
+    - [x] Confirm the new direct-dispatch response-limit test fails before implementation.
+      - Initial focused Python package test failed as expected for missing `max_response_bytes` support.
+- [x] Task: Implement Python direct-dispatch response bounds and documentation (Issue #10)
+    - [x] Add configurable/default max buffered response size behavior for direct Python ASGI dispatch.
+    - [x] Enforce the limit while ASGI response chunks are appended, before `b''.join(...)`.
+    - [x] Document direct ASGI dispatch as batch-only and distinguish it from leased streaming response behavior.
+- [x] Task: Write failing tests for Python HTTP/2 request-body ACK backpressure (Issue #12)
+    - [x] Add tests with delayed ASGI `receive()` consumption to prove `WINDOW_UPDATE` credit is not sent when data is merely parsed.
+    - [x] Add tests proving credit is sent after the corresponding queued body event is consumed.
+    - [x] Verify tests use `event.flow_controlled_length` semantics rather than `len(event.data)` assumptions.
+    - [x] Confirm the tests fail for the expected immediate-ACK behavior before implementation.
+- [x] Task: Implement Python HTTP/2 request-body ACK backpressure (Issue #12)
+    - [x] Remove request-body `DataReceived` ACKs from the HTTP/2 read loop.
+    - [x] Store `event.flow_controlled_length` with each queued ASGI body event.
+    - [x] Acknowledge received data only after ASGI `receive()` dequeues/consumes the body event.
+    - [x] Preserve existing leased request/response streaming behavior and error handling.
+- [x] Task: Remove unused Python full-body request reader (Issue #13)
+    - [x] Confirm `_read_request_envelope_and_body(...)` has no call sites.
+    - [x] Remove the helper without adding a replacement full-body request reader.
+    - [x] Ensure imports and type references remain clean after removal.
+- [x] Task: Validate Python Guest changes
+    - [x] Run the narrowest Python Guest tests covering ASGI direct dispatch, leased streaming, flow-control ACK behavior, and cleanup.
+    - [x] Run package-level validation with `uv` if needed for Python package commands.
+    - [x] Run repository build/test/lint validation if touched docs or shared integration paths require it.
+    - [x] Record coverage status or why coverage could not be measured for changed behavior.
+    - [x] Perform a deduplication check and record whether common code was added, adapted, or intentionally deferred.
+      - Validation passed: `npm run test --workspace=@signicode/verser2-guest-python`.
+      - Coverage not separately measured; focused tests cover direct response cap and ACK timing behavior.
+      - Deduplication: Python-specific direct-dispatch and flow-control behavior was implemented locally; common extraction is intentionally deferred.
+- [x] Task: Conductor - User Manual Verification 'Python Guest Direct Dispatch Bounds, HTTP/2 Body ACK Backpressure, and Cleanup (Issues Python part of #10, #12, and #13)' (Protocol in workflow.md)
+  - User approved moving to final validation after focused Python package validation.
 
 ## Phase 4: Cross-Package Final Validation and GitHub Issue Handoff
 
