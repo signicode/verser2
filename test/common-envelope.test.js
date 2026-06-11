@@ -109,7 +109,8 @@ test('shared envelope parser rejects pending input beyond the maximum valid enve
   const parser = common.createVerserEnvelopeParser({ maxMetadataBytes: envelope.length - 6 });
 
   assert.throws(
-    () => parser.push(Buffer.concat([envelope.subarray(0, envelope.length - 1), Buffer.from('extra')])),
+    () =>
+      parser.push(Buffer.concat([envelope.subarray(0, envelope.length - 1), Buffer.from('extra')])),
     /metadata length exceeds limit|pending envelope input exceeds limit/i,
   );
 });
