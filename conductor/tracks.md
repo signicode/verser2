@@ -26,3 +26,8 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: package buildability and ability to publish**
 *Link: [./tracks/package_publish_readiness_20260608/](./tracks/package_publish_readiness_20260608/)*
+
+---
+
+- [ ] **Track: github issues 11-06-2026: read the issues on GitHub using gh and create a plan to address them**
+*Link: [./tracks/github_issues_20260611/](./tracks/github_issues_20260611/)*
