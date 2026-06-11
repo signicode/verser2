@@ -3,8 +3,39 @@ import json
 import struct
 import unittest
 
+import h2.events
+
 from verser2_guest_python import create_verser_guest
 from verser2_guest_python.protocol import decode_envelope, encode_envelope, normalize_headers
+
+
+class FakeReader:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+
+    async def read(self, _size):
+        if self._chunks:
+            return self._chunks.pop(0)
+        return b""
+
+
+class FakeConn:
+    def __init__(self, events=None):
+        self.events = list(events or [])
+        self.acknowledged = []
+        self.sent_data = []
+
+    def receive_data(self, _data):
+        return list(self.events)
+
+    def acknowledge_received_data(self, flow_controlled_length, stream_id):
+        self.acknowledged.append((stream_id, flow_controlled_length))
+
+    def send_data(self, stream_id, data, end_stream=False):
+        self.sent_data.append((stream_id, data, end_stream))
+
+    def data_to_send(self):
+        return b""
 
 
 class AsgiDispatchTest(unittest.TestCase):
@@ -172,6 +203,37 @@ class AsgiDispatchTest(unittest.TestCase):
         self.assertEqual(response.headers, {"x-stream": "yes"})
         self.assertEqual(response.body, b"one-two")
 
+    def test_dispatch_routed_request_rejects_oversized_response_body(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"abcd", "more_body": True})
+            await send({"type": "http.response.body", "body": b"e", "more_body": False})
+
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1",
+            guest_id="python-response-limit",
+            app=app,
+            max_response_bytes=4,
+        )
+
+        response = asyncio.run(
+            guest.dispatch_routed_request(
+                {
+                    "requestId": "req-python-response-limit",
+                    "sourceId": "broker-unit",
+                    "targetId": "python-response-limit",
+                    "method": "GET",
+                    "path": "/response-limit",
+                    "headers": {},
+                },
+                b"",
+            )
+        )
+
+        self.assertEqual(response.error["code"], "local-handler-failure")
+        self.assertIn("response body bytes exceed limit", response.error["message"].lower())
+
     def test_dispatch_routed_request_uses_latin1_response_header_decoding(self) -> None:
         async def app(scope, receive, send):
             await receive()
@@ -251,6 +313,64 @@ class ProtocolEnvelopeTest(unittest.TestCase):
 
 
 class LeaseTaskTest(unittest.TestCase):
+    def test_read_loop_does_not_ack_request_body_data_on_frame_receipt(self) -> None:
+        async def run() -> list[tuple[int, int]]:
+            event = h2.events.DataReceived(stream_id=1, data=b"body", flow_controlled_length=7)
+            guest = create_verser_guest(host_url="https://127.0.0.1:1", guest_id="ack-delay")
+            conn = FakeConn([event])
+            guest._conn = conn
+            guest._reader = FakeReader([b"frame-bytes", b""])
+            guest._events[1] = asyncio.Queue()
+            await guest._read_loop()
+            return conn.acknowledged
+
+        self.assertEqual(asyncio.run(run()), [])
+
+    def test_leased_receive_acks_body_data_after_asgi_consumes_event(self) -> None:
+        async def run() -> list[tuple[int, int]]:
+            first_receive_ready = asyncio.Event()
+            allow_first_receive = asyncio.Event()
+
+            async def app(scope, receive, send):
+                first_receive_ready.set()
+                await allow_first_receive.wait()
+                event = await receive()
+                self.assertEqual(event["body"], b"payload")
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+            envelope = encode_envelope(
+                "request",
+                {
+                    "requestId": "req-ack-after-receive",
+                    "sourceId": "broker-unit",
+                    "targetId": "ack-after-receive",
+                    "method": "POST",
+                    "path": "/ack",
+                    "headers": {},
+                },
+            )
+            guest = create_verser_guest(host_url="https://127.0.0.1:1", guest_id="ack-after-receive", app=app)
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=envelope + b"payload",
+                    flow_controlled_length=len(envelope) + len(b"payload"),
+                )
+            )
+            await first_receive_ready.wait()
+            self.assertEqual(conn.acknowledged, [])
+            allow_first_receive.set()
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await task
+            return conn.acknowledged
+
+        self.assertEqual(asyncio.run(run()), [(1, len(encode_envelope("request", {"requestId": "req-ack-after-receive", "sourceId": "broker-unit", "targetId": "ack-after-receive", "method": "POST", "path": "/ack", "headers": {}})) + len(b"payload"))])
+
     def test_completed_lease_tasks_are_pruned(self) -> None:
         async def run() -> int:
             guest = create_verser_guest(host_url="https://127.0.0.1:1", guest_id="task-prune")
