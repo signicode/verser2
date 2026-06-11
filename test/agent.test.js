@@ -310,3 +310,43 @@ test('Broker Agent resumes streamed responses after client-side backpressure', a
     await withTimeout(host.close('test-complete'), 'host-agent-backpressure-1 close');
   }
 });
+
+test('Broker Agent rejects oversized request headers before routing', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({
+    hostUrl,
+    brokerId: 'broker-agent-header-limit-1',
+    maxRequestHeaderBytes: 48,
+  });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-header-limit-1' });
+  let agent;
+  guest.attach((_request, response) => response.end('should-not-route'), 'header-limit.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-header-limit-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-header-limit-1 connect');
+    await withTimeout(
+      broker.waitForRoute('header-limit.local.test'),
+      'header-limit.local.test route',
+    );
+
+    agent = broker.createAgent();
+    await assert.rejects(
+      () =>
+        requestWithAgent('http://header-limit.local.test/oversized-header', {
+          agent,
+          headers: { 'x-large-header': 'x'.repeat(128) },
+        }),
+      /request header bytes exceed limit/i,
+    );
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-header-limit-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-header-limit-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-header-limit-1 close');
+  }
+});

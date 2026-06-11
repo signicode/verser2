@@ -94,7 +94,7 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   public createAgent(): http.Agent {
-    return new VerserBrokerAgent(this);
+    return new VerserBrokerAgent(this, this.options);
   }
 
   public createDispatcher(): Dispatcher {

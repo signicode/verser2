@@ -267,6 +267,32 @@ test('Node Guest preserves binary and encoded response chunks', async () => {
   assert.deepEqual(result.body, Buffer.from([0, 1, 2, 255, 104, 105]));
 });
 
+test('Node Guest rejects oversized buffered direct-dispatch responses', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-node-response-limit',
+    maxResponseBytes: 4,
+  });
+  guest.attach((_request, response) => {
+    response.write('abcd');
+    response.end('e');
+  });
+
+  await assert.rejects(
+    () =>
+      guest.dispatchRoutedRequest({
+        requestId: 'req-node-response-limit',
+        sourceId: 'broker-1',
+        targetId: 'guest-node-response-limit',
+        method: 'GET',
+        path: '/response-limit',
+        headers: {},
+        body: [],
+      }),
+    /response body bytes exceed limit/i,
+  );
+});
+
 test('Node Guest maps failed Host registration to an actionable error', async () => {
   const host = createHost({ port: 0 });
   await host.start();

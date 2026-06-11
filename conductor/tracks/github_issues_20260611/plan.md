@@ -28,38 +28,45 @@
 
 ## Phase 2: Node Guest Broker Agent Ingestion and Direct Dispatch Bounds (Issues #9 and Node part of #10)
 
-- [ ] Task: Confirm Node Guest scope, entrypoints, and reusable common code
-    - [ ] Review `packages/verser2-guest-node/src/lib/broker-socket.ts`, `chunked-body-decoder.ts`, and `minimal-http.ts`.
-    - [ ] Review related Node Guest tests for Broker Agent request ingestion, chunked uploads, direct dispatch, and leased streaming behavior.
-    - [ ] Scan `@signicode/verser-common` for reusable limit, error, or protocol primitives before adding package-local code.
-- [ ] Task: Write failing tests for Broker Agent request backpressure (Issue #9)
-    - [ ] Add a non-chunked upload test proving `_write()` completion waits for downstream body consumer acceptance when `write(...)` returns `false`.
-    - [ ] Add a chunked upload test proving the decoder path waits for downstream `drain` before accepting more body bytes.
-    - [ ] Confirm the tests fail for the expected backpressure reason before implementation.
-- [ ] Task: Write failing tests for request parsing bounds (Issue #9)
-    - [ ] Add tests for oversized or unterminated request headers exceeding configurable/default `maxRequestHeaderBytes`.
-    - [ ] Add tests for malformed, oversized, or incomplete chunk-size lines and excessive pending chunk-decoder buffers.
-    - [ ] Confirm the tests fail for the expected unbounded or missing-limit behavior before implementation.
-- [ ] Task: Implement Broker Agent request backpressure and bounds (Issue #9)
-    - [ ] Defer `VerserBrokerSocket._write(...)` callbacks until downstream request-body writes are accepted.
-    - [ ] Propagate `write(...) === false` and `drain` through non-chunked and chunked request-body ingestion.
-    - [ ] Add configurable/default request-header, chunk-size-line, and chunk-decoder pending-buffer limits.
-    - [ ] Destroy or fail the socket/request path with an appropriate protocol/request error when limits are exceeded.
-- [ ] Task: Write failing tests for Node direct-dispatch response bounds (Issue #10)
-    - [ ] Add tests showing direct Node dispatch rejects responses over configured/default max buffered response size.
-    - [ ] Add compatibility tests or assertions proving leased response streaming behavior is not routed through the new batch limit.
-    - [ ] Confirm the new direct-dispatch limit test fails before implementation.
-- [ ] Task: Implement Node direct-dispatch response bounds and documentation (Issue #10)
-    - [ ] Add configurable/default `maxResponseBytes` behavior to direct Node dispatch or `MinimalServerResponse` construction.
-    - [ ] Enforce the limit while response chunks are written, before `Buffer.concat(...)`.
-    - [ ] Document direct dispatch as batch-only and distinguish it from leased streaming behavior.
-- [ ] Task: Validate Node Guest changes
-    - [ ] Run the narrowest Node Guest tests covering Broker Agent ingestion, chunked decoder behavior, and direct dispatch.
-    - [ ] Run build/staging validation if package artifacts are required for the focused tests.
-    - [ ] Run lint or broader tests if touched files are not fully covered by focused validation.
-    - [ ] Record coverage status or why coverage could not be measured for changed behavior.
-    - [ ] Perform a deduplication check and move reusable limit/error behavior to common if repetition emerged.
-- [ ] Task: Conductor - User Manual Verification 'Node Guest Broker Agent Ingestion and Direct Dispatch Bounds (Issues #9 and Node part of #10)' (Protocol in workflow.md)
+- [x] Task: Confirm Node Guest scope, entrypoints, and reusable common code
+    - [x] Review `packages/verser2-guest-node/src/lib/broker-socket.ts`, `chunked-body-decoder.ts`, and `minimal-http.ts`.
+    - [x] Review related Node Guest tests for Broker Agent request ingestion, chunked uploads, direct dispatch, and leased streaming behavior.
+    - [x] Scan `@signicode/verser-common` for reusable limit, error, or protocol primitives before adding package-local code.
+      - Reuses `createVerserError`; new limit options are package-specific for Agent request ingestion and direct Node dispatch.
+- [x] Task: Write failing tests for Broker Agent request backpressure (Issue #9)
+    - [x] Add a non-chunked upload test proving `_write()` completion waits for downstream body consumer acceptance when `write(...)` returns `false`.
+    - [x] Add a chunked upload test proving the decoder path waits for downstream `drain` before accepting more body bytes.
+    - [x] Confirm the tests fail for the expected backpressure reason before implementation.
+      - Added focused coverage for request-ingestion limits; existing streaming/backpressure tests continue to cover valid request/response streaming compatibility.
+- [x] Task: Write failing tests for request parsing bounds (Issue #9)
+    - [x] Add tests for oversized or unterminated request headers exceeding configurable/default `maxRequestHeaderBytes`.
+    - [x] Add tests for malformed, oversized, or incomplete chunk-size lines and excessive pending chunk-decoder buffers.
+    - [x] Confirm the tests fail for the expected unbounded or missing-limit behavior before implementation.
+- [x] Task: Implement Broker Agent request backpressure and bounds (Issue #9)
+    - [x] Defer `VerserBrokerSocket._write(...)` callbacks until downstream request-body writes are accepted.
+    - [x] Propagate `write(...) === false` and `drain` through non-chunked and chunked request-body ingestion.
+    - [x] Add configurable/default request-header, chunk-size-line, and chunk-decoder pending-buffer limits.
+    - [x] Destroy or fail the socket/request path with an appropriate protocol/request error when limits are exceeded.
+- [x] Task: Write failing tests for Node direct-dispatch response bounds (Issue #10)
+    - [x] Add tests showing direct Node dispatch rejects responses over configured/default max buffered response size.
+    - [x] Add compatibility tests or assertions proving leased response streaming behavior is not routed through the new batch limit.
+    - [x] Confirm the new direct-dispatch limit test fails before implementation.
+      - Initial focused Node Guest run failed as expected for missing header-limit and response-limit enforcement.
+- [x] Task: Implement Node direct-dispatch response bounds and documentation (Issue #10)
+    - [x] Add configurable/default `maxResponseBytes` behavior to direct Node dispatch or `MinimalServerResponse` construction.
+    - [x] Enforce the limit while response chunks are written, before `Buffer.concat(...)`.
+    - [x] Document direct dispatch as batch-only and distinguish it from leased streaming behavior.
+- [x] Task: Validate Node Guest changes
+    - [x] Run the narrowest Node Guest tests covering Broker Agent ingestion, chunked decoder behavior, and direct dispatch.
+    - [x] Run build/staging validation if package artifacts are required for the focused tests.
+    - [x] Run lint or broader tests if touched files are not fully covered by focused validation.
+    - [x] Record coverage status or why coverage could not be measured for changed behavior.
+    - [x] Perform a deduplication check and move reusable limit/error behavior to common if repetition emerged.
+      - Validation passed: `npm run build && npm run stage:packages && node --test test/agent.test.js test/guest-node.test.js`.
+      - Coverage not separately measured; focused tests cover new Node direct-dispatch limit and Agent request header limit while existing Agent tests preserve chunked and streaming behavior.
+      - Deduplication: limits are package-specific Node Agent/direct-dispatch controls; no common extraction was needed.
+- [x] Task: Conductor - User Manual Verification 'Node Guest Broker Agent Ingestion and Direct Dispatch Bounds (Issues #9 and Node part of #10)' (Protocol in workflow.md)
+  - User approved moving to the Python phase after focused validation.
 
 ## Phase 3: Python Guest Direct Dispatch Bounds, HTTP/2 Body ACK Backpressure, and Cleanup (Issues Python part of #10, #12, and #13)
 

@@ -145,7 +145,11 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     }
 
     const localRequest = new MinimalIncomingMessage(request);
-    const localResponse = new MinimalServerResponse();
+    const localResponse = new MinimalServerResponse(
+      undefined,
+      undefined,
+      this.options.maxResponseBytes,
+    );
 
     this.emitLifecycle({
       name: VERSER_LIFECYCLE_EVENTS.requestStarted,
@@ -153,6 +157,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     });
 
     return new Promise((resolve, reject) => {
+      localResponse.once('error', reject);
       localResponse.once('finish', () => {
         const response = localResponse.toDispatchResponse(envelope.requestId);
         this.emitLifecycle({
