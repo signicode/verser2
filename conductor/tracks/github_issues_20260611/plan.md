@@ -2,23 +2,28 @@
 
 ## Phase 1: Common Envelope Parser Bounds (Issue #11)
 
-- [ ] Task: Confirm common package scope and reusable primitives
-    - [ ] Review `packages/verser-common/src/lib/envelope.ts` and existing envelope/parser tests.
-    - [ ] Confirm existing protocol-error helpers and metadata limit behavior to reuse for oversized pending parser input.
-    - [ ] Record whether any new constants or helpers should be exported from `@signicode/verser-common`.
-- [ ] Task: Write failing tests for bounded pending parser input
-    - [ ] Add focused tests for repeated small chunks that exceed `VERSER_ENVELOPE_PREFIX_BYTES + maxMetadataBytes` before a complete envelope is available.
-    - [ ] Add or preserve tests proving valid split-envelope parsing still works.
-    - [ ] Run the narrowest relevant test command and confirm the new bounded-pending-input test fails for the expected reason.
-- [ ] Task: Implement parser pending-buffer limit
-    - [ ] Update `createVerserEnvelopeParser(...)` to reject pending input beyond the maximum valid envelope size.
-    - [ ] Surface an error consistent with existing oversized metadata protocol-error behavior.
-    - [ ] Keep stream-reader paths and valid envelope parsing behavior compatible.
-- [ ] Task: Validate common package change
-    - [ ] Run the narrowest focused validation for common envelope tests.
-    - [ ] Run broader build or test validation if the focused command does not cover package integration.
-    - [ ] Record coverage status or why coverage could not be measured for changed behavior.
-- [ ] Task: Conductor - User Manual Verification 'Common Envelope Parser Bounds (Issue #11)' (Protocol in workflow.md)
+- [x] Task: Confirm common package scope and reusable primitives
+    - [x] Review `packages/verser-common/src/lib/envelope.ts` and existing envelope/parser tests.
+    - [x] Confirm existing protocol-error helpers and metadata limit behavior to reuse for oversized pending parser input.
+    - [x] Record whether any new constants or helpers should be exported from `@signicode/verser-common`.
+      - No new exports are needed; reuse existing constants and `protocol-error` behavior.
+- [x] Task: Write failing tests for bounded pending parser input
+    - [x] Add focused tests for repeated small chunks that exceed `VERSER_ENVELOPE_PREFIX_BYTES + maxMetadataBytes` before a complete envelope is available.
+    - [x] Add or preserve tests proving valid split-envelope parsing still works.
+    - [x] Run the narrowest relevant test command and confirm the new bounded-pending-input test fails for the expected reason.
+      - Initial focused run failed as expected before implementation: `node --test test/common-envelope.test.js` reported the new pending-input test failing.
+- [x] Task: Implement parser pending-buffer limit
+    - [x] Update `createVerserEnvelopeParser(...)` to reject pending input beyond the maximum valid envelope size.
+    - [x] Surface an error consistent with existing oversized metadata protocol-error behavior.
+    - [x] Keep stream-reader paths and valid envelope parsing behavior compatible.
+- [x] Task: Validate common package change
+    - [x] Run the narrowest focused validation for common envelope tests.
+    - [x] Run broader build or test validation if the focused command does not cover package integration.
+    - [x] Record coverage status or why coverage could not be measured for changed behavior.
+      - Validation passed: `npm run build && npm run stage:packages && node --test test/common-envelope.test.js`.
+      - Coverage not separately measured; focused tests cover the changed parser branch and split-envelope regression.
+- [x] Task: Conductor - User Manual Verification 'Common Envelope Parser Bounds (Issue #11)' (Protocol in workflow.md)
+  - User approved moving to the next phase after focused validation.
 
 ## Phase 2: Node Guest Broker Agent Ingestion and Direct Dispatch Bounds (Issues #9 and Node part of #10)
 

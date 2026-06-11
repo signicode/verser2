@@ -101,6 +101,36 @@ test('shared envelope parser rejects invalid envelopes with contextual errors', 
   );
 });
 
+test('shared envelope parser rejects pending input beyond the maximum valid envelope size', () => {
+  const envelope = common.encodeVerserEnvelope({
+    type: 'response',
+    metadata: { requestId: 'req-parser-bound-1', statusCode: 200, headers: {} },
+  });
+  const parser = common.createVerserEnvelopeParser({ maxMetadataBytes: envelope.length - 6 });
+
+  assert.throws(
+    () => parser.push(Buffer.concat([envelope.subarray(0, envelope.length - 1), Buffer.from('extra')])),
+    /metadata length exceeds limit|pending envelope input exceeds limit/i,
+  );
+});
+
+test('shared envelope parser accepts valid split envelopes at the pending input boundary', () => {
+  const envelope = common.encodeVerserEnvelope({
+    type: 'response',
+    metadata: { requestId: 'req-parser-bound-2', statusCode: 204, headers: {} },
+  });
+  const parser = common.createVerserEnvelopeParser({ maxMetadataBytes: envelope.length - 6 });
+
+  assert.equal(parser.push(envelope.subarray(0, 1)), undefined);
+  assert.equal(parser.push(envelope.subarray(1, envelope.length - 1)), undefined);
+
+  const parsed = parser.push(envelope.subarray(envelope.length - 1));
+
+  assert.equal(parsed.type, 'response');
+  assert.equal(parsed.metadata.requestId, 'req-parser-bound-2');
+  assert.equal(parsed.bodyRemainder.length, 0);
+});
+
 test('shared metadata validation rejects invalid and forbidden headers', () => {
   const headers = common.validateVerserHeaders({
     'content-type': 'text/plain',
