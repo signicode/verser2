@@ -24,6 +24,7 @@
       - Coverage not separately measured; focused tests cover the changed parser branch and split-envelope regression.
 - [x] Task: Conductor - User Manual Verification 'Common Envelope Parser Bounds (Issue #11)' (Protocol in workflow.md)
   - User approved moving to the next phase after focused validation.
+  - Phase checkpoint commit: `1f62b98`.
 
 ## Phase 2: Node Guest Broker Agent Ingestion and Direct Dispatch Bounds (Issues #9 and Node part of #10)
 
