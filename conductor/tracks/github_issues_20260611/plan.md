@@ -114,17 +114,21 @@
 
 ## Phase 4: Cross-Package Final Validation and GitHub Issue Handoff
 
-- [ ] Task: Confirm specification coverage across all GitHub issues
-    - [ ] Check each acceptance criterion from issues #9, #10, #11, #12, and #13 against implemented tests and code.
-    - [ ] Confirm direct batch dispatch and leased streaming documentation is consistent across Node and Python.
-    - [ ] Confirm no unrelated HTTP/3, authentication, authorization, or new-runtime behavior was introduced.
-- [ ] Task: Run final narrow-to-broad validation
-    - [ ] Run focused tests for all changed areas if not already run after final edits.
-    - [ ] Run `npm run build` if package build artifacts or TypeScript integration changed.
-    - [ ] Run `npm run lint` for code style validation.
-    - [ ] Run `npm run test` when needed to prove integrated Host/Guest/Broker behavior.
-- [ ] Task: Update Conductor and handoff notes
-    - [ ] Update `plan.md` task statuses and record validation outcomes.
-    - [ ] Note any GitHub issues that should be closed or commented on manually after PR review.
-    - [ ] Prepare a concise implementation summary with validation results and residual risks.
-- [ ] Task: Conductor - User Manual Verification 'Cross-Package Final Validation and GitHub Issue Handoff' (Protocol in workflow.md)
+- [x] Task: Confirm specification coverage across all GitHub issues
+    - [x] Check each acceptance criterion from issues #9, #10, #11, #12, and #13 against implemented tests and code.
+    - [x] Confirm direct batch dispatch and leased streaming documentation is consistent across Node and Python.
+    - [x] Confirm no unrelated HTTP/3, authentication, authorization, or new-runtime behavior was introduced.
+- [x] Task: Run final narrow-to-broad validation
+    - [x] Run focused tests for all changed areas if not already run after final edits.
+    - [x] Run `npm run build` if package build artifacts or TypeScript integration changed.
+    - [x] Run `npm run lint` for code style validation.
+    - [x] Run `npm run test` when needed to prove integrated Host/Guest/Broker behavior.
+      - Final validation passed: `npm run build`, `npm run lint`, `npm test`, and earlier `npm run test --workspace=@signicode/verser2-guest-python`.
+- [x] Task: Update Conductor and handoff notes
+    - [x] Update `plan.md` task statuses and record validation outcomes.
+    - [x] Note any GitHub issues that should be closed or commented on manually after PR review.
+    - [x] Prepare a concise implementation summary with validation results and residual risks.
+      - GitHub issues #9, #10, #11, #12, and #13 are implemented in this branch and can be closed after PR review/merge.
+      - Residual risk: coverage percentage was not separately measured; changed behavior is covered by focused tests and full test/lint validation.
+- [x] Task: Conductor - User Manual Verification 'Cross-Package Final Validation and GitHub Issue Handoff' (Protocol in workflow.md)
+  - User approved completing the track after final validation.

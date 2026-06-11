@@ -47,7 +47,11 @@ export class MinimalServerResponse extends EventEmitter {
 
   private responseStarted = false;
 
-  public constructor(requestId?: string, output?: http2.ClientHttp2Stream, maxResponseBytes = 10 * 1024 * 1024) {
+  public constructor(
+    requestId?: string,
+    output?: http2.ClientHttp2Stream,
+    maxResponseBytes = 10 * 1024 * 1024,
+  ) {
     super();
     this.requestId = requestId;
     this.output = output;
@@ -85,10 +89,14 @@ export class MinimalServerResponse extends EventEmitter {
     if (this.output === undefined) {
       this.bufferedResponseBytes += buffer.length;
       if (this.bufferedResponseBytes > this.maxResponseBytes) {
-        const error = createVerserError('local-handler-failure', 'Response body bytes exceed limit', {
-          responseBytes: this.bufferedResponseBytes,
-          maxResponseBytes: this.maxResponseBytes,
-        });
+        const error = createVerserError(
+          'local-handler-failure',
+          'Response body bytes exceed limit',
+          {
+            responseBytes: this.bufferedResponseBytes,
+            maxResponseBytes: this.maxResponseBytes,
+          },
+        );
         this.emit('error', error);
         throw error;
       }
