@@ -67,6 +67,7 @@
       - Deduplication: limits are package-specific Node Agent/direct-dispatch controls; no common extraction was needed.
 - [x] Task: Conductor - User Manual Verification 'Node Guest Broker Agent Ingestion and Direct Dispatch Bounds (Issues #9 and Node part of #10)' (Protocol in workflow.md)
   - User approved moving to the Python phase after focused validation.
+  - Phase checkpoint commit: `f65c177`.
 
 ## Phase 3: Python Guest Direct Dispatch Bounds, HTTP/2 Body ACK Backpressure, and Cleanup (Issues Python part of #10, #12, and #13)
 
