@@ -110,6 +110,7 @@
       - Deduplication: Python-specific direct-dispatch and flow-control behavior was implemented locally; common extraction is intentionally deferred.
 - [x] Task: Conductor - User Manual Verification 'Python Guest Direct Dispatch Bounds, HTTP/2 Body ACK Backpressure, and Cleanup (Issues Python part of #10, #12, and #13)' (Protocol in workflow.md)
   - User approved moving to final validation after focused Python package validation.
+  - Phase checkpoint commit: `14ebec4`.
 
 ## Phase 4: Cross-Package Final Validation and GitHub Issue Handoff
 
