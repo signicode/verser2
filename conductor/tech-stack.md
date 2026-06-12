@@ -9,12 +9,12 @@ Implemented package targets:
 - `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, certificate fingerprint helpers, certificate identity extraction, mTLS registration authorization types, and TLS option normalization helpers for Verser packages.
 - `@signicode/verser2-host` in `packages/verser2-host`: Configurable TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, optional mTLS client certificate enforcement, registration authorization callback support, routed-domain advertisements, route cleanup, certificate reload support, and Broker request forwarding.
 - `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, configurable Host TLS trust, configurable PEM/PFX client certificate identities, and minimal plain `node:http` Agent implementation.
+- `@signicode/verser2-guest-bun` in `packages/verser2-guest-bun`: Bun Guest and Bun-facing Broker APIs compatible with Bun/Fetch handlers and local Bun-style routes, reusing the existing JavaScript/Node transport for outbound TLS HTTP/2 Host connectivity, route advertisement, lifecycle, Agent, Dispatcher, fetch, and mTLS behavior.
 - `@signicode/verser2-guest-python` in `packages/verser2-guest-python`: Python ASGI Guest and async Broker implementation using `uv` for Python package commands, `h2` for outbound TLS HTTP/2 Guest/Broker transport, and `cryptography` for Python Broker PFX/PKCS12 client identity loading.
 
 Future package targets:
 
 - `packages/verser2-guest-browser`: Browser Guest library using Fetch API concepts.
-- `packages/verser2-guest-bun`: Bun Guest library compatible with `Bun.serve` concepts.
 - `packages/verser2-guest-rust`: Rust Guest library with Hyper compatibility goals.
 - `packages/verser2-guest-go`: Go Guest library compatible with `net/http` concepts.
 - `packages/verser2-guest-java`: Java Guest library using `net.httpserver` or similar concepts.
@@ -33,6 +33,7 @@ Future package targets:
 - Node.js `node:http2` for the current TLS HTTP/2 Host, Guest, and Broker transport.
 - Node.js TLS client certificate and PFX/PKCS12 support for optional mTLS on the Host/Guest/Broker HTTP/2 transport.
 - Shared TypeScript package code through `@signicode/verser-common`.
+- Bun `Request`, `Response`, `ReadableStream`, and route-table concepts for the Bun Guest adapter, with WebSocket forwarding explicitly deferred.
 - Python `asyncio` plus `h2` for the Python ASGI Guest outbound TLS HTTP/2 transport.
 - HTTP/3 behavior only when introduced by explicit future tracks.
 
@@ -69,6 +70,6 @@ Future package targets:
 
 ## Exclusions for Initial MVP
 
-- Non-TypeScript guest packages are roadmap items, not blockers for the first implementation track.
+- Browser, Rust, Go, and Java guest packages are roadmap items, not blockers for the current implemented package set.
 - Database drivers are not part of the currently inferred stack.
 - Frontend framework dependencies are not part of the currently inferred stack.
