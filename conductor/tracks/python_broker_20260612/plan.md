@@ -70,6 +70,7 @@ Phase 1 checkpoint notes:
 
 Phase 2 checkpoint notes:
 
+- Phase checkpoint commit: `8390464`.
 - Common/reuse scan: Phase 2 adapted Python Guest HTTP/2 setup/read/write patterns and Node Broker registration/route-table replacement behavior. No shared TypeScript common code was changed because this phase is Python runtime-specific.
 - Deduplication check: Broker HTTP/2 helpers are currently package-local and mirror the existing Python Guest implementation; extraction is deferred until later phases reveal stable reuse between Guest and Broker request streaming paths.
 - Validation: `npm run lint --workspace=@signicode/verser2-guest-python` passed. `npm test --workspace=@signicode/verser2-guest-python` passed.
