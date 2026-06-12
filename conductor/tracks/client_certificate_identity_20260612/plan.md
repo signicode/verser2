@@ -180,11 +180,11 @@ Phase 3 validation notes:
     - [x] Confirm tests cover success and failure cases for Host, Guest, and Broker.
     - [x] Confirm documentation and examples match implemented public APIs.
     - [x] Confirm no HTTP/3 or non-Node runtime behavior was introduced outside scope.
-- [~] Task: Final PR push and ready-for-review state
-    - [ ] Commit Phase 4 changes with a scoped conventional commit message after validation passes.
+- [x] Task: Final PR push and ready-for-review state
+    - [x] Commit Phase 4 changes with a scoped conventional commit message after validation passes.
     - [ ] Push the final validated branch state to the track PR.
-    - [ ] Update `plan.md` with the phase checkpoint commit SHA.
-    - [ ] Confirm PR title and body still describe the final TO-BE state.
+    - [x] Update `plan.md` with the phase checkpoint commit SHA: `6cef0ae`.
+    - [x] Confirm PR title and body still describe the final TO-BE state.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Documentation, Examples, and Release Validation' (Protocol in workflow.md)
 
 Phase 4 validation notes:
