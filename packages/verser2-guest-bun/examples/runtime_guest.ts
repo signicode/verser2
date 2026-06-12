@@ -1,10 +1,15 @@
 import { Readable } from 'node:stream';
 import { createVerserBroker, createVerserBunGuest } from '../src/index';
+import type { VerserBunGuestOptions } from '../src/index';
 
 const hostUrl = process.env.VERSER_HOST_URL;
 const guestId = process.env.VERSER_GUEST_ID;
 const guestDomain = process.env.VERSER_GUEST_DOMAIN;
 const tlsCaFile = process.env.VERSER_TLS_CA_FILE;
+const tlsCertFile = process.env.VERSER_TLS_CERT_FILE;
+const tlsKeyFile = process.env.VERSER_TLS_KEY_FILE;
+const tlsPfxFile = process.env.VERSER_TLS_PFX_FILE;
+const tlsPassphrase = process.env.VERSER_TLS_PASSPHRASE;
 
 if (!hostUrl || !guestId || !guestDomain || !tlsCaFile) {
   throw new Error('Missing required Bun guest runtime env vars');
@@ -14,13 +19,23 @@ const resolvedHostUrl = hostUrl;
 const resolvedGuestId = guestId;
 const resolvedGuestDomain = guestDomain;
 const resolvedTlsCaFile = tlsCaFile;
+const tlsOptions: NonNullable<VerserBunGuestOptions['tls']> = tlsPfxFile
+  ? {
+      caFile: resolvedTlsCaFile,
+      pfxFile: tlsPfxFile,
+      ...(tlsPassphrase ? { passphrase: tlsPassphrase } : {}),
+    }
+  : {
+      caFile: resolvedTlsCaFile,
+      ...(tlsCertFile ? { certFile: tlsCertFile } : {}),
+      ...(tlsKeyFile ? { keyFile: tlsKeyFile } : {}),
+      ...(tlsPassphrase ? { passphrase: tlsPassphrase } : {}),
+    };
 
 const guest = createVerserBunGuest({
   hostUrl: resolvedHostUrl,
   guestId: resolvedGuestId,
-  tls: {
-    caFile: resolvedTlsCaFile,
-  },
+  tls: tlsOptions,
 });
 
 guest.attach(
@@ -143,9 +158,7 @@ guest.attach(
 const bunBroker = createVerserBroker({
   hostUrl: resolvedHostUrl,
   brokerId: 'bun-runtime-self-check',
-  tls: {
-    caFile: resolvedTlsCaFile,
-  },
+  tls: tlsOptions,
 });
 
 const selfCheckTimeoutMs = 15_000;
