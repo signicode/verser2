@@ -185,7 +185,7 @@ Phase 3 validation notes:
     - [x] Push the final validated branch state to the track PR.
     - [x] Update `plan.md` with the phase checkpoint commit SHA: `6cef0ae`.
     - [x] Confirm PR title and body still describe the final TO-BE state.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Documentation, Examples, and Release Validation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Documentation, Examples, and Release Validation' (Protocol in workflow.md)
 
 Phase 4 validation notes:
 - Documentation updated in `README.md` and `docs/ssl-certificate-generation.md` for Host `tls.clientAuth`, Guest/Broker PEM client identities, PFX/PKCS12 identities, callback context/action shape, Guest routed-domain policy, Broker identity-only policy, local HTTP/1 handler boundaries, and reload/restart behavior.
@@ -194,3 +194,4 @@ Phase 4 validation notes:
 - Full test suite passed 186/186 tests. Numeric coverage reporting is not configured; changed behavior is covered by focused common TLS tests, TLS runtime integration tests, registration authorization tests, and the full repository suite.
 - Final deduplication: reusable TLS normalization and certificate identity extraction remain centralized in `@signicode/verser-common`; Host/Guest/Broker code uses thin adapters.
 - Scope review: implementation stays within Node Host/Guest/Broker TLS HTTP/2 transport and does not add HTTP/3 or non-Node runtime mTLS behavior.
+- Final manual verification was approved by user instruction to complete the plan.
