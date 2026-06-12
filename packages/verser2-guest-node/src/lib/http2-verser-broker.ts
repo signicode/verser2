@@ -199,24 +199,29 @@ export class Http2VerserBroker implements VerserBroker {
     stream: http2.ClientHttp2Stream,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
+      let unregister = (): void => {};
       const cleanup = (): void => {
         unregister();
-        stream.off('error', reject);
+        stream.off('error', rejectWithCleanup);
         stream.off('close', rejectOnClose);
-        session.off('error', reject);
+        session.off('error', rejectWithCleanup);
         session.off('close', rejectOnClose);
+      };
+      const rejectWithCleanup = (error: Error): void => {
+        cleanup();
+        reject(error);
       };
       const rejectOnClose = (): void => {
         cleanup();
         reject(createVerserError('invalid-registration', 'Broker registration stream closed'));
       };
-      const unregister = this.waitForFrame(() => {
+      unregister = this.waitForFrame(() => {
         cleanup();
         resolve();
       });
-      stream.once('error', reject);
+      stream.once('error', rejectWithCleanup);
       stream.once('close', rejectOnClose);
-      session.once('error', reject);
+      session.once('error', rejectWithCleanup);
       session.once('close', rejectOnClose);
     });
   }

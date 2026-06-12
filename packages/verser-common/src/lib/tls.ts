@@ -16,7 +16,7 @@ export function normalizeServerTlsOptions(options?: VerserHostTlsOptions): {
 } {
   if (options === undefined) {
     throw new Error(
-      'Host TLS options are required under `tls` with `cert`/`key` or `certFile`/`keyFile`.',
+      'Host TLS options are required under `tls` with `cert`/`key`, `certFile`/`keyFile`, `pfx`, or `pfxFile`.',
     );
   }
 
