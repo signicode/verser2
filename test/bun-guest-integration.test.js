@@ -5,7 +5,7 @@ const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
-const { trusted } = require('./support/tls-fixtures.cjs');
+const { trusted, clientCa, trustedClient } = require('./support/tls-fixtures.cjs');
 const { terminateChildProcess } = require('./support/child-process.cjs');
 
 const { createVerserBroker } = loadVerserGuestNode();
@@ -364,6 +364,50 @@ test(
       await withTimeout(terminateChildProcess(guestProcess), 'Bun guest terminate');
       await closeWithTimeout(broker, 'Bun broker close');
       await closeWithTimeout(host, 'Bun host close');
+    }
+  },
+);
+
+test(
+  'Bun runtime Guest and Bun package Broker connect through mTLS Host',
+  {
+    skip: hasBun() ? false : 'Skipping Bun Guest mTLS integration because bun is not installed.',
+    timeout: 60_000,
+  },
+  async () => {
+    const host = createHost({
+      port: 0,
+      tls: {
+        clientAuth: { ca: clientCa.certificate },
+      },
+    });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const guestProcess = spawn('bun', [bunGuestExamplePath], {
+      cwd: rootDirectory,
+      env: {
+        ...process.env,
+        VERSER_HOST_URL: hostUrl,
+        VERSER_TLS_CA_FILE: trusted.certificatePath,
+        VERSER_TLS_CERT_FILE: trustedClient.certificatePath,
+        VERSER_TLS_KEY_FILE: trustedClient.keyPath,
+        VERSER_GUEST_ID: 'guest-bun-mtls-runtime',
+        VERSER_GUEST_DOMAIN: 'bun-mtls-runtime.local.test',
+      },
+    });
+
+    try {
+      await withTimeout(
+        waitForProcessOutput(
+          guestProcess,
+          /bun broker self-check ready/i,
+          'Bun mTLS runtime guest startup',
+        ),
+        'Bun mTLS runtime guest startup',
+      );
+    } finally {
+      await withTimeout(terminateChildProcess(guestProcess), 'Bun mTLS Guest termination');
+      await closeWithTimeout(host, 'Bun mTLS Host close');
     }
   },
 );

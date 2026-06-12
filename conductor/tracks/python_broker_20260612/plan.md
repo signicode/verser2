@@ -123,34 +123,42 @@ Phase 3 checkpoint notes:
 
 ## Phase 4: TLS, mTLS, and registration authorization coverage
 
-- [~] Task: Write failing Python Broker TLS/mTLS tests first
-    - [ ] Add tests proving trusted Host CA configuration works.
-    - [ ] Add tests proving trusted PEM client identity works with Host `tls.clientAuth`.
-    - [ ] Add tests proving trusted PFX/PKCS12 client identity with passphrase works with Host `tls.clientAuth`.
-    - [ ] Add tests proving Host `tls.clientAuth` rejects a Python Broker without required client identity.
-    - [ ] Add tests proving Host `tls.clientAuth` rejects a Python Broker with untrusted client identity.
-    - [ ] Add tests proving `authorizeRegistration` receives Python Broker peer id, role `broker`, and certificate identity.
-    - [ ] Add tests for actionable TLS handshake failure errors.
-- [ ] Task: Implement Python TLS and mTLS identity support
-    - [ ] Implement Host CA trust options.
-    - [ ] Implement PEM certificate, key, and encrypted-key password handling.
-    - [ ] Implement PFX/PKCS12 identity loading and passphrase handling, adding a Python dependency only if required and documenting it in `pyproject.toml` and `tech-stack.md`.
-    - [ ] Ensure HTTP/2 ALPN negotiation is required and failures are actionable.
-    - [ ] Keep mTLS as transport/registration identity only; do not add per-request authorization.
-- [ ] Task: Write failing Bun mTLS parity tests first
-    - [ ] Add direct Bun runtime coverage for the Bun Guest public API connecting through a Host with `tls.clientAuth`.
-    - [ ] Add direct Bun runtime coverage for the Bun Broker public API connecting through a Host with `tls.clientAuth`.
-    - [ ] Ensure tests cover trusted client identity and use the Bun package public API, not only underlying Node package APIs.
-- [ ] Task: Implement or adjust Bun mTLS public API support as needed
-    - [ ] Review `packages/verser2-guest-bun` for current public API surface and implementation gaps.
-    - [ ] Reuse Node/common TLS identity support where appropriate.
-    - [ ] Keep Bun test coverage scoped to mTLS parity required by this track.
-- [ ] Task: Validate Phase 4 narrowly
-    - [ ] Run focused TLS/mTLS tests for Python Broker.
-    - [ ] Run focused Bun mTLS integration tests.
-    - [ ] Run focused Host registration authorization tests if touched.
-    - [ ] Record coverage status and any environment prerequisites for Bun runtime validation.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: TLS, mTLS, and registration authorization coverage' (Protocol in workflow.md)
+- [x] Task: Write failing Python Broker TLS/mTLS tests first
+    - [x] Add tests proving trusted Host CA configuration works.
+    - [x] Add tests proving trusted PEM client identity works with Host `tls.clientAuth`.
+    - [x] Add tests proving trusted PFX/PKCS12 client identity with passphrase works with Host `tls.clientAuth`.
+    - [x] Add tests proving Host `tls.clientAuth` rejects a Python Broker without required client identity.
+    - [x] Add tests proving Host `tls.clientAuth` rejects a Python Broker with untrusted client identity.
+    - [x] Add tests proving `authorizeRegistration` receives Python Broker peer id, role `broker`, and certificate identity.
+    - [x] Add tests for actionable TLS handshake failure errors. Focused red test command used safely: `ulimit -v 524288 && timeout 20s uv run --project . python -m unittest tests.test_broker_api.VerserBrokerTlsConfigTest -v`; initial expected failures covered missing PEM/PFX/ALPN/TLS-handshake behavior.
+- [x] Task: Implement Python TLS and mTLS identity support
+    - [x] Implement Host CA trust options.
+    - [x] Implement PEM certificate, key, and encrypted-key password handling.
+    - [x] Implement PFX/PKCS12 identity loading and passphrase handling, adding a Python dependency only if required and documenting it in `pyproject.toml` and `tech-stack.md`.
+    - [x] Ensure HTTP/2 ALPN negotiation is required and failures are actionable.
+    - [x] Keep mTLS as transport/registration identity only; do not add per-request authorization.
+- [x] Task: Write failing Bun mTLS parity tests first
+    - [x] Add direct Bun runtime coverage for the Bun Guest public API connecting through a Host with `tls.clientAuth`.
+    - [x] Add direct Bun runtime coverage for the Bun Broker public API connecting through a Host with `tls.clientAuth`.
+    - [x] Ensure tests cover trusted client identity and use the Bun package public API, not only underlying Node package APIs.
+- [x] Task: Implement or adjust Bun mTLS public API support as needed
+    - [x] Review `packages/verser2-guest-bun` for current public API surface and implementation gaps.
+    - [x] Reuse Node/common TLS identity support where appropriate.
+    - [x] Keep Bun test coverage scoped to mTLS parity required by this track.
+- [x] Task: Validate Phase 4 narrowly
+    - [x] Run focused TLS/mTLS tests for Python Broker. Command: `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 30s npm test --workspace=@signicode/verser2-guest-python` passed with 47 tests.
+    - [x] Run focused Bun mTLS integration tests. Command: `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 90s node --test test/bun-guest-integration.test.js` passed, including direct Bun Guest/Broker mTLS runtime coverage.
+    - [x] Run focused Host registration authorization tests if touched. Command: `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 90s node --test test/python-broker-tls-integration.test.js` passed and covers Host `authorizeRegistration` context for Python Broker mTLS registration.
+    - [x] Record coverage status and any environment prerequisites for Bun runtime validation. Bun validation requires `bun` on PATH; tests skip when unavailable. Python validation requires `uv` and uses bounded Node heap for npm wrapper commands.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: TLS, mTLS, and registration authorization coverage' (Protocol in workflow.md)
+    - [x] User approved Phase 4 manual verification.
+
+Phase 4 checkpoint notes:
+
+- Common/reuse scan: Phase 4 reuses Host mTLS and common TLS/certificate identity behavior; Bun continues to delegate TLS options through the Node package/common TLS normalization. Python Broker uses Python runtime-specific SSLContext configuration and `cryptography` for PFX/PKCS12 identity loading.
+- Deduplication check: No repeated TypeScript TLS logic was introduced; Python TLS setup remains package-local because it targets `ssl.SSLContext`, while Bun reuses Node/common TLS surfaces.
+- Validation: `npm run build` passed. `npm run lint` passed after formatting. `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 30s npm test --workspace=@signicode/verser2-guest-python` passed. `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 90s node --test test/python-broker-tls-integration.test.js` passed. `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 90s node --test test/bun-guest-integration.test.js` passed.
+- Coverage: focused unit/integration tests cover Python Broker Host CA trust, PEM identity, PFX identity, ALPN failure, TLS handshake failure, mTLS rejection without identity, rejection with untrusted identity, trusted identity registration, `authorizeRegistration` certificate identity, and direct Bun Guest/Broker public API mTLS runtime behavior. Exact percentage is not emitted by the Python package test runner.
 
 ## Phase 5: Documentation, package surfaces, and release readiness
 

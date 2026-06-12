@@ -9,7 +9,7 @@ Implemented package targets:
 - `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, certificate fingerprint helpers, certificate identity extraction, mTLS registration authorization types, and TLS option normalization helpers for Verser packages.
 - `@signicode/verser2-host` in `packages/verser2-host`: Configurable TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, optional mTLS client certificate enforcement, registration authorization callback support, routed-domain advertisements, route cleanup, certificate reload support, and Broker request forwarding.
 - `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, configurable Host TLS trust, configurable PEM/PFX client certificate identities, and minimal plain `node:http` Agent implementation.
-- `@signicode/verser2-guest-python` in `packages/verser2-guest-python`: Python ASGI Guest implementation using `uv` for Python package commands and the `h2` library for outbound TLS HTTP/2 Guest registration, control, leased request dispatch, ASGI `scope`/`receive`/`send`, and request/response body streaming.
+- `@signicode/verser2-guest-python` in `packages/verser2-guest-python`: Python ASGI Guest and async Broker implementation using `uv` for Python package commands, `h2` for outbound TLS HTTP/2 Guest/Broker transport, and `cryptography` for Python Broker PFX/PKCS12 client identity loading.
 
 Future package targets:
 
@@ -40,6 +40,7 @@ Future package targets:
 
 - Package manager: npm.
 - Python package command runner: `uv` for `packages/verser2-guest-python` commands and dependency resolution.
+- Python package dependencies: `h2` for TLS HTTP/2 framing and `cryptography` for Python Broker PFX/PKCS12 mTLS client identities.
 - Build command: `npm run build`.
 - Package staging command: `npm run stage:packages`, which writes publish-ready package directories under `dist/packages` from built workspace artifacts.
 - Package consumer validation command: `npm run test:package-consumers -- --source=<source|staging|tarball|github>`.

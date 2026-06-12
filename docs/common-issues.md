@@ -98,7 +98,9 @@ const readLoop = mock.method(client, 'readLoop', async () => {});
 ### Safe validation after an OOM
 
 After a suspected read-loop OOM, run the smallest target under a timeout and,
-where practical, a memory cap before running the full test suite.
+where practical, a memory cap before running the full test suite. Prefer limits
+that constrain the runtime under test without preventing the test runner itself
+from starting.
 
 Python package example:
 
@@ -107,10 +109,31 @@ ulimit -v 524288
 timeout 20s uv run --project . python -m unittest tests.test_broker_api.VerserBrokerTlsConfigTest -v
 ```
 
+Avoid applying a very low `ulimit -v` to `npm`/Node wrapper commands. V8 may
+reserve more virtual address space than it will actually use, so a `512 MiB`
+virtual-memory cap can make Node fail during startup before the test runs.
+
 Node package example:
 
 ```sh
 NODE_OPTIONS=--max-old-space-size=512 timeout 20s node --test test/specific.test.js
 ```
+
+For npm-wrapped workspace commands, constrain Node's heap while allowing V8 to
+reserve virtual address space:
+
+```sh
+NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 30s npm test --workspace=@signicode/verser2-guest-python
+```
+
+This does not replace fixing the leak or unbounded aggregation. It is a safer
+way to verify whether a suspected OOM reproduces under bounded heap conditions.
+If the command passes under this limit, continue investigating protocol or test
+runner memory behavior only if there is other evidence of growth.
+
+Future follow-up: review the repository test runners after the current track is
+complete. Useful improvements would include first-class timeout support, optional
+heap limits for Node-based wrappers, focused Python test targets that do not need
+to start npm, and consistent diagnostics for active handles/tasks after timeout.
 
 Then widen validation only after the focused test exits safely.

@@ -276,7 +276,7 @@ class VerserBrokerApiRouteControlTest(unittest.TestCase):
             captured["kwargs"] = kwargs
             reader = AsyncMock()
             reader.read = AsyncMock(return_value=b"")
-            writer = AsyncMock()
+            writer = MagicMock()
             writer.write = MagicMock()
             writer.drain = AsyncMock()
             writer.close = MagicMock()
@@ -868,9 +868,8 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
 class VerserBrokerTlsConfigTest(unittest.TestCase):
     """Tests for future Python Broker TLS/mTLS behaviour.
 
-    Tests 1 and 6 should pass with current production code.
-    Tests 2–5 are expected to fail until the corresponding features are
-    implemented in ``broker.py``.
+    These tests use finite EOF mocks for transport readers so connection setup
+    assertions cannot accidentally leave a background read loop running forever.
     """
 
     def _broker_factory(self, **overrides: Any) -> Any:
@@ -892,7 +891,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         return asyncio.run(coroutine)
 
     # ------------------------------------------------------------------
-    # Test 1 — trusted Host CA  (expected: PASS)
+    # Test 1 — trusted Host CA
     # ------------------------------------------------------------------
 
     def test_tls_ca_file_passed_to_ssl_context(self) -> None:
@@ -903,7 +902,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         async def fake_open_connection(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
             reader = AsyncMock()
             reader.read = AsyncMock(return_value=b"")
-            writer = AsyncMock()
+            writer = MagicMock()
             writer.write = MagicMock()
             writer.drain = AsyncMock()
             writer.close = MagicMock()
@@ -920,7 +919,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         mock_ctx.assert_called_once_with(cafile="/ca.pem")
 
     # ------------------------------------------------------------------
-    # Test 2 — PEM client identity  (expected: FAIL until implemented)
+    # Test 2 — PEM client identity
     # ------------------------------------------------------------------
 
     def test_pem_client_identity_configures_cert_chain(self) -> None:
@@ -937,7 +936,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         async def fake_open_connection(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
             reader = AsyncMock()
             reader.read = AsyncMock(return_value=b"")
-            writer = AsyncMock()
+            writer = MagicMock()
             writer.write = MagicMock()
             writer.drain = AsyncMock()
             writer.close = MagicMock()
@@ -958,7 +957,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
-    # Test 3 — PFX / PKCS12 client identity  (expected: FAIL until implemented)
+    # Test 3 — PFX / PKCS12 client identity
     # ------------------------------------------------------------------
 
     def test_pfx_client_identity_invokes_helper(self) -> None:
@@ -977,7 +976,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
-    # Test 4 — ALPN negotiated-protocol validation  (expected: FAIL until implemented)
+    # Test 4 — ALPN negotiated-protocol validation
     # ------------------------------------------------------------------
 
     def test_alpn_not_h2_raises_actionable_error(self) -> None:
@@ -989,7 +988,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         async def fake_open_connection(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
             reader = AsyncMock()
             reader.read = AsyncMock(return_value=b"")
-            writer = AsyncMock()
+            writer = MagicMock()
             writer.write = MagicMock()
             writer.drain = AsyncMock()
             writer.close = MagicMock()
@@ -1015,7 +1014,7 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
-    # Test 5 — TLS handshake failure  (expected: FAIL until implemented)
+    # Test 5 — TLS handshake failure
     # ------------------------------------------------------------------
 
     def test_tls_handshake_failure_is_actionable(self) -> None:
