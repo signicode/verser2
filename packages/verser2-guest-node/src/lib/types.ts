@@ -19,6 +19,7 @@ export interface VerserNodeGuestOptions {
   readonly maxOpenStreams?: number;
   readonly leaseAcquireTimeoutMs?: number;
   readonly maxMetadataBytes?: number;
+  readonly maxResponseBytes?: number;
   readonly tls?: VerserClientTlsOptions;
 }
 
@@ -42,6 +43,9 @@ export interface VerserBrokerOptions {
   readonly hostUrl: string;
   readonly brokerId: string;
   readonly leaseAcquireTimeoutMs?: number;
+  readonly maxRequestHeaderBytes?: number;
+  readonly maxChunkSizeLineBytes?: number;
+  readonly maxChunkDecoderPendingBytes?: number;
   readonly tls?: VerserClientTlsOptions;
 }
 

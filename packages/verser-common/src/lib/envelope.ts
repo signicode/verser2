@@ -37,6 +37,7 @@ export function createVerserEnvelopeParser(options: VerserEnvelopeParserOptions 
   push(chunk: Buffer): ParsedVerserEnvelope | undefined;
 } {
   const maxMetadataBytes = options.maxMetadataBytes ?? DEFAULT_MAX_ENVELOPE_METADATA_BYTES;
+  const maxPendingEnvelopeBytes = VERSER_ENVELOPE_PREFIX_BYTES + maxMetadataBytes;
   let buffered = Buffer.alloc(0);
 
   return {
@@ -66,7 +67,19 @@ export function createVerserEnvelopeParser(options: VerserEnvelopeParserOptions 
       }
 
       const metadataBytes = buffered.subarray(VERSER_ENVELOPE_PREFIX_BYTES, metadataEnd);
-      const metadata = parseEnvelopeMetadata(metadataBytes, type);
+      let metadata: VerserEnvelopeMetadata;
+      try {
+        metadata = parseEnvelopeMetadata(metadataBytes, type);
+      } catch (error) {
+        if (buffered.length > maxPendingEnvelopeBytes) {
+          throw createVerserError('protocol-error', 'Pending envelope input exceeds limit', {
+            bufferedBytes: buffered.length,
+            maxPendingEnvelopeBytes,
+            maxMetadataBytes,
+          });
+        }
+        throw error;
+      }
       const bodyRemainder = buffered.subarray(metadataEnd);
       buffered = Buffer.alloc(0);
 

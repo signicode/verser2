@@ -1,12 +1,17 @@
 import type * as http from 'node:http';
 import { Duplex, PassThrough, Writable } from 'node:stream';
 
+import { createVerserError } from '@signicode/verser-common';
 import { ChunkedBodyDecoder } from './chunked-body-decoder';
 import { normalizeRequestHeaders, parseContentLength } from './header-utils';
-import type { BrokerRequestRouter } from './types';
+import type { BrokerRequestRouter, VerserBrokerOptions } from './types';
 import { serializeHttpResponseHead } from './utils';
 
 type BrokerSocketGuestOptions = http.RequestOptions;
+
+const DEFAULT_MAX_REQUEST_HEADER_BYTES = 64 * 1024;
+const DEFAULT_MAX_CHUNK_SIZE_LINE_BYTES = 1024;
+const DEFAULT_MAX_CHUNK_DECODER_PENDING_BYTES = 64 * 1024;
 
 export class VerserBrokerSocket extends Duplex {
   public override writable = true;
@@ -20,6 +25,13 @@ export class VerserBrokerSocket extends Duplex {
   private readonly targetId: string;
 
   private readonly options: BrokerSocketGuestOptions;
+
+  private readonly limits: Required<
+    Pick<
+      VerserBrokerOptions,
+      'maxChunkDecoderPendingBytes' | 'maxChunkSizeLineBytes' | 'maxRequestHeaderBytes'
+    >
+  >;
 
   private requestBuffer = Buffer.alloc(0);
 
@@ -39,11 +51,21 @@ export class VerserBrokerSocket extends Duplex {
     broker: BrokerRequestRouter,
     targetId: string,
     options: BrokerSocketGuestOptions,
+    limits: Pick<
+      VerserBrokerOptions,
+      'maxChunkDecoderPendingBytes' | 'maxChunkSizeLineBytes' | 'maxRequestHeaderBytes'
+    > = {},
   ) {
     super();
     this.broker = broker;
     this.targetId = targetId;
     this.options = options;
+    this.limits = {
+      maxChunkDecoderPendingBytes:
+        limits.maxChunkDecoderPendingBytes ?? DEFAULT_MAX_CHUNK_DECODER_PENDING_BYTES,
+      maxChunkSizeLineBytes: limits.maxChunkSizeLineBytes ?? DEFAULT_MAX_CHUNK_SIZE_LINE_BYTES,
+      maxRequestHeaderBytes: limits.maxRequestHeaderBytes ?? DEFAULT_MAX_REQUEST_HEADER_BYTES,
+    };
     process.nextTick(() => this.emit('connect'));
   }
 
@@ -60,10 +82,22 @@ export class VerserBrokerSocket extends Duplex {
   public override _write(
     chunk: Buffer | string,
     encoding: BufferEncoding,
-    callback: () => void,
+    callback: (error?: Error | null) => void,
   ): void {
-    this.consumeRequestBytes(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
-    callback();
+    try {
+      const accepted = this.consumeRequestBytes(
+        Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding),
+      );
+      if (accepted) {
+        callback();
+        return;
+      }
+      this.waitForBodyDrain(callback);
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      this.destroy(normalized);
+      callback(normalized);
+    }
   }
 
   public override _final(callback: () => void): void {
@@ -154,16 +188,21 @@ export class VerserBrokerSocket extends Duplex {
     });
   }
 
-  private consumeRequestBytes(chunk: Buffer): void {
+  private consumeRequestBytes(chunk: Buffer): boolean {
     if (this.bodyStream !== undefined) {
-      this.writeBodyBytes(chunk);
-      return;
+      return this.writeBodyBytes(chunk);
     }
 
     this.requestBuffer = Buffer.concat([this.requestBuffer, chunk]);
+    if (this.requestBuffer.length > this.limits.maxRequestHeaderBytes) {
+      throw createVerserError('protocol-error', 'Request header bytes exceed limit', {
+        headerBytes: this.requestBuffer.length,
+        maxRequestHeaderBytes: this.limits.maxRequestHeaderBytes,
+      });
+    }
     const separatorIndex = this.requestBuffer.indexOf('\r\n\r\n', 0, 'latin1');
     if (separatorIndex === -1) {
-      return;
+      return true;
     }
 
     const headerText = this.requestBuffer.slice(0, separatorIndex).toString('latin1');
@@ -174,28 +213,33 @@ export class VerserBrokerSocket extends Duplex {
     this.expectedBodyBytes = parseContentLength(headerText);
     const isChunked = /transfer-encoding:\s*chunked/i.test(headerText);
     if (isChunked) {
-      this.chunkDecoder = new ChunkedBodyDecoder(this.bodyStream);
+      this.chunkDecoder = new ChunkedBodyDecoder(this.bodyStream, {
+        maxChunkSizeLineBytes: this.limits.maxChunkSizeLineBytes,
+        maxPendingBytes: this.limits.maxChunkDecoderPendingBytes,
+      });
     }
 
     this.forwardRequestOnce();
+    let accepted = true;
     if (firstBodyChunk.length > 0) {
-      this.writeBodyBytes(firstBodyChunk);
+      accepted = this.writeBodyBytes(firstBodyChunk);
     }
 
     const expectsBody = this.expectedBodyBytes > 0 || isChunked;
     if (!expectsBody) {
       this.bodyStream.end();
     }
+
+    return accepted;
   }
 
-  private writeBodyBytes(chunk: Buffer): void {
+  private writeBodyBytes(chunk: Buffer): boolean {
     if (this.bodyStream === undefined) {
-      return;
+      return true;
     }
 
     if (this.chunkDecoder !== undefined) {
-      this.chunkDecoder.write(chunk);
-      return;
+      return this.chunkDecoder.write(chunk);
     }
 
     if (this.expectedBodyBytes > 0) {
@@ -203,14 +247,39 @@ export class VerserBrokerSocket extends Duplex {
       const toWrite = chunk.subarray(0, remaining);
       this.receivedBodyBytes += toWrite.length;
       if (toWrite.length > 0) {
-        this.bodyStream.write(toWrite);
+        const accepted = this.bodyStream.write(toWrite);
+        if (!accepted) {
+          return false;
+        }
       }
       if (this.receivedBodyBytes >= this.expectedBodyBytes) {
         this.bodyStream.end();
       }
+      return true;
+    }
+
+    return this.bodyStream.write(chunk);
+  }
+
+  private waitForBodyDrain(callback: (error?: Error | null) => void): void {
+    const bodyStream = this.bodyStream;
+    if (bodyStream === undefined) {
+      callback();
       return;
     }
 
-    this.bodyStream.write(chunk);
+    bodyStream.once('drain', () => {
+      try {
+        if (this.chunkDecoder !== undefined && !this.chunkDecoder.flush()) {
+          this.waitForBodyDrain(callback);
+          return;
+        }
+        callback();
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        this.destroy(normalized);
+        callback(normalized);
+      }
+    });
   }
 }

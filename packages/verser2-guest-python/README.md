@@ -88,6 +88,11 @@ guest = create_verser_guest(
   response bytes are written.
 - ASGI `http.response.body` events are written back to the Host lease stream;
   `more_body: false` ends the response side of the lease.
+- Direct `dispatch_routed_request(...)` calls are batch-only convenience dispatches;
+  they buffer the ASGI response and enforce `max_response_bytes` before joining
+  chunks. Use leased Host/Broker routing for streaming response bodies.
+- In leased routing, HTTP/2 request-body flow-control credit is returned only
+  after the ASGI app consumes the corresponding `http.request` event.
 - App exceptions before response start are returned as Verser
   `local-handler-failure` error envelopes with Guest, request, and path context.
 

@@ -618,6 +618,8 @@ Each Broker-to-Host request maps to a separate HTTP/2 stream. The Guest leg uses
 
 `verser2` supports streaming request and response bodies on the leased HTTP/2 routed path. Successful `broker.request()` calls return a response body `Readable`, and request bodies may be provided as a `Readable` or as explicit chunks. Error response bodies may still be read internally to produce actionable routed error diagnostics.
 
+Direct in-process dispatch helpers, such as Node Guest `dispatchRoutedRequest()`, are batch-only convenience paths. They buffer the local handler response before returning it and enforce a configurable `maxResponseBytes` limit so oversized direct-dispatch responses fail before full concatenation. Leased Broker/Guest routing remains the streaming path for large or incremental response bodies.
+
 ```ts
 const response = await broker.request({
   targetId: 'client-a',

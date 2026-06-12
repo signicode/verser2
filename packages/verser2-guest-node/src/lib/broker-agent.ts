@@ -1,14 +1,20 @@
 import * as http from 'node:http';
 
 import { VerserBrokerSocket } from './broker-socket';
-import type { BrokerRequestRouter } from './types';
+import type { BrokerRequestRouter, VerserBrokerOptions } from './types';
 
 export class VerserBrokerAgent extends http.Agent {
   public readonly protocol = 'http:';
 
   private readonly broker: BrokerRequestRouter;
 
-  public constructor(broker: BrokerRequestRouter) {
+  public constructor(
+    broker: BrokerRequestRouter,
+    private readonly options: Pick<
+      VerserBrokerOptions,
+      'maxChunkDecoderPendingBytes' | 'maxChunkSizeLineBytes' | 'maxRequestHeaderBytes'
+    > = {},
+  ) {
     super({ keepAlive: false });
     this.broker = broker;
   }
@@ -25,7 +31,7 @@ export class VerserBrokerAgent extends http.Agent {
       return;
     }
 
-    const socket = new VerserBrokerSocket(this.broker, route.targetId, options);
+    const socket = new VerserBrokerSocket(this.broker, route.targetId, options, this.options);
     request.onSocket(socket as unknown as never);
     request.once('finish', () => {
       socket.forwardRequestOnce();
