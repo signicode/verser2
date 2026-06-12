@@ -155,6 +155,7 @@ Phase 3 checkpoint notes:
 
 Phase 4 checkpoint notes:
 
+- Phase checkpoint commit: `96d6609`.
 - Common/reuse scan: Phase 4 reuses Host mTLS and common TLS/certificate identity behavior; Bun continues to delegate TLS options through the Node package/common TLS normalization. Python Broker uses Python runtime-specific SSLContext configuration and `cryptography` for PFX/PKCS12 identity loading.
 - Deduplication check: No repeated TypeScript TLS logic was introduced; Python TLS setup remains package-local because it targets `ssl.SSLContext`, while Bun reuses Node/common TLS surfaces.
 - Validation: `npm run build` passed. `npm run lint` passed after formatting. `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 30s npm test --workspace=@signicode/verser2-guest-python` passed. `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 90s node --test test/python-broker-tls-integration.test.js` passed. `NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 90s node --test test/bun-guest-integration.test.js` passed.
