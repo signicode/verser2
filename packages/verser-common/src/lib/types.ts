@@ -142,36 +142,108 @@ export interface VerserRegistrationResponse {
   readonly routes?: readonly RoutedDomainRegistration[];
 }
 
+export interface VerserCertificateIdentity {
+  readonly commonName?: string;
+  readonly dnsNames: readonly string[];
+  readonly uriNames: readonly string[];
+  readonly fingerprint256: string;
+  readonly subject: string;
+  readonly issuer: string;
+  readonly validFrom: string;
+  readonly validTo: string;
+  readonly raw?: string;
+  readonly customExtensions: Readonly<Record<string, string>>;
+}
+
+export interface VerserRegistrationAuthorizationContext {
+  readonly peerId: VerserPeerId;
+  readonly role: VerserPeerRole;
+  readonly routedDomains: readonly string[];
+  readonly certificate?: VerserCertificateIdentity;
+  readonly metadata: Readonly<Record<string, string | number | boolean | undefined>>;
+}
+
+export type VerserRegistrationAuthorizationAction =
+  | { readonly action: 'allow' }
+  | { readonly action: 'close'; readonly reason?: string };
+
+export type VerserRegistrationAuthorizationCallback = (
+  context: VerserRegistrationAuthorizationContext,
+) => VerserRegistrationAuthorizationAction | Promise<VerserRegistrationAuthorizationAction>;
+
 export interface VerserBrokerRoutesControlFrame {
   readonly type: 'routes';
   readonly routes: readonly RoutedDomainRegistration[];
 }
 
-export type VerserHostTlsOptions =
-  | {
-      readonly cert: string;
-      readonly key: string;
-      readonly passphrase?: string;
-      readonly certFile?: never;
-      readonly keyFile?: never;
-    }
-  | {
-      readonly cert?: never;
-      readonly key?: never;
-      readonly passphrase?: string;
-      readonly certFile: string;
-      readonly keyFile: string;
-    };
+export type VerserHostClientAuthTlsOptions = {
+  readonly ca?: string;
+  readonly caFile?: string;
+  readonly knownExtensionOids?: readonly string[];
+  readonly authorizeRegistration?: VerserRegistrationAuthorizationCallback;
+};
 
-export type VerserClientTlsOptions =
-  | {
-      readonly ca: string;
-      readonly caFile?: never;
-    }
-  | {
-      readonly ca?: never;
-      readonly caFile: string;
-    };
+type VerserPemIdentityOptions = {
+  readonly cert: string;
+  readonly key: string;
+  readonly certFile?: never;
+  readonly keyFile?: never;
+  readonly pfx?: never;
+  readonly pfxFile?: never;
+  readonly passphrase?: string;
+};
+
+type VerserPemFileIdentityOptions = {
+  readonly cert?: never;
+  readonly key?: never;
+  readonly certFile: string;
+  readonly keyFile: string;
+  readonly pfx?: never;
+  readonly pfxFile?: never;
+  readonly passphrase?: string;
+};
+
+type VerserPfxIdentityOptions = {
+  readonly cert?: never;
+  readonly key?: never;
+  readonly certFile?: never;
+  readonly keyFile?: never;
+  readonly pfx: Buffer;
+  readonly pfxFile?: never;
+  readonly passphrase?: string;
+};
+
+type VerserPfxFileIdentityOptions = {
+  readonly cert?: never;
+  readonly key?: never;
+  readonly certFile?: never;
+  readonly keyFile?: never;
+  readonly pfx?: never;
+  readonly pfxFile: string;
+  readonly passphrase?: string;
+};
+
+export type VerserHostTlsOptions = (
+  | VerserPemIdentityOptions
+  | VerserPemFileIdentityOptions
+  | VerserPfxIdentityOptions
+  | VerserPfxFileIdentityOptions
+) & {
+  readonly clientAuth?: VerserHostClientAuthTlsOptions;
+};
+
+type VerserClientTrustOptions = {
+  readonly ca?: string;
+  readonly caFile?: string;
+};
+
+type VerserClientIdentityOptions =
+  | Partial<VerserPemIdentityOptions>
+  | Partial<VerserPemFileIdentityOptions>
+  | Partial<VerserPfxIdentityOptions>
+  | Partial<VerserPfxFileIdentityOptions>;
+
+export type VerserClientTlsOptions = VerserClientTrustOptions & VerserClientIdentityOptions;
 
 export type VerserBrokerControlFrame = VerserBrokerRoutesControlFrame;
 
