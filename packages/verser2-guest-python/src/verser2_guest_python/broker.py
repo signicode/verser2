@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import os
 import ssl
 import tempfile
 from collections.abc import AsyncIterable, Iterable
@@ -191,10 +192,19 @@ class VerserBroker:
         pem += certificate.public_bytes(serialization.Encoding.PEM)
         for extra_certificate in additional_certificates or []:
             pem += extra_certificate.public_bytes(serialization.Encoding.PEM)
-        with tempfile.NamedTemporaryFile("wb") as identity_file:
+        identity_path: str | None = None
+        with tempfile.NamedTemporaryFile("wb", delete=False) as identity_file:
+            identity_path = identity_file.name
             identity_file.write(pem)
             identity_file.flush()
-            context.load_cert_chain(identity_file.name)
+        try:
+            context.load_cert_chain(identity_path)
+        finally:
+            if identity_path is not None:
+                try:
+                    os.unlink(identity_path)
+                except FileNotFoundError:
+                    pass
 
     def _validate_h2_alpn(self, writer: asyncio.StreamWriter) -> None:
         get_extra_info = getattr(writer, "get_extra_info", None)
@@ -205,7 +215,7 @@ class VerserBroker:
         if not callable(selected):
             return
         protocol = selected()
-        if protocol is not None and isinstance(protocol, str) and protocol != "h2":
+        if protocol != "h2":
             raise RuntimeError(
                 f"TLS ALPN negotiation for broker {self.broker_id} selected {protocol!r}; HTTP/2 'h2' is required"
             )

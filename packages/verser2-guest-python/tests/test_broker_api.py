@@ -1,9 +1,11 @@
 import asyncio
+import builtins
 import importlib
 import inspect
 import json
 import ssl
 import unittest
+from io import BytesIO
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -281,6 +283,9 @@ class VerserBrokerApiRouteControlTest(unittest.TestCase):
             writer.drain = AsyncMock()
             writer.close = MagicMock()
             writer.wait_closed = AsyncMock()
+            ssl_obj = MagicMock()
+            ssl_obj.selected_alpn_protocol.return_value = "h2"
+            writer.get_extra_info.return_value = ssl_obj
             return reader, writer
 
         registration_patch = self._set_default_registration_patch(broker)
@@ -907,6 +912,9 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
             writer.drain = AsyncMock()
             writer.close = MagicMock()
             writer.wait_closed = AsyncMock()
+            ssl_obj = MagicMock()
+            ssl_obj.selected_alpn_protocol.return_value = "h2"
+            writer.get_extra_info.return_value = ssl_obj
             return reader, writer
 
         with patch("ssl.create_default_context", return_value=ssl_context) as mock_ctx:
@@ -941,6 +949,9 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
             writer.drain = AsyncMock()
             writer.close = MagicMock()
             writer.wait_closed = AsyncMock()
+            ssl_obj = MagicMock()
+            ssl_obj.selected_alpn_protocol.return_value = "h2"
+            writer.get_extra_info.return_value = ssl_obj
             return reader, writer
 
         with patch("ssl.create_default_context", return_value=ssl_context):
@@ -975,6 +986,54 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
             "for PFX/PKCS12 client identity support",
         )
 
+    def test_pfx_client_identity_loads_temp_cert_after_file_close(self) -> None:
+        """PFX conversion closes the temporary PEM file before SSL loads it.
+
+        Windows locks open ``NamedTemporaryFile`` handles, so loading the cert
+        chain while the temporary file is still open can fail.
+        """
+        broker = self._broker_factory()
+        ssl_context = MagicMock()
+        temp_file_state = {"closed": False}
+
+        class FakeTemporaryFile:
+            name = "/tmp/verser-python-broker-client.pem"
+
+            def __enter__(self) -> "FakeTemporaryFile":
+                return self
+
+            def __exit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+                temp_file_state["closed"] = True
+
+            def write(self, _payload: bytes) -> int:
+                return len(_payload)
+
+            def flush(self) -> None:
+                return None
+
+        fake_key = MagicMock()
+        fake_key.private_bytes.return_value = b"KEY"
+        fake_certificate = MagicMock()
+        fake_certificate.public_bytes.return_value = b"CERT"
+
+        def assert_closed_before_load(_path: str) -> None:
+            self.assertTrue(temp_file_state["closed"])
+
+        ssl_context.load_cert_chain.side_effect = assert_closed_before_load
+
+        with patch("tempfile.NamedTemporaryFile", return_value=FakeTemporaryFile()) as temp_file:
+            with patch("os.unlink") as unlink:
+                with patch.object(builtins, "open", return_value=BytesIO(b"pfx-bytes")):
+                    with patch(
+                        "cryptography.hazmat.primitives.serialization.pkcs12.load_key_and_certificates",
+                        return_value=(fake_key, fake_certificate, []),
+                    ):
+                        broker._load_pfx_client_identity(ssl_context, "/client.pfx", "secret")
+
+        temp_file.assert_called_once_with("wb", delete=False)
+        ssl_context.load_cert_chain.assert_called_once_with("/tmp/verser-python-broker-client.pem")
+        unlink.assert_called_once_with("/tmp/verser-python-broker-client.pem")
+
     # ------------------------------------------------------------------
     # Test 4 — ALPN negotiated-protocol validation
     # ------------------------------------------------------------------
@@ -1006,6 +1065,23 @@ class VerserBrokerTlsConfigTest(unittest.TestCase):
                         with patch.object(type(broker), "_start_lease_task", new=MagicMock()):
                             with self.assertRaises(Exception) as context:
                                 self._run(broker.connect())
+
+        message = str(context.exception).lower()
+        self.assertTrue(
+            any(word in message for word in ("alpn", "http/2", "h2")),
+            f"Exception should mention ALPN or HTTP/2, got: {context.exception}",
+        )
+
+    def test_missing_alpn_selection_raises_actionable_error(self) -> None:
+        """HTTP/2 over TLS requires ALPN to select ``h2`` explicitly."""
+        broker = self._broker_factory()
+        writer = MagicMock()
+        ssl_obj = MagicMock()
+        ssl_obj.selected_alpn_protocol.return_value = None
+        writer.get_extra_info.return_value = ssl_obj
+
+        with self.assertRaises(Exception) as context:
+            broker._validate_h2_alpn(writer)
 
         message = str(context.exception).lower()
         self.assertTrue(
