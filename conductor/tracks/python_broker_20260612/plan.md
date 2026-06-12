@@ -34,6 +34,7 @@
 
 Phase 1 checkpoint notes:
 
+- Phase checkpoint commit: `a145272`.
 - Common/reuse scan: `verser-common` protocol contracts and errors will be mirrored; Node Broker request/route behavior will be adapted; Python Guest HTTP/2 runtime patterns will be adapted; Node HTTP integration and ASGI dispatch are intentionally runtime-specific and not reused.
 - Deduplication check: no repeated implementation code was introduced in Phase 1; only tests and Conductor plan notes changed.
 - Validation: `npm run lint --workspace=@signicode/verser2-guest-python` passed. `npm test --workspace=@signicode/verser2-guest-python` intentionally fails for the newly added missing Broker API/response tests, confirming TDD red state.
