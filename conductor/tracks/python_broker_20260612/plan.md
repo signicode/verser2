@@ -2,31 +2,42 @@
 
 ## Phase 1: Track setup, architecture discovery, and failing API tests
 
-- [~] Task: Create the review branch, planning commit, and PR for the complete Python Broker TO-BE state
-    - [ ] Create a dedicated track branch before implementation changes.
-    - [ ] Commit the approved Conductor planning artifacts on the track branch so a PR can be created.
-    - [ ] Create a GitHub PR with a title and body describing the final Python Broker capability, not only the planning artifacts.
-- [ ] Task: Confirm existing reusable protocol and runtime foundations
-    - [ ] Review `packages/verser-common` for reusable protocol envelopes, lifecycle names, routing helpers, serialized errors, header helpers, HTTP/2 utilities, TLS normalization, and certificate identity helpers.
-    - [ ] Review `packages/verser2-guest-node/src/lib/http2-verser-broker.ts`, `broker-dispatcher.ts`, `broker-agent.ts`, and related helpers for compatible Broker route/request behavior.
-    - [ ] Review `packages/verser2-guest-python/src/verser2_guest_python/guest.py`, `protocol.py`, and `asgi.py` for reusable Python HTTP/2 connection, control-frame, body-streaming, and lifecycle patterns.
-    - [ ] Record in this plan which common code is reused, adapted, or intentionally not reused because it is runtime-specific.
-- [ ] Task: Write failing Python Broker public API tests first
-    - [ ] Add Python package tests proving `create_verser_broker` is exported.
-    - [ ] Add tests for `VerserBroker` async context manager lifecycle.
-    - [ ] Add tests for explicit `connect()` and `close()` lifecycle behavior.
-    - [ ] Add tests for request helper method availability: `request`, `get`, `post`, `put`, `patch`, and `delete`.
-    - [ ] Confirm the tests fail for the expected missing-API reason.
-- [ ] Task: Write failing response object behavior tests first
-    - [ ] Add tests for `status`, `headers`, `request_id`, `read()`, `text()`, `json()`, and `aiter_bytes()`.
-    - [ ] Add tests proving response body consumption is single-use.
-    - [ ] Add tests proving mixing full-body helpers and streaming iteration raises an actionable exception.
-    - [ ] Confirm the tests fail for the expected missing-response-object reason.
-- [ ] Task: Conductor - Automated Verification 'Phase 1: Track setup, architecture discovery, and failing API tests' (Protocol in workflow.md)
-    - [ ] Verify the PR contains the complete planning commit with the above artifacts.
-    - [ ] Verify the PR description clearly describes the final Python Broker capability, not only the planning artifacts.
-    - [ ] Verify the failing tests added above are present and fail for the expected reasons.
-    - [ ] Fix any review findings before proceeding to Phase 2, or record a scoped deferral in this plan when a finding intentionally remains open.
+- [x] Task: Create the review branch, planning commit, and PR for the complete Python Broker TO-BE state
+    - [x] Create a dedicated track branch before implementation changes.
+    - [x] Commit the approved Conductor planning artifacts on the track branch so a PR can be created.
+    - [x] Create a GitHub PR with a title and body describing the final Python Broker capability, not only the planning artifacts. PR: https://github.com/signicode/verser2/pull/16
+- [x] Task: Confirm existing reusable protocol and runtime foundations
+    - [x] Review `packages/verser-common` for reusable protocol envelopes, lifecycle names, routing helpers, serialized errors, header helpers, HTTP/2 utilities, TLS normalization, and certificate identity helpers.
+        - Reuse as the protocol contract: peer role `broker`, routed-domain registration shapes, Broker request/response shapes, `routes` control frames, lifecycle names, exact-domain route lookup behavior, and Verser error code/context conventions.
+    - [x] Review `packages/verser2-guest-node/src/lib/http2-verser-broker.ts`, `broker-dispatcher.ts`, `broker-agent.ts`, and related helpers for compatible Broker route/request behavior.
+        - Adapt `http2-verser-broker.ts` behavior: TLS HTTP/2 connection, `POST /verser/register` with role `broker`, NDJSON route control stream, `routes` table replacement, waiter wakeups, `POST /verser/request` header contract, body streaming, response streaming, and JSON protocol-error decoding. Treat `broker-dispatcher.ts`/`broker-agent.ts`/socket integration as Node-specific references, not Python implementation code.
+    - [x] Review `packages/verser2-guest-python/src/verser2_guest_python/guest.py`, `protocol.py`, and `asgi.py` for reusable Python HTTP/2 connection, control-frame, body-streaming, and lifecycle patterns.
+        - Adapt Python Guest runtime patterns: asyncio TCP/TLS setup, ALPN `h2`, `H2Connection`, per-stream queues, send/read locks, stream data helpers, registration flow, and header normalization. Add Broker-specific NDJSON route parsing and HTTP error-body decoding.
+    - [x] Record in this plan which common code is reused, adapted, or intentionally not reused because it is runtime-specific.
+        - Intentionally not reused: Node `http.Agent`, Undici dispatcher, fake sockets, HTTP/1 parsing, and ASGI dispatch because they are runtime- or Guest-specific.
+- [x] Task: Write failing Python Broker public API tests first
+    - [x] Add Python package tests proving `create_verser_broker` is exported.
+    - [x] Add tests for `VerserBroker` async context manager lifecycle.
+    - [x] Add tests for explicit `connect()` and `close()` lifecycle behavior.
+    - [x] Add tests for request helper method availability: `request`, `get`, `post`, `put`, `patch`, and `delete`.
+    - [x] Confirm the tests fail for the expected missing-API reason. Command: `uv run --project . python -m unittest discover -s tests`; observed 4 expected failures because `create_verser_broker` is not exported from `verser2_guest_python`.
+- [x] Task: Write failing response object behavior tests first
+    - [x] Add tests for `status`, `headers`, `request_id`, `read()`, `text()`, `json()`, and `aiter_bytes()`.
+    - [x] Add tests proving response body consumption is single-use.
+    - [x] Add tests proving mixing full-body helpers and streaming iteration raises an actionable exception.
+    - [x] Confirm the tests fail for the expected missing-response-object reason. Command: `npm test --workspace=@signicode/verser2-guest-python`; observed 4 expected response failures because `VerserBrokerResponse` is not exported from `verser2_guest_python`.
+- [x] Task: Conductor - Automated Verification 'Phase 1: Track setup, architecture discovery, and failing API tests' (Protocol in workflow.md)
+    - [x] Verify the PR contains the complete planning commit with the above artifacts. PR #16 contains planning commit `1a92c1e` and track-start commit `031cddf`.
+    - [x] Verify the PR description clearly describes the final Python Broker capability, not only the planning artifacts. PR body describes the TO-BE Python Broker lifecycle, route discovery, routed requests, streaming response, error mapping, TLS/mTLS, Bun mTLS parity, docs, and non-goals.
+    - [x] Verify the failing tests added above are present and fail for the expected reasons. `packages/verser2-guest-python/tests/test_broker_api.py` is present. `npm test --workspace=@signicode/verser2-guest-python` reports 8 expected failures: 4 for missing `create_verser_broker` export and 4 for missing `VerserBrokerResponse` export.
+    - [x] Fix any review findings before proceeding to Phase 2, or record a scoped deferral in this plan when a finding intentionally remains open. No Phase 1 verification findings remain open.
+
+Phase 1 checkpoint notes:
+
+- Common/reuse scan: `verser-common` protocol contracts and errors will be mirrored; Node Broker request/route behavior will be adapted; Python Guest HTTP/2 runtime patterns will be adapted; Node HTTP integration and ASGI dispatch are intentionally runtime-specific and not reused.
+- Deduplication check: no repeated implementation code was introduced in Phase 1; only tests and Conductor plan notes changed.
+- Validation: `npm run lint --workspace=@signicode/verser2-guest-python` passed. `npm test --workspace=@signicode/verser2-guest-python` intentionally fails for the newly added missing Broker API/response tests, confirming TDD red state.
+- Coverage: no production behavior was implemented in Phase 1, so changed-behavior coverage is not measurable yet; coverage will be checked once implementation tasks make the tests pass.
 
 ## Phase 2: Python Broker connection, registration, and route state
 
