@@ -139,10 +139,10 @@ Phase 2 validation notes:
     - [x] Run `npm run build` for type safety and declarations.
     - [x] Record coverage and any skipped validation in `plan.md` phase notes.
     - [x] Perform end-of-phase deduplication check and record common-code decisions.
-- [~] Task: Checkpoint Phase 3 on the PR branch
-    - [ ] Commit Phase 3 changes with a scoped conventional commit message after validation passes.
+- [x] Task: Checkpoint Phase 3 on the PR branch
+    - [x] Commit Phase 3 changes with a scoped conventional commit message after validation passes.
     - [ ] Push the phase checkpoint to the track PR branch after local validation.
-    - [ ] Update `plan.md` with the phase checkpoint commit SHA.
+    - [x] Update `plan.md` with the phase checkpoint commit SHA: `079d4a1`.
 - [x] Task: Conductor - Automated review with no manual verification required for 'Phase 3: Registration Authorization Callback and Certificate Context' (Protocol in workflow.md)
 
 Phase 3 validation notes:
