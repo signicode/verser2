@@ -42,30 +42,38 @@ Phase 1 checkpoint notes:
 
 ## Phase 2: Python Broker connection, registration, and route state
 
-- [ ] Task: Write failing registration and route-control tests first
-    - [ ] Add tests proving Python Broker connects outbound to the existing TLS HTTP/2 Host.
-    - [ ] Add tests proving Python Broker registers as role `broker`.
-    - [ ] Add tests proving invalid registration returns actionable Python errors.
-    - [ ] Add tests proving Host route advertisements populate `get_routes()`.
-    - [ ] Add tests proving Host route retractions update `get_routes()`.
-    - [ ] Add tests proving `wait_for_route(domain)` resolves for already-known routes.
-    - [ ] Add tests proving `wait_for_route(domain)` resolves for future advertisements.
-- [ ] Task: Implement Python Broker lifecycle and registration
-    - [ ] Add Python Broker options for `host_url`, `broker_id`, route-wait timeout behavior, and TLS configuration.
-    - [ ] Implement outbound TLS HTTP/2 connection setup with ALPN `h2`.
-    - [ ] Implement Broker registration using existing Host protocol expectations and role `broker`.
-    - [ ] Implement idempotent lifecycle state transitions and actionable disconnected-state errors.
-    - [ ] Implement close behavior that cancels pending route waiters and request streams safely.
-- [ ] Task: Implement route advertisement state
-    - [ ] Consume Host control messages for advertised and retracted routes.
-    - [ ] Keep Python route state derived only from Host advertisements.
-    - [ ] Implement `get_routes()` as a safe snapshot API.
-    - [ ] Implement `wait_for_route(domain)` for existing and future routes.
-- [ ] Task: Validate Phase 2 narrowly
-    - [ ] Run the focused Python tests for Broker lifecycle, registration, and route state.
-    - [ ] Run any focused Node Host tests touched by registration compatibility changes.
-    - [ ] Record coverage status for changed Python behavior.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Python Broker connection, registration, and route state' (Protocol in workflow.md)
+- [x] Task: Write failing registration and route-control tests first
+    - [x] Add tests proving Python Broker connects outbound to the existing TLS HTTP/2 Host.
+    - [x] Add tests proving Python Broker registers as role `broker`.
+    - [x] Add tests proving invalid registration returns actionable Python errors.
+    - [x] Add tests proving Host route advertisements populate `get_routes()`.
+    - [x] Add tests proving Host route retractions update `get_routes()`.
+    - [x] Add tests proving `wait_for_route(domain)` resolves for already-known routes.
+    - [x] Add tests proving `wait_for_route(domain)` resolves for future advertisements. Command: `npm test --workspace=@signicode/verser2-guest-python`; observed expected failures because `create_verser_broker` is not exported yet.
+- [x] Task: Implement Python Broker lifecycle and registration
+    - [x] Add Python Broker options for `host_url`, `broker_id`, route-wait timeout behavior, and TLS configuration.
+    - [x] Implement outbound TLS HTTP/2 connection setup with ALPN `h2`.
+    - [x] Implement Broker registration using existing Host protocol expectations and role `broker`.
+    - [x] Implement idempotent lifecycle state transitions and actionable disconnected-state errors.
+    - [x] Implement close behavior that cancels pending route waiters and request streams safely.
+- [x] Task: Implement route advertisement state
+    - [x] Consume Host control messages for advertised and retracted routes.
+    - [x] Keep Python route state derived only from Host advertisements.
+    - [x] Implement `get_routes()` as a safe snapshot API.
+    - [x] Implement `wait_for_route(domain)` for existing and future routes.
+- [x] Task: Validate Phase 2 narrowly
+    - [x] Run the focused Python tests for Broker lifecycle, registration, and route state. Command: `npm test --workspace=@signicode/verser2-guest-python` passed.
+    - [x] Run any focused Node Host tests touched by registration compatibility changes. No Node Host production files were touched in Phase 2.
+    - [x] Record coverage status for changed Python behavior. Focused Python unit coverage covers the new Broker lifecycle, registration payload/validation, route state, and response consumption behavior; exact percentage is not emitted by the current Python package test runner.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Python Broker connection, registration, and route state' (Protocol in workflow.md)
+    - [x] User approved Phase 2 manual verification.
+
+Phase 2 checkpoint notes:
+
+- Common/reuse scan: Phase 2 adapted Python Guest HTTP/2 setup/read/write patterns and Node Broker registration/route-table replacement behavior. No shared TypeScript common code was changed because this phase is Python runtime-specific.
+- Deduplication check: Broker HTTP/2 helpers are currently package-local and mirror the existing Python Guest implementation; extraction is deferred until later phases reveal stable reuse between Guest and Broker request streaming paths.
+- Validation: `npm run lint --workspace=@signicode/verser2-guest-python` passed. `npm test --workspace=@signicode/verser2-guest-python` passed.
+- Coverage: new unit tests cover Broker exports, lifecycle shape, TLS/ALPN connection setup, registration payload/validation, route advertisements/retractions, route waiters, and response single-use consumption. The Python package runner does not currently emit an exact coverage percentage.
 
 ## Phase 3: Routed request and response behavior
 
