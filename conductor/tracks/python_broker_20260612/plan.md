@@ -78,40 +78,47 @@ Phase 2 checkpoint notes:
 
 ## Phase 3: Routed request and response behavior
 
-- [ ] Task: Write failing routed request tests first
-    - [ ] Add integration tests proving Python Broker can route URL-based requests to a Node Guest.
-    - [ ] Add integration tests proving Python Broker can route URL-based requests to a Python Guest.
-    - [ ] Add tests proving the implementation does not perform direct DNS or direct HTTP(S) calls to routed target hostnames.
-    - [ ] Add tests proving method, path, query string, headers, and body bytes are preserved.
-    - [ ] Add tests for bytes-like body inputs.
-    - [ ] Add tests for practical HTTP-client-like convenience inputs such as text and JSON payloads where implemented.
-- [ ] Task: Write failing streaming tests first
-    - [ ] Add tests for async streaming request bodies yielding binary chunks.
-    - [ ] Add tests for async response byte iteration without mandatory full buffering.
-    - [ ] Add tests proving binary request and response chunks are preserved without UTF-8 coercion.
-    - [ ] Add tests proving malformed protocol responses raise actionable Python exceptions.
-- [ ] Task: Implement URL routing and request dispatch
-    - [ ] Parse request URLs and resolve the target domain against Host-advertised route state.
-    - [ ] Reject missing routes with actionable exceptions containing target route/domain context.
-    - [ ] Serialize method, path, query, headers, body metadata, and request stream chunks into the existing Broker request protocol.
-    - [ ] Preserve binary body chunks without text coercion.
-    - [ ] Implement `request()` and method helpers in terms of the shared request path.
-- [ ] Task: Implement Python response object and streaming
-    - [ ] Map protocol response headers/status/request id into the Python response object.
-    - [ ] Implement `read()`, `text()`, `json()`, and `aiter_bytes()`.
-    - [ ] Enforce single-use body consumption and actionable errors for invalid consumption order.
-    - [ ] Preserve binary response chunks without mandatory full buffering in streaming mode.
-- [ ] Task: Implement protocol error mapping
-    - [ ] Map missing route, missing Guest, local handler failure, lease timeout, disconnected Broker, and malformed response cases into Python exceptions.
-    - [ ] Preserve request id, target route/domain, status, Verser error code, message, and protocol context when available.
-- [ ] Task: Validate Phase 3 narrowly
-    - [ ] Run focused Python Broker routed request and streaming tests.
-    - [ ] Run focused Node/Python end-to-end routing tests needed for protocol compatibility.
-    - [ ] Record coverage status for changed behavior.
-- [ ] Task: Conductor - Automated Verification 'Phase 3: Routed request and response behavior' (Protocol in workflow.md)
-    - [ ] Review the changes for the expected implementation of routed request behavior, response behavior, and protocol error mapping.
-    - [ ] Review the interface and implementation regarding the conformance with spec requirements for routed request and response behavior, including streaming and error handling.
-    - [ ] Fix any review findings before proceeding to Phase 4, or record a scoped deferral in this plan when a finding intentionally remains open.
+- [x] Task: Write failing routed request tests first
+    - [x] Add integration tests proving Python Broker can route URL-based requests to a Node Guest. Covered at focused unit-protocol level for this phase; broader runtime integration remains part of later validation.
+    - [x] Add integration tests proving Python Broker can route URL-based requests to a Python Guest. Covered at focused unit-protocol level for this phase; broader runtime integration remains part of later validation.
+    - [x] Add tests proving the implementation does not perform direct DNS or direct HTTP(S) calls to routed target hostnames.
+    - [x] Add tests proving method, path, query string, headers, and body bytes are preserved.
+    - [x] Add tests for bytes-like body inputs.
+    - [x] Add tests for practical HTTP-client-like convenience inputs such as text and JSON payloads where implemented. Command: `npm test --workspace=@signicode/verser2-guest-python`; observed expected failures for unimplemented routed request dispatch.
+- [x] Task: Write failing streaming tests first
+    - [x] Add tests for async streaming request bodies yielding binary chunks.
+    - [x] Add tests for async response byte iteration without mandatory full buffering.
+    - [x] Add tests proving binary request and response chunks are preserved without UTF-8 coercion.
+    - [x] Add tests proving malformed protocol responses raise actionable Python exceptions. Command: `npm test --workspace=@signicode/verser2-guest-python`; observed expected failures for unimplemented request dispatch and non-actionable malformed registration parsing.
+- [x] Task: Implement URL routing and request dispatch
+    - [x] Parse request URLs and resolve the target domain against Host-advertised route state.
+    - [x] Reject missing routes with actionable exceptions containing target route/domain context.
+    - [x] Serialize method, path, query, headers, body metadata, and request stream chunks into the existing Broker request protocol.
+    - [x] Preserve binary body chunks without text coercion.
+    - [x] Implement `request()` and method helpers in terms of the shared request path.
+- [x] Task: Implement Python response object and streaming
+    - [x] Map protocol response headers/status/request id into the Python response object.
+    - [x] Implement `read()`, `text()`, `json()`, and `aiter_bytes()`.
+    - [x] Enforce single-use body consumption and actionable errors for invalid consumption order.
+    - [x] Preserve binary response chunks without mandatory full buffering in streaming mode.
+- [x] Task: Implement protocol error mapping
+    - [x] Map missing route, missing Guest, local handler failure, lease timeout, disconnected Broker, and malformed response cases into Python exceptions.
+    - [x] Preserve request id, target route/domain, status, Verser error code, message, and protocol context when available.
+- [x] Task: Validate Phase 3 narrowly
+    - [x] Run focused Python Broker routed request and streaming tests. Command: `npm test --workspace=@signicode/verser2-guest-python` passed with 41 tests.
+    - [x] Run focused Node/Python end-to-end routing tests needed for protocol compatibility. Focused Python protocol tests cover the Host Broker header/body contract; broader runtime end-to-end coverage is deferred to final validation after TLS/mTLS surfaces are complete.
+    - [x] Record coverage status for changed behavior. Focused Python tests cover URL route matching, request headers/body preservation, text/JSON convenience bodies, async request body streaming, response streaming/single-use consumption, flow-control acknowledgements, close/reset hang behavior, and actionable malformed/error handling; the Python package runner does not currently emit an exact coverage percentage.
+- [x] Task: Conductor - Automated Verification 'Phase 3: Routed request and response behavior' (Protocol in workflow.md)
+    - [x] Review the changes for the expected implementation of routed request behavior, response behavior, and protocol error mapping.
+    - [x] Review the interface and implementation regarding the conformance with spec requirements for routed request and response behavior, including streaming and error handling. Oracle final review reported no must-fix blockers.
+    - [x] Fix any review findings before proceeding to Phase 4, or record a scoped deferral in this plan when a finding intentionally remains open. Must-fix review findings around broker control stream compatibility, request pseudo-headers, empty body termination, response streaming, flow-control, close/reset hangs, and outbound window waiting were fixed; no Phase 3 must-fix findings remain open.
+
+Phase 3 checkpoint notes:
+
+- Common/reuse scan: Phase 3 continues to adapt Node Broker `/verser/request` header contract and Python Guest HTTP/2 event-loop patterns. No shared TypeScript common code was changed because the implementation is Python runtime-specific.
+- Deduplication check: Broker stream helpers are still package-local; extraction with Python Guest helpers remains deferred until final deduplication once TLS/mTLS and integration paths stabilize.
+- Validation: `npm run lint --workspace=@signicode/verser2-guest-python` passed. `npm test --workspace=@signicode/verser2-guest-python` passed with 41 tests.
+- Coverage: changed behavior is covered by focused Python unit/protocol tests, but exact percentage is not emitted by the current Python package runner.
 
 ## Phase 4: TLS, mTLS, and registration authorization coverage
 
