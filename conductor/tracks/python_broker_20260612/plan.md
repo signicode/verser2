@@ -123,7 +123,7 @@ Phase 3 checkpoint notes:
 
 ## Phase 4: TLS, mTLS, and registration authorization coverage
 
-- [ ] Task: Write failing Python Broker TLS/mTLS tests first
+- [~] Task: Write failing Python Broker TLS/mTLS tests first
     - [ ] Add tests proving trusted Host CA configuration works.
     - [ ] Add tests proving trusted PEM client identity works with Host `tls.clientAuth`.
     - [ ] Add tests proving trusted PFX/PKCS12 client identity with passphrase works with Host `tls.clientAuth`.

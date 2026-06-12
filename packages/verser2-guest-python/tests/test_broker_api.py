@@ -430,6 +430,23 @@ class VerserBrokerApiRouteControlTest(unittest.TestCase):
         # Should resolve without any async waiting if route is already present.
         self._run(wait_for_route(broker, "already.local"))
 
+    def test_registration_payload_includes_peer_id_and_role_with_tls_options(self) -> None:
+        """Registration payload still carries ``peerId`` and ``role`` even when
+        TLS client identity options are supplied."""
+        package = importlib.import_module("verser2_guest_python")
+        create_verser_broker = getattr(package, "create_verser_broker")
+        broker = create_verser_broker(
+            host_url="https://127.0.0.1",
+            broker_id="python-unit-broker",
+            tls_ca_file="/ca.pem",
+            tls_cert_file="/client.pem",
+            tls_key_file="/client-key.pem",
+            tls_key_password="secret",
+        )
+        payload = self._registration_payload(broker)
+        self.assertEqual(payload.get("peerId"), "python-unit-broker")
+        self.assertEqual(payload.get("role"), "broker")
+
     def test_wait_for_route_resolves_for_future_advertisements(self) -> None:
         broker = self._broker_factory()
         wait_for_route = getattr(type(broker), "wait_for_route", None)
@@ -846,6 +863,180 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
 
             collected = self._run(collect())
             self.assertEqual(collected, b"\x00\xffchunk")
+
+
+class VerserBrokerTlsConfigTest(unittest.TestCase):
+    """Tests for future Python Broker TLS/mTLS behaviour.
+
+    Tests 1 and 6 should pass with current production code.
+    Tests 2–5 are expected to fail until the corresponding features are
+    implemented in ``broker.py``.
+    """
+
+    def _broker_factory(self, **overrides: Any) -> Any:
+        package = importlib.import_module("verser2_guest_python")
+        create_verser_broker = getattr(package, "create_verser_broker", None)
+        self.assertIsNotNone(
+            create_verser_broker,
+            "create_verser_broker is not exported from verser2_guest_python",
+        )
+        assert create_verser_broker is not None
+        opts: dict[str, Any] = {
+            "host_url": "https://127.0.0.1",
+            "broker_id": "python-unit-broker",
+        }
+        opts.update(overrides)
+        return create_verser_broker(**opts)
+
+    def _run(self, coroutine: Any) -> Any:
+        return asyncio.run(coroutine)
+
+    # ------------------------------------------------------------------
+    # Test 1 — trusted Host CA  (expected: PASS)
+    # ------------------------------------------------------------------
+
+    def test_tls_ca_file_passed_to_ssl_context(self) -> None:
+        """``tls_ca_file`` is forwarded to ``ssl.create_default_context``."""
+        broker = self._broker_factory(tls_ca_file="/ca.pem")
+        ssl_context = MagicMock()
+
+        async def fake_open_connection(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
+            reader = AsyncMock()
+            reader.read = AsyncMock(return_value=b"")
+            writer = AsyncMock()
+            writer.write = MagicMock()
+            writer.drain = AsyncMock()
+            writer.close = MagicMock()
+            writer.wait_closed = AsyncMock()
+            return reader, writer
+
+        with patch("ssl.create_default_context", return_value=ssl_context) as mock_ctx:
+            with patch("asyncio.open_connection", side_effect=fake_open_connection):
+                with patch.object(type(broker), "_register", new=AsyncMock()):
+                    with patch.object(type(broker), "_open_control_stream", new=AsyncMock()):
+                        with patch.object(type(broker), "_start_lease_task", new=MagicMock()):
+                            self._run(broker.connect())
+
+        mock_ctx.assert_called_once_with(cafile="/ca.pem")
+
+    # ------------------------------------------------------------------
+    # Test 2 — PEM client identity  (expected: FAIL until implemented)
+    # ------------------------------------------------------------------
+
+    def test_pem_client_identity_configures_cert_chain(self) -> None:
+        """``tls_cert_file`` / ``tls_key_file`` / ``tls_key_password`` cause
+        ``SSLContext.load_cert_chain`` to be called with the right arguments."""
+        broker = self._broker_factory(
+            tls_ca_file="/ca.pem",
+            tls_cert_file="/client.pem",
+            tls_key_file="/client-key.pem",
+            tls_key_password="secret",
+        )
+        ssl_context = MagicMock()
+
+        async def fake_open_connection(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
+            reader = AsyncMock()
+            reader.read = AsyncMock(return_value=b"")
+            writer = AsyncMock()
+            writer.write = MagicMock()
+            writer.drain = AsyncMock()
+            writer.close = MagicMock()
+            writer.wait_closed = AsyncMock()
+            return reader, writer
+
+        with patch("ssl.create_default_context", return_value=ssl_context):
+            with patch("asyncio.open_connection", side_effect=fake_open_connection):
+                with patch.object(type(broker), "_register", new=AsyncMock()):
+                    with patch.object(type(broker), "_open_control_stream", new=AsyncMock()):
+                        with patch.object(type(broker), "_start_lease_task", new=MagicMock()):
+                            self._run(broker.connect())
+
+        ssl_context.load_cert_chain.assert_called_once_with(
+            certfile="/client.pem",
+            keyfile="/client-key.pem",
+            password="secret",
+        )
+
+    # ------------------------------------------------------------------
+    # Test 3 — PFX / PKCS12 client identity  (expected: FAIL until implemented)
+    # ------------------------------------------------------------------
+
+    def test_pfx_client_identity_invokes_helper(self) -> None:
+        """Options ``tls_pfx_file`` and ``tls_pfx_password`` are accepted and
+        cause a broker helper (``_load_pfx_client_identity``) to be invoked."""
+        broker = self._broker_factory(
+            tls_ca_file="/ca.pem",
+            tls_pfx_file="/client.pfx",
+            tls_pfx_password="pfx-secret",
+        )
+
+        self.assertTrue(
+            hasattr(type(broker), "_load_pfx_client_identity"),
+            "Broker should expose a _load_pfx_client_identity helper "
+            "for PFX/PKCS12 client identity support",
+        )
+
+    # ------------------------------------------------------------------
+    # Test 4 — ALPN negotiated-protocol validation  (expected: FAIL until implemented)
+    # ------------------------------------------------------------------
+
+    def test_alpn_not_h2_raises_actionable_error(self) -> None:
+        """If ``selected_alpn_protocol()`` returns anything other than ``'h2'``,
+        ``connect()`` raises an actionable exception mentioning ALPN / HTTP/2."""
+        broker = self._broker_factory()
+        ssl_context = MagicMock()
+
+        async def fake_open_connection(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
+            reader = AsyncMock()
+            reader.read = AsyncMock(return_value=b"")
+            writer = AsyncMock()
+            writer.write = MagicMock()
+            writer.drain = AsyncMock()
+            writer.close = MagicMock()
+            writer.wait_closed = AsyncMock()
+            # Simulate failed ALPN negotiation
+            ssl_obj = MagicMock()
+            ssl_obj.selected_alpn_protocol.return_value = "http/1.1"
+            writer.get_extra_info.return_value = ssl_obj
+            return reader, writer
+
+        with patch("ssl.create_default_context", return_value=ssl_context):
+            with patch("asyncio.open_connection", side_effect=fake_open_connection):
+                with patch.object(type(broker), "_register", new=AsyncMock()):
+                    with patch.object(type(broker), "_open_control_stream", new=AsyncMock()):
+                        with patch.object(type(broker), "_start_lease_task", new=MagicMock()):
+                            with self.assertRaises(Exception) as context:
+                                self._run(broker.connect())
+
+        message = str(context.exception).lower()
+        self.assertTrue(
+            any(word in message for word in ("alpn", "http/2", "h2")),
+            f"Exception should mention ALPN or HTTP/2, got: {context.exception}",
+        )
+
+    # ------------------------------------------------------------------
+    # Test 5 — TLS handshake failure  (expected: FAIL until implemented)
+    # ------------------------------------------------------------------
+
+    def test_tls_handshake_failure_is_actionable(self) -> None:
+        """A TLS handshake failure from ``asyncio.open_connection`` is wrapped
+        or propagated with an actionable context mentioning TLS / handshake."""
+        broker = self._broker_factory()
+        ssl_context = MagicMock()
+
+        with patch("ssl.create_default_context", return_value=ssl_context):
+            with patch(
+                "asyncio.open_connection",
+                side_effect=OSError("Connection refused"),
+            ):
+                with self.assertRaises(Exception) as context:
+                    self._run(broker.connect())
+
+        message = str(context.exception).lower()
+        self.assertTrue(
+            any(word in message for word in ("tls", "handshake")),
+            f"Exception should mention TLS or handshake, got: {context.exception}",
+        )
 
 
 if __name__ == "__main__":
