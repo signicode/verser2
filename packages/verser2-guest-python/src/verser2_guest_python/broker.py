@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import ssl
+import tempfile
 from collections.abc import AsyncIterable, Iterable
 from typing import Any
 from urllib.parse import urlsplit
@@ -92,6 +93,11 @@ class VerserBroker:
         self.host_url = host_url
         self.broker_id = broker_id
         self.tls_ca_file = tls_ca_file
+        self.tls_cert_file = options.get("tls_cert_file")
+        self.tls_key_file = options.get("tls_key_file")
+        self.tls_key_password = options.get("tls_key_password")
+        self.tls_pfx_file = options.get("tls_pfx_file")
+        self.tls_pfx_password = options.get("tls_pfx_password")
         self.options = dict(options)
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -119,14 +125,19 @@ class VerserBroker:
             return
 
         parsed = urlsplit(self.host_url)
-        context = ssl.create_default_context(cafile=self.tls_ca_file)
-        context.set_alpn_protocols(["h2"])
-        reader, writer = await asyncio.open_connection(
-            parsed.hostname,
-            parsed.port or 443,
-            ssl=context,
-            server_hostname=parsed.hostname,
-        )
+        context = self._create_ssl_context()
+        try:
+            reader, writer = await asyncio.open_connection(
+                parsed.hostname,
+                parsed.port or 443,
+                ssl=context,
+                server_hostname=parsed.hostname,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"TLS handshake failed for broker {self.broker_id} connecting to {self.host_url}: {exc}"
+            ) from exc
+        self._validate_h2_alpn(writer)
         self._reader = reader
         self._writer = writer
         self._conn = h2.connection.H2Connection(
@@ -137,6 +148,67 @@ class VerserBroker:
         self._reader_task = asyncio.create_task(self._read_loop())
         await self._register()
         await self._open_control_stream()
+
+    def _create_ssl_context(self) -> ssl.SSLContext:
+        context = ssl.create_default_context(cafile=self.tls_ca_file)
+        context.set_alpn_protocols(["h2"])
+        if self.tls_cert_file is not None:
+            context.load_cert_chain(
+                certfile=str(self.tls_cert_file),
+                keyfile=None if self.tls_key_file is None else str(self.tls_key_file),
+                password=self.tls_key_password,
+            )
+        if self.tls_pfx_file is not None:
+            self._load_pfx_client_identity(
+                context,
+                str(self.tls_pfx_file),
+                None if self.tls_pfx_password is None else str(self.tls_pfx_password),
+            )
+        return context
+
+    def _load_pfx_client_identity(
+        self, context: ssl.SSLContext, pfx_file: str, password: str | None = None
+    ) -> None:
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.serialization import pkcs12
+        except ImportError as exc:
+            raise RuntimeError(
+                "PFX/PKCS12 client identity support requires the cryptography package"
+            ) from exc
+
+        with open(pfx_file, "rb") as handle:
+            key, certificate, additional_certificates = pkcs12.load_key_and_certificates(
+                handle.read(), None if password is None else password.encode("utf-8")
+            )
+        if key is None or certificate is None:
+            raise RuntimeError("PFX/PKCS12 client identity must contain a private key and certificate")
+        pem = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        pem += certificate.public_bytes(serialization.Encoding.PEM)
+        for extra_certificate in additional_certificates or []:
+            pem += extra_certificate.public_bytes(serialization.Encoding.PEM)
+        with tempfile.NamedTemporaryFile("wb") as identity_file:
+            identity_file.write(pem)
+            identity_file.flush()
+            context.load_cert_chain(identity_file.name)
+
+    def _validate_h2_alpn(self, writer: asyncio.StreamWriter) -> None:
+        get_extra_info = getattr(writer, "get_extra_info", None)
+        if not callable(get_extra_info):
+            return
+        ssl_object = get_extra_info("ssl_object")
+        selected = getattr(ssl_object, "selected_alpn_protocol", None)
+        if not callable(selected):
+            return
+        protocol = selected()
+        if protocol is not None and isinstance(protocol, str) and protocol != "h2":
+            raise RuntimeError(
+                f"TLS ALPN negotiation for broker {self.broker_id} selected {protocol!r}; HTTP/2 'h2' is required"
+            )
 
     async def close(self, reason: str = "broker-close") -> None:
         del reason
@@ -696,8 +768,10 @@ class VerserBroker:
                             self._events[stream_id].put_nowait(event)
                     await self._flush_unlocked()
         except Exception as exc:
-            self._fail_pending_streams(RuntimeError(f"Broker read loop failed: {exc}"))
-            raise
+            self._fail_pending_streams(
+                RuntimeError(f"Broker TLS/connection read loop failed: {exc}")
+            )
+            return
 
     def _fail_pending_streams(self, error: Exception) -> None:
         for queue in list(self._events.values()):
