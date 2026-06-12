@@ -1,9 +1,13 @@
 import asyncio
 import importlib
 import inspect
+import json
+import ssl
 import unittest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import h2.events
 
 
 def _build_broker_response(**kwargs):
@@ -337,6 +341,22 @@ class VerserBrokerApiRouteControlTest(unittest.TestCase):
         self.assertIn("registration", message)
         self.assertIn("python-unit-broker", message)
 
+    def test_malformed_registration_response_is_actionable(self) -> None:
+        broker = self._broker_factory()
+        method = getattr(type(broker), "_coerce_registration_response", None)
+        self.assertIsNotNone(method, "Broker should expose registration parser")
+        assert method is not None
+
+        with self.assertRaises(Exception) as context:
+            if inspect.iscoroutinefunction(method):
+                self._run(method(broker, b"not-json"))
+            else:
+                method(broker, b"not-json")
+
+        message = str(context.exception).lower()
+        self.assertIn("registration", message)
+        self.assertIn("python-unit-broker", message)
+
     def test_host_route_advertisement_populates_get_routes(self) -> None:
         broker = self._broker_factory()
         get_routes = getattr(type(broker), "get_routes", None)
@@ -433,6 +453,399 @@ class VerserBrokerApiRouteControlTest(unittest.TestCase):
             await asyncio.wait_for(waiter, timeout=1)
 
         self._run(run())
+
+
+class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
+    def _broker_factory(self):
+        package = importlib.import_module("verser2_guest_python")
+        create_verser_broker = getattr(package, "create_verser_broker", None)
+        self.assertIsNotNone(
+            create_verser_broker,
+            "create_verser_broker is not exported from verser2_guest_python",
+        )
+        assert create_verser_broker is not None
+        return create_verser_broker(
+            host_url="https://127.0.0.1",
+            broker_id="python-unit-broker",
+        )
+
+    def _run(self, coroutine):
+        return asyncio.run(coroutine)
+
+    def _assert_verser_request_metadata(self, payload: dict[str, Any], *, target_id: str, path: str) -> None:
+        self.assertEqual(payload.get("targetId"), target_id)
+        self.assertEqual(payload.get("sourceId"), "python-unit-broker")
+        self.assertEqual(payload.get("method"), "GET")
+        self.assertEqual(payload.get("path"), path)
+        self.assertIn("requestId", payload)
+        self.assertIsInstance(payload.get("requestId"), str)
+
+    def test_routed_get_sends_request_payload_to_target(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        headers_calls: list[dict[str, Any]] = []
+        data_calls: list[tuple[int, bytes, bool]] = []
+
+        async def fake_send_headers(
+            _headers: list[tuple[str, str]], *, end_stream: bool, create_queue: bool = True
+        ) -> int:
+            headers_calls.append(
+                {
+                    "headers": [tuple(item) for item in _headers],
+                    "end_stream": end_stream,
+                    "create_queue": create_queue,
+                },
+            )
+            return 17
+
+        async def fake_send_data(stream_id: int, data: bytes, end_stream: bool) -> None:
+            data_calls.append((stream_id, data, end_stream))
+
+        async def fake_collect_response(stream_id: int, request_id: str) -> Any:
+            package = importlib.import_module("verser2_guest_python")
+            response_type = getattr(package, "VerserBrokerResponse")
+            return response_type(
+                status=200,
+                headers={"content-type": "text/plain"},
+                request_id=request_id,
+                body=b"ok",
+            )
+
+        with patch.object(
+            type(broker),
+            "_send_headers",
+            new=AsyncMock(side_effect=fake_send_headers),
+        ), patch.object(
+            type(broker),
+            "_send_data",
+            new=AsyncMock(side_effect=fake_send_data),
+        ), patch.object(
+            type(broker),
+            "_collect_response",
+            new=AsyncMock(side_effect=fake_collect_response),
+        ):
+            response = self._run(
+                broker.get(
+                    "http://alpha.local/health?x=1",
+                    headers={"x-test": "yes"},
+                )
+            )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(len(headers_calls), 1)
+
+        request_headers = dict(headers_calls[0]["headers"])
+        self.assertEqual(request_headers.get(":method"), "POST")
+        self.assertEqual(request_headers.get(":path"), "/verser/request")
+
+        stream_id, body, end_stream = data_calls[0]
+        self.assertEqual(stream_id, 17)
+        self.assertTrue(end_stream)
+        self.assertEqual(body, b"")
+
+        self.assertEqual(request_headers.get("x-verser-target-id"), "guest-a")
+        self.assertEqual(request_headers.get("x-verser-source-id"), "python-unit-broker")
+        self.assertEqual(request_headers.get("x-verser-method"), "GET")
+        self.assertEqual(request_headers.get("x-verser-path"), "/health?x=1")
+        self.assertIn("x-verser-request-id", request_headers)
+
+        request_headers_meta = request_headers.get("x-verser-headers")
+        self.assertIsInstance(request_headers_meta, str)
+        self.assertIsNotNone(request_headers_meta)
+        if request_headers_meta is None:
+            self.fail("expected x-verser-headers value for JSON request headers")
+        self.assertIn("x-test", request_headers_meta)
+
+    def test_missing_advertised_route_raises_actionable_exception(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        with self.assertRaises(Exception) as context:
+            self._run(broker.get("http://unknown.local/health"))
+
+        message = str(context.exception).lower()
+        self.assertIn("route", message)
+        self.assertIn("unknown.local", message)
+
+    def test_binary_request_body_chunks_are_not_utf8_coerced(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        chunked = [b"\xff", b"\x00", b"hello"]
+
+        data_calls: list[tuple[int, bytes, bool]] = []
+
+        async def fake_collect_response(_stream_id: int, request_id: str) -> Any:
+            package = importlib.import_module("verser2_guest_python")
+            response_type = getattr(package, "VerserBrokerResponse")
+            return response_type(status=200, headers={}, request_id=request_id, body=b"")
+
+        with patch.object(
+            type(broker),
+            "_send_headers",
+            new=AsyncMock(side_effect=lambda *args, **kwargs: 17),
+        ), patch.object(
+            type(broker),
+            "_send_data",
+            new=AsyncMock(side_effect=lambda stream_id, chunk, end_stream: data_calls.append(
+                (stream_id, chunk, end_stream)
+            )),
+        ), patch.object(
+            type(broker),
+            "_collect_response",
+            new=AsyncMock(side_effect=fake_collect_response),
+        ):
+            self._run(
+                broker.post(
+                    "http://alpha.local/upload",
+                    body=chunked,
+                    headers={"content-type": "application/octet-stream"},
+                )
+            )
+
+        self.assertEqual(data_calls[0][1], b"\xff")
+        self.assertEqual(data_calls[1][1], b"\x00")
+        self.assertEqual(data_calls[2][1], b"hello")
+
+    def test_request_text_and_json_convenience_set_content_type(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        text_headers: list[dict[str, Any]] = []
+        text_data: list[tuple[int, bytes, bool]] = []
+
+        async def fake_collect_response(_stream_id: int, request_id: str) -> Any:
+            package = importlib.import_module("verser2_guest_python")
+            response_type = getattr(package, "VerserBrokerResponse")
+            return response_type(status=200, headers={}, request_id=request_id, body=b"")
+
+        with patch.object(
+            type(broker),
+            "_send_headers",
+            new=AsyncMock(return_value=17),
+        ) as send_headers_mock, patch.object(
+            type(broker),
+            "_send_data",
+            new=AsyncMock(side_effect=lambda stream_id, data, end_stream: text_data.append(
+                (stream_id, data, end_stream)
+            )),
+        ) as send_data_mock, patch.object(
+            type(broker),
+            "_collect_response",
+            new=AsyncMock(side_effect=fake_collect_response),
+        ):
+            self._run(broker.post("http://alpha.local/text", body="hello"))
+            self._run(broker.post("http://alpha.local/json", json={"ok": True}))
+
+            self.assertEqual(len(send_headers_mock.call_args_list), 2)
+            for call in send_headers_mock.call_args_list:
+                headers = dict(call.args[0])
+                text_headers.append(headers)
+
+        self.assertGreaterEqual(len(text_data), 2)
+        self.assertEqual(text_data[0][1], b"hello")
+        self.assertEqual(text_data[1][1], json.dumps({"ok": True}).encode("utf-8"))
+        self.assertIn(
+            "content-type",
+            text_headers[0],
+            "text convenience requests should include a content-type hint when useful",
+        )
+        self.assertIn(
+            "content-type",
+            text_headers[1],
+            "json convenience requests should include a content-type hint",
+        )
+
+    def test_streaming_request_body_forwards_chunks(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        async def request_body() -> Any:
+            yield b"one"
+            yield b""
+            yield b"two"
+
+        stream_calls: list[tuple[bytes, bool]] = []
+
+        async def fake_collect_response(_stream_id: int, request_id: str) -> Any:
+            package = importlib.import_module("verser2_guest_python")
+            response_type = getattr(package, "VerserBrokerResponse")
+            return response_type(status=200, headers={}, request_id=request_id, body=b"")
+
+        with patch.object(
+            type(broker),
+            "_send_headers",
+            new=AsyncMock(return_value=17),
+        ), patch.object(
+            type(broker),
+            "_send_data",
+            new=AsyncMock(side_effect=lambda _stream_id, chunk, end_stream: stream_calls.append(
+                (chunk, end_stream)
+            )),
+        ), patch.object(
+            type(broker),
+            "_collect_response",
+            new=AsyncMock(side_effect=fake_collect_response),
+        ):
+            self._run(broker.post("http://alpha.local/stream", body=request_body()))
+
+        self.assertEqual(stream_calls[0], (b"one", False))
+        self.assertEqual(stream_calls[1], (b"", False))
+        self.assertEqual(stream_calls[2], (b"two", True))
+
+    def test_empty_async_streaming_request_body_ends_stream(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        async def request_body() -> Any:
+            if False:
+                yield b"unreachable"
+
+        stream_calls: list[tuple[bytes, bool]] = []
+
+        async def fake_collect_response(_stream_id: int, request_id: str) -> Any:
+            package = importlib.import_module("verser2_guest_python")
+            response_type = getattr(package, "VerserBrokerResponse")
+            return response_type(status=200, headers={}, request_id=request_id, body=b"")
+
+        with patch.object(type(broker), "_send_headers", new=AsyncMock(return_value=17)), patch.object(
+            type(broker),
+            "_send_data",
+            new=AsyncMock(side_effect=lambda _stream_id, chunk, end_stream: stream_calls.append((chunk, end_stream))),
+        ), patch.object(type(broker), "_collect_response", new=AsyncMock(side_effect=fake_collect_response)):
+            self._run(broker.post("http://alpha.local/empty", body=request_body()))
+
+        self.assertEqual(stream_calls, [(b"", True)])
+
+    def test_collect_response_streams_body_and_acknowledges_flow_control(self) -> None:
+        broker = self._broker_factory()
+        broker._events[17] = asyncio.Queue()
+        broker._events[17].put_nowait(
+            h2.events.ResponseReceived(
+                stream_id=17,
+                headers=[(":status", "200"), ("x-stream", "yes")],
+            )
+        )
+        broker._events[17].put_nowait(
+            h2.events.DataReceived(stream_id=17, data=b"one", flow_controlled_length=3)
+        )
+        broker._events[17].put_nowait(
+            h2.events.DataReceived(stream_id=17, data=b"two", flow_controlled_length=5)
+        )
+        broker._events[17].put_nowait(h2.events.StreamEnded(stream_id=17))
+        acknowledged: list[tuple[int, int]] = []
+
+        async def fake_ack(stream_id: int, length: int) -> None:
+            acknowledged.append((stream_id, length))
+
+        with patch.object(type(broker), "_acknowledge_received_data", new=AsyncMock(side_effect=fake_ack)):
+            response = self._run(broker._collect_response(17, "req-stream"))
+
+            async def collect() -> bytes:
+                chunks = []
+                async for chunk in response.aiter_bytes():
+                    chunks.append(chunk)
+                return b"".join(chunks)
+
+            self.assertEqual(self._run(collect()), b"onetwo")
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers, {"x-stream": "yes"})
+        self.assertEqual(acknowledged, [(17, 3), (17, 5)])
+
+    def test_response_stream_reset_raises_actionable_error(self) -> None:
+        broker = self._broker_factory()
+        broker._events[17] = asyncio.Queue()
+        broker._events[17].put_nowait(
+            h2.events.ResponseReceived(stream_id=17, headers=[(":status", "200")])
+        )
+        broker._events[17].put_nowait(h2.events.StreamReset(stream_id=17, error_code=0))
+
+        response = self._run(broker._collect_response(17, "req-reset"))
+
+        async def collect() -> None:
+            async for _chunk in response.aiter_bytes():
+                pass
+
+        with self.assertRaises(Exception) as context:
+            self._run(collect())
+        self.assertIn("reset", str(context.exception).lower())
+
+    def test_send_data_splits_large_chunks_by_h2_frame_size(self) -> None:
+        broker = self._broker_factory()
+        sent: list[tuple[int, bytes, bool]] = []
+
+        class FakeConn:
+            max_outbound_frame_size = 4
+
+            def send_data(self, stream_id: int, data: bytes, end_stream: bool = False) -> None:
+                sent.append((stream_id, data, end_stream))
+
+            def local_flow_control_window(self, _stream_id: int) -> int:
+                return 65535
+
+            def data_to_send(self) -> bytes:
+                return b""
+
+        broker._conn = FakeConn()
+
+        self._run(broker._send_data(3, b"abcdefghi", True))
+
+        self.assertEqual(sent, [(3, b"abcd", False), (3, b"efgh", False), (3, b"i", True)])
+
+    def test_read_loop_fails_pending_streams_on_connection_close(self) -> None:
+        broker = self._broker_factory()
+        broker._events[17] = asyncio.Queue()
+
+        class FakeReader:
+            async def read(self, _size: int) -> bytes:
+                return b""
+
+        broker._reader = FakeReader()
+
+        self._run(broker._read_loop())
+
+        event = broker._events[17].get_nowait()
+        self.assertIsInstance(event, RuntimeError)
+        self.assertIn("closed", str(event).lower())
+
+    def test_binary_request_and_response_chunks_are_preserved(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        with patch.object(
+            type(broker),
+            "_send_headers",
+            new=AsyncMock(return_value=17),
+        ), patch.object(
+            type(broker),
+            "_send_data",
+            new=AsyncMock(side_effect=lambda *args, **kwargs: None),
+        ), patch.object(
+            type(broker),
+            "_collect_response",
+            new=AsyncMock(return_value=None),
+        ):
+            package = importlib.import_module("verser2_guest_python")
+            response_type = getattr(package, "VerserBrokerResponse")
+            response = response_type(
+                status=200,
+                headers={"content-type": "application/octet-stream"},
+                request_id="req-binary",
+                body=b"\x00\xffchunk",
+            )
+
+            self.assertEqual(response._body, b"\x00\xffchunk")
+
+            async def collect() -> bytes:
+                chunks = []
+                async for chunk in response.aiter_bytes(3):
+                    chunks.append(chunk)
+                return b"".join(chunks)
+
+            collected = self._run(collect())
+            self.assertEqual(collected, b"\x00\xffchunk")
 
 
 if __name__ == "__main__":
