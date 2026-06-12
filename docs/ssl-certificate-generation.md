@@ -86,7 +86,7 @@ openssl req -newkey rsa:2048 -nodes \
   -subj "/CN=guest-a" \
   -keyout guest-a.key \
   -out guest-a.csr \
-  -addext "subjectAltName = DNS:guest-a,URI:urn:verser:guest:guest-a" \
+  -addext "subjectAltName = DNS:guest-a,URI:urn:verser:client:guest-a" \
   -addext "extendedKeyUsage = clientAuth"
 
 openssl x509 -req \
