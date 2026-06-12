@@ -393,6 +393,7 @@ HTTP/3, and no built-in authentication/authorization policy.
 - The Host uses TLS HTTP/2 and requires application-provided certificate and private key material.
 - Host `keyFile` private keys must be readable only by the owner (`chmod 0600`) on POSIX systems.
 - The Broker and Guest use normal Node.js TLS trust by default, or application-provided `ca`/`caFile` trust when configured. Passing `ca` or `caFile` replaces Node's default CA set for that outbound HTTP/2 connection.
+- The Host can opt into mutual TLS by configuring `tls.clientAuth` with a trusted client CA. In that mode, Guest and Broker connections must present a trusted client certificate during the TLS handshake.
 - HTTP/3 and QUIC are explicitly not implemented.
 - A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
 - The Guest maintains a configurable pool of one-use leased HTTP/2 streams. Routed request and response bodies are transferred as raw octets over an assigned lease, not as base64 NDJSON control frames.
@@ -436,6 +437,18 @@ const host = createVerserHost({
     certFile: '/etc/verser/host.crt',
     keyFile: '/etc/verser/host.key',
     passphrase: process.env.VERSER_TLS_KEY_PASSPHRASE,
+  },
+});
+```
+
+Or configure Host TLS with PFX/PKCS12 identity material:
+
+```ts
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    pfx: fs.readFileSync('/etc/verser/host.p12'),
+    passphrase: process.env.VERSER_TLS_PFX_PASSPHRASE,
   },
 });
 ```
@@ -502,6 +515,73 @@ const broker = createVerserBroker({
   tls: { caFile: '/etc/verser/ca.crt' },
 });
 ```
+
+To require Guest and Broker client certificates, configure the Host with trusted client CA material under `tls.clientAuth`:
+
+```ts
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    certFile: '/etc/verser/host.crt',
+    keyFile: '/etc/verser/host.key',
+    clientAuth: {
+      caFile: '/etc/verser/client-ca.crt',
+      authorizeRegistration(context) {
+        if (context.role === 'guest' && context.routedDomains.includes('internal.example.com')) {
+          return { action: 'allow' };
+        }
+        if (context.role === 'broker' && context.certificate?.commonName === 'broker-a') {
+          return { action: 'allow' };
+        }
+        return { action: 'close', reason: 'certificate identity is not authorized' };
+      },
+    },
+  },
+});
+```
+
+Guests and Brokers can present client identities as PEM files:
+
+```ts
+const guest = createVerserNodeGuest({
+  hostUrl: 'https://localhost:8443',
+  guestId: 'client-a',
+  routedDomains: ['internal.example.com'],
+  tls: {
+    caFile: '/etc/verser/host-ca.crt',
+    certFile: '/etc/verser/client-a.crt',
+    keyFile: '/etc/verser/client-a.key',
+  },
+});
+
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  tls: {
+    caFile: '/etc/verser/host-ca.crt',
+    certFile: '/etc/verser/broker-a.crt',
+    keyFile: '/etc/verser/broker-a.key',
+  },
+});
+```
+
+They can also present PFX/PKCS12 identities:
+
+```ts
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  tls: {
+    caFile: '/etc/verser/host-ca.crt',
+    pfxFile: '/etc/verser/broker-a.p12',
+    passphrase: process.env.VERSER_CLIENT_PFX_PASSPHRASE,
+  },
+});
+```
+
+`authorizeRegistration` receives the peer id, role, Guest requested routed domains, structured certificate identity metadata, and registration metadata. Guest routed-domain authorization is callback-driven. Broker authorization in this release is identity-only at registration time; Broker per-request target authorization is not implemented. mTLS authenticates the remote transport and supports registration policy, but `verser2` is still not a complete public gateway; applications remain responsible for authentication, authorization, and routing policy beyond these transport-level checks.
+
+Changing Host `tls.clientAuth` mode or trusted client CA material requires restarting the Host so new TLS handshakes use the new mTLS policy. `reloadTlsCertificate()` reloads Host server identity material for new handshakes, but existing HTTP/2 sessions keep their current TLS state and mTLS mode changes are not applied to the already-running secure server.
 
 ## Features
 

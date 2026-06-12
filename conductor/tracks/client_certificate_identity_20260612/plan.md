@@ -141,7 +141,7 @@ Phase 2 validation notes:
     - [x] Perform end-of-phase deduplication check and record common-code decisions.
 - [x] Task: Checkpoint Phase 3 on the PR branch
     - [x] Commit Phase 3 changes with a scoped conventional commit message after validation passes.
-    - [ ] Push the phase checkpoint to the track PR branch after local validation.
+    - [x] Push the phase checkpoint to the track PR branch after local validation.
     - [x] Update `plan.md` with the phase checkpoint commit SHA: `079d4a1`.
 - [x] Task: Conductor - Automated review with no manual verification required for 'Phase 3: Registration Authorization Callback and Certificate Context' (Protocol in workflow.md)
 
@@ -156,33 +156,40 @@ Phase 3 validation notes:
 
 ## Phase 4: Documentation, Examples, and Release Validation
 
-- [ ] Task: Review documentation locations and product boundary language
-    - [ ] Inspect README TLS sections and `docs/ssl-certificate-generation.md`.
-    - [ ] Confirm docs preserve precise Host/Guest/Broker terminology.
-    - [ ] Confirm docs do not imply Verser2 is a complete public gateway.
-- [ ] Task: Write documentation updates
-    - [ ] Document Host `tls.clientAuth` with client CA examples.
-    - [ ] Document Guest and Broker client certificate configuration with PEM examples.
-    - [ ] Document Host and client PFX/PKCS12 configuration examples.
-    - [ ] Document `tls.clientAuth.authorizeRegistration` callback context and action return shape.
-    - [ ] Document that Guest routed-domain authorization is callback-driven.
-    - [ ] Document that Broker authorization is identity-only in this track.
-    - [ ] Document that local Guest HTTP/1 handlers remain local and do not need HTTPS certificates.
-    - [ ] Document reload/restart behavior for certificate material and mTLS mode changes.
-- [ ] Task: Validate docs and package behavior
-    - [ ] Run `npm run lint` for formatting and static checks.
-    - [ ] Run `npm run build` for all packages.
-    - [ ] Run `npm run test` or the narrowest reliable full TLS-related validation if full tests are not necessary.
-    - [ ] Record coverage status and any skipped validation in `plan.md`.
-- [ ] Task: Final review and deduplication
-    - [ ] Confirm all changed behavior matches `spec.md`.
-    - [ ] Confirm common TLS primitives are centralized in `@signicode/verser-common` where reusable.
-    - [ ] Confirm tests cover success and failure cases for Host, Guest, and Broker.
-    - [ ] Confirm documentation and examples match implemented public APIs.
-    - [ ] Confirm no HTTP/3 or non-Node runtime behavior was introduced outside scope.
-- [ ] Task: Final PR push and ready-for-review state
+- [x] Task: Review documentation locations and product boundary language
+    - [x] Inspect README TLS sections and `docs/ssl-certificate-generation.md`.
+    - [x] Confirm docs preserve precise Host/Guest/Broker terminology.
+    - [x] Confirm docs do not imply Verser2 is a complete public gateway.
+- [x] Task: Write documentation updates
+    - [x] Document Host `tls.clientAuth` with client CA examples.
+    - [x] Document Guest and Broker client certificate configuration with PEM examples.
+    - [x] Document Host and client PFX/PKCS12 configuration examples.
+    - [x] Document `tls.clientAuth.authorizeRegistration` callback context and action return shape.
+    - [x] Document that Guest routed-domain authorization is callback-driven.
+    - [x] Document that Broker authorization is identity-only in this track.
+    - [x] Document that local Guest HTTP/1 handlers remain local and do not need HTTPS certificates.
+    - [x] Document reload/restart behavior for certificate material and mTLS mode changes.
+- [x] Task: Validate docs and package behavior
+    - [x] Run `npm run lint` for formatting and static checks.
+    - [x] Run `npm run build` for all packages.
+    - [x] Run `npm run test` or the narrowest reliable full TLS-related validation if full tests are not necessary.
+    - [x] Record coverage status and any skipped validation in `plan.md`.
+- [x] Task: Final review and deduplication
+    - [x] Confirm all changed behavior matches `spec.md`.
+    - [x] Confirm common TLS primitives are centralized in `@signicode/verser-common` where reusable.
+    - [x] Confirm tests cover success and failure cases for Host, Guest, and Broker.
+    - [x] Confirm documentation and examples match implemented public APIs.
+    - [x] Confirm no HTTP/3 or non-Node runtime behavior was introduced outside scope.
+- [~] Task: Final PR push and ready-for-review state
     - [ ] Commit Phase 4 changes with a scoped conventional commit message after validation passes.
     - [ ] Push the final validated branch state to the track PR.
     - [ ] Update `plan.md` with the phase checkpoint commit SHA.
     - [ ] Confirm PR title and body still describe the final TO-BE state.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Documentation, Examples, and Release Validation' (Protocol in workflow.md)
+
+Phase 4 validation notes:
+- Documentation updated in `README.md` and `docs/ssl-certificate-generation.md` for Host `tls.clientAuth`, Guest/Broker PEM client identities, PFX/PKCS12 identities, callback context/action shape, Guest routed-domain policy, Broker identity-only policy, local HTTP/1 handler boundaries, and reload/restart behavior.
+- Final validation passed: `npm run lint && npm run build && npm run test`.
+- Full test suite passed 186/186 tests. Numeric coverage reporting is not configured; changed behavior is covered by focused common TLS tests, TLS runtime integration tests, registration authorization tests, and the full repository suite.
+- Final deduplication: reusable TLS normalization and certificate identity extraction remain centralized in `@signicode/verser-common`; Host/Guest/Broker code uses thin adapters.
+- Scope review: implementation stays within Node Host/Guest/Broker TLS HTTP/2 transport and does not add HTTP/3 or non-Node runtime mTLS behavior.
