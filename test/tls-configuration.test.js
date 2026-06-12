@@ -934,3 +934,178 @@ test('Host without clientAuth preserves Guest compatibility when client cert is 
     await safeCloseHost(host);
   }
 });
+
+test('Host clientAuth authorizeRegistration receives Guest routed domains and certificate identity', async () => {
+  const contexts = [];
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        authorizeRegistration(context) {
+          contexts.push(context);
+          return { action: 'allow' };
+        },
+      },
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'mtls-guest-authorized-context',
+      routedDomains: ['authorized.verser.test'],
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await guest.connect();
+
+    assert.equal(contexts.length, 1);
+    assert.equal(contexts[0].peerId, 'mtls-guest-authorized-context');
+    assert.equal(contexts[0].role, 'guest');
+    assert.deepEqual(contexts[0].routedDomains, ['authorized.verser.test']);
+    assert.equal(contexts[0].certificate.commonName, 'trusted-client');
+    assert.deepEqual(contexts[0].certificate.dnsNames, ['trusted-client']);
+    assert.deepEqual(contexts[0].certificate.uriNames, ['urn:verser:client:trusted-client']);
+    assert.match(contexts[0].certificate.fingerprint256, /^sha256:[a-f0-9]{64}$/);
+  } finally {
+    if (guest?.connected) {
+      await guest.close('test-complete');
+    } else if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host clientAuth authorizeRegistration receives Broker identity-only context', async () => {
+  const contexts = [];
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        authorizeRegistration(context) {
+          contexts.push(context);
+          return { action: 'allow' };
+        },
+      },
+    },
+  });
+  let broker;
+
+  try {
+    await host.start();
+    broker = createVerserBroker({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      brokerId: 'mtls-broker-authorized-context',
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await broker.connect();
+
+    assert.equal(contexts.length, 1);
+    assert.equal(contexts[0].peerId, 'mtls-broker-authorized-context');
+    assert.equal(contexts[0].role, 'broker');
+    assert.deepEqual(contexts[0].routedDomains, []);
+    assert.equal(contexts[0].certificate.commonName, 'trusted-client');
+  } finally {
+    if (broker !== undefined) {
+      await broker.close('test-complete');
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host clientAuth authorizeRegistration close action rejects registration', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        authorizeRegistration() {
+          return { action: 'close', reason: 'not allowed in test' };
+        },
+      },
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'mtls-guest-rejected-context',
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await assert.rejects(() => guest.connect(), /registration|closed|invalid|JSON/i);
+    assert.equal(host.getRoutedDomains().length, 0);
+  } finally {
+    if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host clientAuth default allows valid client certificate registration without callback', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'mtls-guest-default-authorized',
+      routedDomains: ['default-authorized.verser.test'],
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await guest.connect();
+    assert.deepEqual(host.getRoutedDomains(), [
+      { targetId: 'mtls-guest-default-authorized', domain: 'default-authorized.verser.test' },
+    ]);
+  } finally {
+    if (guest?.connected) {
+      await guest.close('test-complete');
+    } else if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
