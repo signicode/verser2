@@ -6,9 +6,9 @@
 
 Implemented package targets:
 
-- `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, certificate fingerprint helpers, and TLS option normalization helpers for Verser packages.
-- `@signicode/verser2-host` in `packages/verser2-host`: Configurable TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, routed-domain advertisements, route cleanup, certificate reload support, and Broker request forwarding.
-- `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, configurable Host TLS trust, and minimal plain `node:http` Agent implementation.
+- `@signicode/verser-common` in `packages/verser-common`: Shared TypeScript primitives, protocol envelopes, registration/control contracts, routing helpers, header serialization/protocol-header helpers, serialized error response helpers, NDJSON helpers, lifecycle names, contextual errors, HTTP/2 helpers, certificate fingerprint helpers, certificate identity extraction, mTLS registration authorization types, and TLS option normalization helpers for Verser packages.
+- `@signicode/verser2-host` in `packages/verser2-host`: Configurable TLS HTTP/2 Verser2 Host implementation with Guest/Broker registration, optional mTLS client certificate enforcement, registration authorization callback support, routed-domain advertisements, route cleanup, certificate reload support, and Broker request forwarding.
+- `@signicode/verser2-guest-node` in `packages/verser2-guest-node`: Node.js Guest, Broker, configurable Host TLS trust, configurable PEM/PFX client certificate identities, and minimal plain `node:http` Agent implementation.
 - `@signicode/verser2-guest-python` in `packages/verser2-guest-python`: Python ASGI Guest implementation using `uv` for Python package commands and the `h2` library for outbound TLS HTTP/2 Guest registration, control, leased request dispatch, ASGI `scope`/`receive`/`send`, and request/response body streaming.
 
 Future package targets:
@@ -31,6 +31,7 @@ Future package targets:
 
 - Node.js `node:http` for local HTTP/1 server compatibility and the MVP Broker-backed plain HTTP Agent.
 - Node.js `node:http2` for the current TLS HTTP/2 Host, Guest, and Broker transport.
+- Node.js TLS client certificate and PFX/PKCS12 support for optional mTLS on the Host/Guest/Broker HTTP/2 transport.
 - Shared TypeScript package code through `@signicode/verser-common`.
 - Python `asyncio` plus `h2` for the Python ASGI Guest outbound TLS HTTP/2 transport.
 - HTTP/3 behavior only when introduced by explicit future tracks.

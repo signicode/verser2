@@ -30,14 +30,14 @@ The product uses the repo nomenclature:
 The implemented foundation includes the TypeScript/Node.js package path and a Python ASGI Guest:
 
 - A shared `@signicode/verser-common` package for reusable protocol-neutral primitives, types, constants, and helpers.
-- A configurable TLS HTTP/2 Host that accepts outbound Guest and Broker connections, registers routed domains, and advertises route updates.
+- A configurable TLS HTTP/2 Host that accepts outbound Guest and Broker connections, optionally enforces trusted client certificates for mTLS transport, registers routed domains, and advertises route updates.
 - A Node Guest that owns or receives a normal `http.Server` or request listener without calling `listen()`.
 - A Python Guest that connects outbound to the existing Host and dispatches routed requests into an ASGI 3 app without opening an inbound port.
-- A Broker that can route requests through the Host into a connected Guest's local HTTP/1 handler.
+- A Broker that can present client certificate identity when configured and route requests through the Host into a connected Guest's local HTTP/1 handler.
 - A minimal plain `node:http` Agent path for Host-advertised domains.
 - End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
 
-Current MVP limitations are documented in the README: HTTP/3, browser/Bun/Rust/Go/Java guests, Python Host/Broker behavior, advanced Agent behavior, authentication, authorization, and public gateway policy are future track work.
+Current MVP limitations are documented in the README: HTTP/3, browser/Bun/Rust/Go/Java guests, Python Host/Broker behavior, advanced Agent behavior, Broker per-request authorization, complete authentication/authorization systems, and public gateway policy are future track work.
 
 ## Product Principles
 
@@ -72,3 +72,4 @@ Current MVP limitations are documented in the README: HTTP/3, browser/Bun/Rust/G
 - Shared primitives needed by multiple packages are provided by `@signicode/verser-common` instead of duplicated in package-local implementations.
 - Concurrent request or multiplexing behavior is proven only when a track explicitly introduces that transport behavior.
 - Errors include enough context to diagnose connection, target, protocol, path, stream, timeout, and close-reason failures.
+- Optional Host mTLS registration policy can identify Guest and Broker clients with certificate metadata without changing non-mTLS deployments.

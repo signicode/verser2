@@ -1,13 +1,17 @@
 import { EventEmitter } from 'node:events';
 import * as http2 from 'node:http2';
 import { text as readStreamText } from 'node:stream/consumers';
+import type { TLSSocket } from 'node:tls';
 
 import {
   type RoutedDomainRegistration,
   VERSER_LIFECYCLE_EVENTS,
+  type VerserCertificateIdentity,
   type VerserError,
   type VerserPeerId,
   type VerserPeerRole,
+  type VerserRegistrationAuthorizationContext,
+  type VerserRegistrationRequest,
   type VerserRegistrationResponse,
   createBrokerRoutesControlFrame,
   createPeerId,
@@ -15,7 +19,9 @@ import {
   createVerserError,
   decodeHeaderMap,
   encodeVerserEnvelope,
+  extractCertificateIdentity,
   flattenVerserHeaders,
+  normalizeHostClientAuthTlsOptions,
   normalizeServerTlsOptions,
   parseLeaseAcquireTimeoutMs,
   parseRegistrationRequest,
@@ -101,10 +107,15 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     const certificate = normalizeServerTlsOptions(this.options.tls);
+    const clientAuth = normalizeHostClientAuthTlsOptions(this.options.tls?.clientAuth);
     const server = http2.createSecureServer({
       cert: certificate.cert,
       key: certificate.key,
+      pfx: certificate.pfx,
       passphrase: certificate.passphrase,
+      ca: clientAuth?.ca,
+      requestCert: clientAuth?.requestCert,
+      rejectUnauthorized: clientAuth?.rejectUnauthorized,
     });
 
     server.on('session', (session) => this.trackSession(session));
@@ -214,13 +225,13 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     const registration = parseRegistrationRequest(await readStreamText(stream));
-    this.registerPeer(stream, registration);
+    await this.registerPeer(stream, registration);
   }
 
-  private registerPeer(
+  private async registerPeer(
     stream: http2.ServerHttp2Stream,
     registration: VerserHostRegistrationRequest,
-  ): void {
+  ): Promise<void> {
     const peerId = createPeerId(registration.peerId);
     if (this.peers.has(peerId)) {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
@@ -232,6 +243,11 @@ export class NodeHttp2VerserHost implements VerserHost {
         'protocol-error',
         'Registration stream does not have an HTTP/2 session',
       );
+    }
+
+    const authorized = await this.authorizeRegistration(stream, session, peerId, registration);
+    if (!authorized) {
+      return;
     }
 
     const peer: RegisteredPeer = {
@@ -271,6 +287,59 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     stream.end(JSON.stringify(response));
     this.advertiseRoutes();
+  }
+
+  private async authorizeRegistration(
+    stream: http2.ServerHttp2Stream,
+    session: http2.Http2Session,
+    peerId: VerserPeerId,
+    registration: VerserRegistrationRequest,
+  ): Promise<boolean> {
+    const callback = this.options.tls?.clientAuth?.authorizeRegistration;
+    if (callback === undefined) {
+      return true;
+    }
+
+    const tlsSocket = session.socket as TLSSocket;
+    const context: VerserRegistrationAuthorizationContext = {
+      peerId,
+      role: registration.role,
+      routedDomains: registration.routedDomains ?? [],
+      certificate: this.getCertificateIdentity(tlsSocket),
+      metadata: {
+        authorized: tlsSocket.authorized,
+        authorizationError: tlsSocket.authorizationError?.message,
+      },
+    };
+    const action = await callback(context);
+
+    if (action.action === 'allow') {
+      return true;
+    }
+
+    const reason = action.reason ?? 'registration rejected by client certificate policy';
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.error,
+      peerId,
+      role: registration.role,
+      error: createVerserError('invalid-registration', reason, { peerId, role: registration.role }),
+    });
+
+    if (!stream.headersSent && !stream.closed) {
+      stream.respond({ ':status': 403, 'content-type': 'application/json' });
+    }
+    if (!stream.closed) {
+      stream.end(JSON.stringify({ status: 'closed', reason }));
+    }
+    session.close();
+    return false;
+  }
+
+  private getCertificateIdentity(tlsSocket: TLSSocket): VerserCertificateIdentity | undefined {
+    return extractCertificateIdentity(
+      tlsSocket.getPeerCertificate(true),
+      this.options.tls?.clientAuth?.knownExtensionOids ?? [],
+    );
   }
 
   private advertiseRoutes(): void {

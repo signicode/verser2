@@ -11,10 +11,15 @@ export { DEFAULT_MAX_ENVELOPE_METADATA_BYTES, VERSER_LIFECYCLE_EVENTS } from './
 export type {
   VerserPeerRole,
   VerserRegistrationRequest,
+  VerserRegistrationAuthorizationAction,
+  VerserRegistrationAuthorizationCallback,
+  VerserRegistrationAuthorizationContext,
   VerserRegistrationResponse,
   VerserBrokerRoutesControlFrame,
   VerserBrokerControlFrame,
+  VerserCertificateIdentity,
   VerserClientTlsOptions,
+  VerserHostClientAuthTlsOptions,
   VerserHostTlsOptions,
   LeaseRequestMetadataReadOptions,
   LeaseResponseMetadataReadOptions,
@@ -122,7 +127,9 @@ export {
 } from './lib/http2-headers';
 
 export {
+  extractCertificateIdentity,
   normalizeClientTlsOptions,
+  normalizeHostClientAuthTlsOptions,
   normalizeServerTlsOptions,
   getCertificateFingerprint,
   verifyPinnedCertificate,

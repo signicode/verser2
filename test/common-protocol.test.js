@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const { Readable } = require('node:stream');
 
 const { loadVerserCommon } = require('./support/verser-package-imports.cjs');
-const { trusted } = require('./support/tls-fixtures.cjs');
+const { trusted, clientCa, trustedClient } = require('./support/tls-fixtures.cjs');
 
 const common = loadVerserCommon();
 
@@ -434,5 +434,120 @@ test('shared certificate helpers expose and verify a pinned certificate', () => 
   assert.deepEqual(common.verifyPinnedCertificate(trusted.certificate, 'sha256:invalid'), {
     valid: false,
     reason: 'certificate fingerprint mismatch',
+  });
+});
+
+test('shared TLS normalizers preserve PEM server identity compatibility', () => {
+  assert.deepEqual(
+    common.normalizeServerTlsOptions({ cert: trusted.certificate, key: trusted.key }),
+    {
+      cert: trusted.certificate,
+      key: trusted.key,
+      passphrase: undefined,
+    },
+  );
+  assert.throws(
+    () => common.normalizeServerTlsOptions({ cert: trusted.certificate, keyFile: trusted.keyPath }),
+    /Ambiguous TLS config/,
+  );
+});
+
+test('shared TLS normalizers support PFX server identity', () => {
+  assert.deepEqual(common.normalizeServerTlsOptions({ pfx: trusted.pfx }), {
+    pfx: trusted.pfx,
+    passphrase: undefined,
+  });
+  assert.deepEqual(common.normalizeServerTlsOptions({ pfxFile: trusted.pfxPath }), {
+    pfx: trusted.pfx,
+    passphrase: undefined,
+  });
+});
+
+test('shared TLS normalizers support client PEM and PFX identity', () => {
+  assert.deepEqual(
+    common.normalizeClientTlsOptions({
+      ca: trusted.certificate,
+      cert: trustedClient.certificate,
+      key: trustedClient.key,
+    }),
+    {
+      ca: trusted.certificate,
+      cert: trustedClient.certificate,
+      key: trustedClient.key,
+      passphrase: undefined,
+    },
+  );
+  assert.deepEqual(
+    common.normalizeClientTlsOptions({
+      caFile: trusted.certificatePath,
+      pfxFile: trustedClient.pfxPath,
+      passphrase: trustedClient.pfxPassphrase,
+    }),
+    {
+      ca: trusted.certificate,
+      pfx: trustedClient.pfx,
+      passphrase: trustedClient.pfxPassphrase,
+    },
+  );
+  assert.deepEqual(
+    common.normalizeClientTlsOptions({
+      cert: trustedClient.certificate,
+      key: trustedClient.key,
+    }),
+    {
+      cert: trustedClient.certificate,
+      key: trustedClient.key,
+      passphrase: undefined,
+    },
+  );
+});
+
+test('shared TLS normalizers support Host client certificate trust', () => {
+  assert.equal(common.normalizeHostClientAuthTlsOptions(undefined), undefined);
+  assert.deepEqual(
+    common.normalizeHostClientAuthTlsOptions({
+      caFile: clientCa.certificatePath,
+      knownExtensionOids: ['1.2.3.4'],
+    }),
+    {
+      ca: clientCa.certificate,
+      requestCert: true,
+      rejectUnauthorized: true,
+      knownExtensionOids: ['1.2.3.4'],
+    },
+  );
+});
+
+test('shared certificate identity extraction summarizes peer certificate metadata', () => {
+  const raw = Buffer.from('trusted-client-raw');
+  const identity = common.extractCertificateIdentity(
+    {
+      subject: { CN: 'trusted-client', OU: 'tests' },
+      issuer: { CN: 'verser-client-ca' },
+      subjectaltname: 'DNS:trusted-client, URI:urn:verser:client:trusted-client',
+      valid_from: 'Jan  1 00:00:00 2026 GMT',
+      valid_to: 'Jan  1 00:00:00 2027 GMT',
+      fingerprint256: 'AA:BB:CC',
+      raw,
+      customExtensions: {
+        '1.2.3.4': 'verser-extension-value',
+      },
+    },
+    ['1.2.3.4', '1.2.3.5'],
+  );
+
+  assert.deepEqual(identity, {
+    commonName: 'trusted-client',
+    dnsNames: ['trusted-client'],
+    uriNames: ['urn:verser:client:trusted-client'],
+    fingerprint256: 'sha256:aabbcc',
+    subject: 'CN=trusted-client, OU=tests',
+    issuer: 'CN=verser-client-ca',
+    validFrom: 'Jan  1 00:00:00 2026 GMT',
+    validTo: 'Jan  1 00:00:00 2027 GMT',
+    raw: raw.toString('base64'),
+    customExtensions: {
+      '1.2.3.4': 'verser-extension-value',
+    },
   });
 });
