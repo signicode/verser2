@@ -11,7 +11,15 @@ const {
   createVerserBroker,
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
-const { trusted, untrusted, mismatched, encrypted } = require('./support/tls-fixtures.cjs');
+const {
+  trusted,
+  untrusted,
+  mismatched,
+  encrypted,
+  clientCa,
+  trustedClient,
+  untrustedClient,
+} = require('./support/tls-fixtures.cjs');
 
 function once(emitter, eventName) {
   return new Promise((resolve, reject) => {
@@ -24,6 +32,8 @@ const cert = trusted.certificate;
 const key = trusted.key;
 const certFile = trusted.certificatePath;
 const keyFile = trusted.keyPath;
+const trustedPfx = trusted.pfx;
+const trustedPfxPassphrase = trusted.pfxPassphrase;
 const untrustedCert = untrusted.certificate;
 const untrustedKey = untrusted.key;
 const mismatchedCertPath = mismatched.certificatePath;
@@ -31,6 +41,13 @@ const mismatchedKeyPath = mismatched.keyPath;
 const encryptedCert = encrypted.certificate;
 const encryptedKey = encrypted.key;
 const encryptedPassphrase = encrypted.passphrase;
+const clientCaCert = clientCa.certificate;
+const trustedClientCert = trustedClient.certificate;
+const trustedClientKey = trustedClient.key;
+const trustedClientPfx = trustedClient.pfx;
+const trustedClientPfxPassphrase = trustedClient.pfxPassphrase;
+const untrustedClientCert = untrustedClient.certificate;
+const untrustedClientKey = untrustedClient.key;
 
 async function connectSecureHttp2(url, options) {
   const session = http2.connect(url, options);
@@ -211,6 +228,30 @@ test('Host supports TLS config using file paths', async () => {
     await once(session, 'close');
   } finally {
     await host.close('test-complete');
+  }
+});
+
+test('Host supports PFX TLS config', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      pfx: trustedPfx,
+      passphrase: trustedPfxPassphrase,
+    },
+  });
+
+  try {
+    await host.start();
+    assert.equal(host.running, true);
+
+    const session = await connectSecureHttp2(`https://127.0.0.1:${host.address.port}`, {
+      ca: cert,
+    });
+
+    session.close();
+    await once(session, 'close');
+  } finally {
+    await safeCloseHost(host);
   }
 });
 
@@ -638,5 +679,258 @@ test('Node Broker rejects untrusted certificate when no CA is provided', async (
       destroyClientSession(broker);
     }
     await host.close();
+  }
+});
+
+test('Host configured with client CA rejects Guest without client certificate', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'mtls-guest-missing-cert',
+      minWaitingStreams: 0,
+      tls: { ca: cert },
+    });
+
+    await assert.rejects(() => guest.connect(), /certificate|alert|tls|socket/i);
+  } finally {
+    if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host configured with client CA rejects Broker without client certificate', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  let broker;
+
+  try {
+    await host.start();
+    broker = createVerserBroker({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      brokerId: 'mtls-broker-missing-cert',
+      tls: { ca: cert },
+    });
+
+    await assert.rejects(() => broker.connect(), /certificate|alert|tls|socket/i);
+  } finally {
+    if (broker !== undefined) {
+      destroyClientSession(broker);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host configured with client CA rejects untrusted Guest client certificate', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'mtls-guest-untrusted-cert',
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: untrustedClientCert,
+        key: untrustedClientKey,
+      },
+    });
+
+    await assert.rejects(() => guest.connect(), /certificate|alert|tls|socket/i);
+  } finally {
+    if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Guest connects and registers with trusted client certificate', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  const guestId = 'mtls-guest-trusted-cert';
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId,
+      routedDomains: ['mtls-guest.verser.test'],
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await guest.connect();
+    assert.equal(guest.connected, true);
+    assert.deepEqual(host.getRoutedDomains(), [
+      { targetId: guestId, domain: 'mtls-guest.verser.test' },
+    ]);
+  } finally {
+    if (guest?.connected) {
+      await guest.close('test-complete');
+    } else if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Broker connects and registers with trusted client certificate', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  let broker;
+
+  try {
+    await host.start();
+    broker = createVerserBroker({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      brokerId: 'mtls-broker-trusted-cert',
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await broker.connect();
+    assert.deepEqual(broker.getRoutes(), []);
+    assert.equal(broker.sessionCount, 1);
+  } finally {
+    if (broker?.connected) {
+      await broker.close('test-complete');
+    } else if (broker !== undefined) {
+      destroyClientSession(broker);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Guest and Broker can register with trusted PFX client identities', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  let guest;
+  let broker;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'mtls-guest-trusted-pfx',
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        pfx: trustedClientPfx,
+        passphrase: trustedClientPfxPassphrase,
+      },
+    });
+    broker = createVerserBroker({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      brokerId: 'mtls-broker-trusted-pfx',
+      tls: {
+        ca: cert,
+        pfx: trustedClientPfx,
+        passphrase: trustedClientPfxPassphrase,
+      },
+    });
+
+    await guest.connect();
+    await broker.connect();
+    assert.equal(guest.connected, true);
+    assert.equal(broker.sessionCount, 1);
+  } finally {
+    if (broker !== undefined) {
+      await broker.close('test-complete');
+    }
+    if (guest?.connected) {
+      await guest.close('test-complete');
+    } else if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host without clientAuth preserves Guest compatibility when client cert is configured', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'mtls-guest-compat-cert-ignored',
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await guest.connect();
+    assert.equal(guest.connected, true);
+  } finally {
+    if (guest?.connected) {
+      await guest.close('test-complete');
+    } else if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
   }
 });

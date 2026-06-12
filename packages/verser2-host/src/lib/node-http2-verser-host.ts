@@ -16,6 +16,7 @@ import {
   decodeHeaderMap,
   encodeVerserEnvelope,
   flattenVerserHeaders,
+  normalizeHostClientAuthTlsOptions,
   normalizeServerTlsOptions,
   parseLeaseAcquireTimeoutMs,
   parseRegistrationRequest,
@@ -101,10 +102,15 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     const certificate = normalizeServerTlsOptions(this.options.tls);
+    const clientAuth = normalizeHostClientAuthTlsOptions(this.options.tls?.clientAuth);
     const server = http2.createSecureServer({
       cert: certificate.cert,
       key: certificate.key,
+      pfx: certificate.pfx,
       passphrase: certificate.passphrase,
+      ca: clientAuth?.ca,
+      requestCert: clientAuth?.requestCert,
+      rejectUnauthorized: clientAuth?.rejectUnauthorized,
     });
 
     server.on('session', (session) => this.trackSession(session));
