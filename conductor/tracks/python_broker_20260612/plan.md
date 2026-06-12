@@ -115,6 +115,7 @@ Phase 2 checkpoint notes:
 
 Phase 3 checkpoint notes:
 
+- Phase checkpoint commit: `f8238b0`.
 - Common/reuse scan: Phase 3 continues to adapt Node Broker `/verser/request` header contract and Python Guest HTTP/2 event-loop patterns. No shared TypeScript common code was changed because the implementation is Python runtime-specific.
 - Deduplication check: Broker stream helpers are still package-local; extraction with Python Guest helpers remains deferred until final deduplication once TLS/mTLS and integration paths stabilize.
 - Validation: `npm run lint --workspace=@signicode/verser2-guest-python` passed. `npm test --workspace=@signicode/verser2-guest-python` passed with 41 tests.
