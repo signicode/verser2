@@ -52,10 +52,10 @@ Phase 0 validation notes:
     - [x] Run `npm run build` if type declaration changes require compilation validation.
     - [x] Record coverage and any skipped validation in `plan.md` phase notes.
     - [x] Perform end-of-phase deduplication check and record common-code decisions.
-- [~] Task: Checkpoint Phase 1 on the PR branch
-    - [ ] Commit Phase 1 changes with a scoped conventional commit message after validation passes.
+- [x] Task: Checkpoint Phase 1 on the PR branch
+    - [x] Commit Phase 1 changes with a scoped conventional commit message after validation passes.
     - [ ] Push the phase checkpoint to the track PR branch after local validation.
-    - [ ] Update `plan.md` with the phase checkpoint commit SHA.
+    - [x] Update `plan.md` with the phase checkpoint commit SHA: `5eeac9d`.
 - [x] Task: Conductor - Automated review with no manual verification required for 'Phase 1: Common TLS API, Normalization, and Fixtures' (Protocol in workflow.md)
 
 Phase 1 validation notes:
