@@ -2,7 +2,7 @@
 
 ## Phase 1: Track setup, architecture discovery, and failing API tests
 
-- [ ] Task: Create the review branch, planning commit, and PR for the complete Python Broker TO-BE state
+- [~] Task: Create the review branch, planning commit, and PR for the complete Python Broker TO-BE state
     - [ ] Create a dedicated track branch before implementation changes.
     - [ ] Commit the approved Conductor planning artifacts on the track branch so a PR can be created.
     - [ ] Create a GitHub PR with a title and body describing the final Python Broker capability, not only the planning artifacts.
