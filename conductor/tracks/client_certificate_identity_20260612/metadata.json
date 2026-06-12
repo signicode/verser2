@@ -1,0 +1,8 @@
+{
+  "track_id": "client_certificate_identity_20260612",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-06-12T00:42:24Z",
+  "updated_at": "2026-06-12T00:42:24Z",
+  "description": "Introduce client certificate identity and registration authorization for Verser2 mTLS transport"
+}
