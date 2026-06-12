@@ -6,15 +6,22 @@
     - [x] Confirm the working tree has no unrelated changes that would be included accidentally.
     - [x] Create a dedicated branch for the full client-certificate identity and registration authorization track.
     - [x] Keep subsequent work scoped to the track branch.
-- [~] Task: Create track pull request review surface
-    - [ ] Create a GitHub pull request with a TO-BE title describing the final intended mTLS and registration authorization behavior.
-    - [ ] Use a real multiline PR body that describes the complete track outcome, not only planning artifacts.
-    - [ ] Use the PR as the review and checkpoint surface through the track.
+- [x] Task: Create track pull request review surface
+    - [x] Create a GitHub pull request with a TO-BE title describing the final intended mTLS and registration authorization behavior.
+    - [x] Use a real multiline PR body that describes the complete track outcome, not only planning artifacts.
+    - [x] Use the PR as the review and checkpoint surface through the track.
+    - PR: https://github.com/signicode/verser2/pull/15
 - [x] Task: Record implementation operating rules
     - [x] Autocontinue within the active implementation session when test errors are introduced by the session and the fix is safe, local, and in scope.
     - [x] If a tool call fails because it was invoked improperly, retry with corrected invocation after confirming no unintended mutation occurred.
     - [x] If a tool call fails despite correct invocation, pause according to the Conductor failure policy.
-- [ ] Task: Conductor - User Manual Verification 'Phase 0: Track Branch and Pull Request Setup' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 0: Track Branch and Pull Request Setup' (Protocol in workflow.md)
+
+Phase 0 validation notes:
+- Confirmed only Conductor track status/plan files were changed before the initial checkpoint.
+- Created branch `client-certificate-identity-20260612` and PR #15.
+- Phase 0 checkpoint commit before PR creation: `ab433f8`.
+- Manual verification was requested through the Conductor HITL flow; the user deferred manual verification until the end of the track.
 
 ## Phase 1: Common TLS API, Normalization, and Fixtures
 
