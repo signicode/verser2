@@ -54,7 +54,7 @@ Phase 0 validation notes:
     - [x] Perform end-of-phase deduplication check and record common-code decisions.
 - [x] Task: Checkpoint Phase 1 on the PR branch
     - [x] Commit Phase 1 changes with a scoped conventional commit message after validation passes.
-    - [ ] Push the phase checkpoint to the track PR branch after local validation.
+    - [x] Push the phase checkpoint to the track PR branch after local validation.
     - [x] Update `plan.md` with the phase checkpoint commit SHA: `5eeac9d`.
 - [x] Task: Conductor - Automated review with no manual verification required for 'Phase 1: Common TLS API, Normalization, and Fixtures' (Protocol in workflow.md)
 
@@ -70,38 +70,47 @@ Phase 1 validation notes:
 
 ## Phase 2: Host, Guest, and Broker Runtime mTLS Integration
 
-- [ ] Task: Review runtime connection paths and reusable common helpers
-    - [ ] Inspect Host secure server creation in `packages/verser2-host`.
-    - [ ] Inspect Node Guest and Broker `http2.connect` usage in `packages/verser2-guest-node`.
-    - [ ] Confirm runtime adapters can stay thin around common TLS normalizers.
-- [ ] Task: Write failing integration tests for mTLS connection behavior
-    - [ ] Add test proving Host configured with client CA rejects a Guest without a client certificate.
-    - [ ] Add test proving Host configured with client CA rejects a Broker without a client certificate.
-    - [ ] Add test proving Host rejects Guest/Broker clients with untrusted client certificates.
-    - [ ] Add test proving Guest connects and registers with a trusted client certificate.
-    - [ ] Add test proving Broker connects and registers with a trusted client certificate.
-    - [ ] Add test proving existing Host/Guest/Broker TLS behavior remains unchanged when `tls.clientAuth` is not configured.
-    - [ ] Confirm the new tests fail for missing runtime wiring.
-- [ ] Task: Implement Host mTLS server configuration
-    - [ ] Pass normalized Host PFX/PKCS12 or PEM server identity into `http2.createSecureServer`.
-    - [ ] When `tls.clientAuth` includes client CA trust, configure `requestCert: true` and `rejectUnauthorized: true`.
-    - [ ] When `tls.clientAuth` lacks client CA trust, preserve existing server TLS behavior.
-    - [ ] Preserve existing session, stream, lifecycle, and certificate reload behavior.
-    - [ ] Document or code-guard mTLS mode changes that require Host restart rather than reload.
-- [ ] Task: Implement Guest and Broker client identity wiring
-    - [ ] Pass normalized `ca`, PEM identity, PFX/PKCS12 identity, and passphrase options into Guest `http2.connect`.
-    - [ ] Pass normalized `ca`, PEM identity, PFX/PKCS12 identity, and passphrase options into Broker `http2.connect`.
-    - [ ] Keep connection lifecycle and error emission behavior compatible with existing tests.
-- [ ] Task: Validate Phase 2 narrowly
-    - [ ] Run focused TLS integration tests.
-    - [ ] Run `npm run build` if TypeScript public API changes require declaration validation.
-    - [ ] Record coverage and any skipped validation in `plan.md` phase notes.
-    - [ ] Perform end-of-phase deduplication check and record common-code decisions.
-- [ ] Task: Checkpoint Phase 2 on the PR branch
+- [x] Task: Review runtime connection paths and reusable common helpers
+    - [x] Inspect Host secure server creation in `packages/verser2-host`.
+    - [x] Inspect Node Guest and Broker `http2.connect` usage in `packages/verser2-guest-node`.
+    - [x] Confirm runtime adapters can stay thin around common TLS normalizers.
+- [x] Task: Write failing integration tests for mTLS connection behavior
+    - [x] Add test proving Host configured with client CA rejects a Guest without a client certificate.
+    - [x] Add test proving Host configured with client CA rejects a Broker without a client certificate.
+    - [x] Add test proving Host rejects Guest/Broker clients with untrusted client certificates.
+    - [x] Add test proving Guest connects and registers with a trusted client certificate.
+    - [x] Add test proving Broker connects and registers with a trusted client certificate.
+    - [x] Add test proving existing Host/Guest/Broker TLS behavior remains unchanged when `tls.clientAuth` is not configured.
+    - [x] Confirm the new tests fail for missing runtime wiring.
+- [x] Task: Implement Host mTLS server configuration
+    - [x] Pass normalized Host PFX/PKCS12 or PEM server identity into `http2.createSecureServer`.
+    - [x] When `tls.clientAuth` includes client CA trust, configure `requestCert: true` and `rejectUnauthorized: true`.
+    - [x] When `tls.clientAuth` lacks client CA trust, preserve existing server TLS behavior.
+    - [x] Preserve existing session, stream, lifecycle, and certificate reload behavior.
+    - [x] Document or code-guard mTLS mode changes that require Host restart rather than reload.
+- [x] Task: Implement Guest and Broker client identity wiring
+    - [x] Pass normalized `ca`, PEM identity, PFX/PKCS12 identity, and passphrase options into Guest `http2.connect`.
+    - [x] Pass normalized `ca`, PEM identity, PFX/PKCS12 identity, and passphrase options into Broker `http2.connect`.
+    - [x] Keep connection lifecycle and error emission behavior compatible with existing tests.
+- [x] Task: Validate Phase 2 narrowly
+    - [x] Run focused TLS integration tests.
+    - [x] Run `npm run build` if TypeScript public API changes require declaration validation.
+    - [x] Record coverage and any skipped validation in `plan.md` phase notes.
+    - [x] Perform end-of-phase deduplication check and record common-code decisions.
+- [~] Task: Checkpoint Phase 2 on the PR branch
     - [ ] Commit Phase 2 changes with a scoped conventional commit message after validation passes.
     - [ ] Push the phase checkpoint to the track PR branch after local validation.
     - [ ] Update `plan.md` with the phase checkpoint commit SHA.
-- [ ] Task: Conductor - Automated review with no manual verification required for 'Phase 2: Host, Guest, and Broker Runtime mTLS Integration' (Protocol in workflow.md)
+- [x] Task: Conductor - Automated review with no manual verification required for 'Phase 2: Host, Guest, and Broker Runtime mTLS Integration' (Protocol in workflow.md)
+
+Phase 2 validation notes:
+- Tests were confirmed to fail before runtime wiring: mTLS Host did not reject Guest/Broker registrations without valid client certificates.
+- Host now passes normalized PEM/PFX server identity and client-auth CA/request/reject settings into `http2.createSecureServer`.
+- Node Guest and Broker now pass normalized CA, PEM identity, PFX/PKCS12 identity, and passphrase options into `http2.connect`.
+- Broker registration now rejects on session/control stream failures so TLS client-certificate failures are actionable instead of hanging or surfacing as uncaught errors.
+- Validation passed: `npm run build && node --test test/tls-configuration.test.js && npm run lint`.
+- Coverage: focused TLS integration tests cover Host PFX, missing client certs, untrusted client certs, trusted PEM client identities, trusted PFX client identities, and compatibility without `tls.clientAuth`; repository does not expose a numeric coverage reporter for this narrow command.
+- Deduplication: runtime packages reuse `@signicode/verser-common` TLS normalizers; no duplicate TLS parsing was added to Host, Guest, or Broker packages.
 
 ## Phase 3: Registration Authorization Callback and Certificate Context
 

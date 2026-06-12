@@ -56,7 +56,7 @@ export class Http2VerserBroker implements VerserBroker {
       return;
     }
     const tls = normalizeClientTlsOptions(this.options.tls);
-    const session = http2.connect(this.options.hostUrl, tls === undefined ? {} : { ca: tls.ca });
+    const session = http2.connect(this.options.hostUrl, tls ?? {});
     this.session = session;
     session.once('close', () => {
       if (this.session === session) {
@@ -191,15 +191,33 @@ export class Http2VerserBroker implements VerserBroker {
       this.handleControlFrame(frame),
     );
     stream.end(JSON.stringify({ peerId: this.options.brokerId, role: 'broker' }));
-    await this.waitForRegistration();
+    await this.waitForRegistration(session, stream);
   }
 
-  private waitForRegistration(): Promise<void> {
-    return new Promise((resolve) => {
-      const unregister = this.waitForFrame(() => {
+  private waitForRegistration(
+    session: http2.ClientHttp2Session,
+    stream: http2.ClientHttp2Stream,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const cleanup = (): void => {
         unregister();
+        stream.off('error', reject);
+        stream.off('close', rejectOnClose);
+        session.off('error', reject);
+        session.off('close', rejectOnClose);
+      };
+      const rejectOnClose = (): void => {
+        cleanup();
+        reject(createVerserError('invalid-registration', 'Broker registration stream closed'));
+      };
+      const unregister = this.waitForFrame(() => {
+        cleanup();
         resolve();
       });
+      stream.once('error', reject);
+      stream.once('close', rejectOnClose);
+      session.once('error', reject);
+      session.once('close', rejectOnClose);
     });
   }
 

@@ -70,7 +70,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     }
 
     const tls = normalizeClientTlsOptions(this.options.tls);
-    const session = http2.connect(this.options.hostUrl, tls === undefined ? {} : { ca: tls.ca });
+    const session = http2.connect(this.options.hostUrl, tls ?? {});
     this.session = session;
     this.closing = false;
 
