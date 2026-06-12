@@ -4,6 +4,7 @@ import { PassThrough, Readable } from 'node:stream';
 
 import {
   createRoutedResponseEnvelope,
+  createVerserError,
   encodeVerserEnvelope,
   validateVerserHeaders,
 } from '@signicode/verser-common';
@@ -40,12 +41,21 @@ export class MinimalServerResponse extends EventEmitter {
 
   private readonly output?: http2.ClientHttp2Stream;
 
+  private readonly maxResponseBytes: number;
+
+  private bufferedResponseBytes = 0;
+
   private responseStarted = false;
 
-  public constructor(requestId?: string, output?: http2.ClientHttp2Stream) {
+  public constructor(
+    requestId?: string,
+    output?: http2.ClientHttp2Stream,
+    maxResponseBytes = 10 * 1024 * 1024,
+  ) {
     super();
     this.requestId = requestId;
     this.output = output;
+    this.maxResponseBytes = maxResponseBytes;
     output?.on('drain', () => this.emit('drain'));
     output?.on('error', (error) => this.emit('error', error));
   }
@@ -77,6 +87,19 @@ export class MinimalServerResponse extends EventEmitter {
   public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
     if (this.output === undefined) {
+      this.bufferedResponseBytes += buffer.length;
+      if (this.bufferedResponseBytes > this.maxResponseBytes) {
+        const error = createVerserError(
+          'local-handler-failure',
+          'Response body bytes exceed limit',
+          {
+            responseBytes: this.bufferedResponseBytes,
+            maxResponseBytes: this.maxResponseBytes,
+          },
+        );
+        this.emit('error', error);
+        throw error;
+      }
       this.chunks.push(buffer);
       return true;
     }
