@@ -29,3 +29,9 @@ Cause: The patch context is too large or matches repeated nearby text, so the pa
 Solution: Re-read the target line range, then retry using smaller patches with unique local context or one section per patch.
 Constraints: Safe for non-destructive text/code edits when the intended file and section are known and the failed patch did not mutate files.
 Ignore-If: Do not use when the failure is caused by a missing file, unexpected file contents, or uncertainty about which repeated block should change.
+
+Problem: Tests or runtime crash with OOM, runaway memory growth, or stream loops after recent streaming, body, read-loop, or transport changes.
+Cause: Newly introduced send/receive call sites may ignore flow control, aggregate bodies without bounds, never terminate on EOF/end/reset/error, send or accept zero-length messages without progress, or use mocks that never signal completion.
+Solution: Inspect recent call sites where content is sent or received; implement receiving-side flow control first, including bounded queues/buffers, delayed HTTP/2 window acknowledgement until bytes are consumed, terminal handling for EOF/end/reset/error, progress checks for empty messages, and explicit body size limits; then add focused timeout/memory-capped regression tests before running broad validation.
+Constraints: Safe when the OOM or hang is in scope for current streaming/transport work and the fix is local, non-destructive, and preserves protocol semantics.
+Ignore-If: Do not use when memory growth is clearly from unrelated fixtures, dependency installation, build artifacts, external services, intentional load tests, or product requirements that explicitly demand full buffering of known-bounded content.
