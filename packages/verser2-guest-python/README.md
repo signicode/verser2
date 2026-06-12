@@ -96,6 +96,34 @@ guest = create_verser_guest(
 - App exceptions before response start are returned as Verser
   `local-handler-failure` error envelopes with Guest, request, and path context.
 
+## Avoid non-terminating async streams
+
+Verser Python transports use async read loops and async body iteration. Any
+custom async stream, test double, or request-body async iterable must eventually
+signal completion:
+
+- `asyncio` stream readers should return `b""` for EOF.
+- Async request-body iterables should stop iteration when the body is complete.
+- Test mocks should not leave `reader.read()` as a bare `AsyncMock`, because each
+  awaited call can produce another truthy mock object forever.
+
+For tests, use an explicit EOF:
+
+```py
+reader = AsyncMock()
+reader.read = AsyncMock(return_value=b"")
+```
+
+or a finite sequence:
+
+```py
+reader.read = AsyncMock(side_effect=[b"first-frame", b""])
+```
+
+If a stream never reaches EOF or never stops yielding chunks, the transport loop
+will keep waiting for more data and can consume unbounded memory in tests or in
+the application process.
+
 ## Known limits
 
 - The first implementation focuses on Python Guest behavior only.
