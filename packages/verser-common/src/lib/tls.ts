@@ -252,8 +252,8 @@ export function verifyPinnedCertificate(
 }
 
 interface PeerCertificateLike {
-  readonly subject?: Readonly<Record<string, string | undefined>>;
-  readonly issuer?: Readonly<Record<string, string | undefined>>;
+  readonly subject?: Readonly<Record<string, string | readonly string[] | undefined>>;
+  readonly issuer?: Readonly<Record<string, string | readonly string[] | undefined>>;
   readonly subjectaltname?: string;
   readonly valid_from?: string;
   readonly valid_to?: string;
@@ -278,7 +278,7 @@ export function extractCertificateIdentity(
       : `sha256:${createHash('sha256').update(raw).digest('hex')}`;
 
   return {
-    commonName: certificate.subject.CN,
+    commonName: firstCertificateNameValue(certificate.subject.CN),
     dnsNames: parseSubjectAlternativeNames(certificate.subjectaltname, 'DNS'),
     uriNames: parseSubjectAlternativeNames(certificate.subjectaltname, 'URI'),
     fingerprint256,
@@ -317,16 +317,34 @@ function parseSubjectAlternativeNames(value: string | undefined, prefix: 'DNS' |
 }
 
 function summarizeCertificateName(
-  value: Readonly<Record<string, string | undefined>> | undefined,
+  value: Readonly<Record<string, string | readonly string[] | undefined>> | undefined,
 ): string {
   if (value === undefined) {
     return '';
   }
 
   return Object.entries(value)
-    .filter((entry): entry is [string, string] => entry[1] !== undefined)
-    .map(([key, entryValue]) => `${key}=${entryValue}`)
+    .filter((entry): entry is [string, string | readonly string[]] => entry[1] !== undefined)
+    .map(([key, entryValue]) => `${key}=${formatCertificateNameValue(entryValue)}`)
     .join(', ');
+}
+
+function firstCertificateNameValue(
+  value: string | readonly string[] | undefined,
+): string | undefined {
+  if (typeof value === 'string' || value === undefined) {
+    return value;
+  }
+
+  return value[0];
+}
+
+function formatCertificateNameValue(value: string | readonly string[]): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  return value.join(',');
 }
 
 function selectKnownExtensions(
