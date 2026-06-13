@@ -39,6 +39,7 @@ Test file categories:
 ├── Runtime integration
 │   ├── end-to-end.test.js          — Host + Node Guest + Broker + Agent + fetch
 │   ├── host.test.js                — Host lifecycle and routing
+│   ├── local-peers.test.js         — Host-side in-process local Guest/Broker attach, routing, interop, streaming, errors
 │   ├── guest-node.test.js          — Node Guest dispatch
 │   ├── broker-routing.test.js      — Broker route management
 │   ├── agent.test.js               — Agent behavior

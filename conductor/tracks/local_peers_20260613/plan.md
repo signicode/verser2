@@ -103,41 +103,51 @@
     - [x] Record coverage status for changed registration, routing, streaming, authorization, and API behavior.
 
     Validation note: `npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run lint && node --test --test-timeout=10000 test/host.test.js test/broker-routing.test.js test/local-peers.test.js test/agent.test.js test/dispatcher.test.js` passed. Exact percentage coverage is not emitted by the current focused runner; changed behavior is covered by focused success, failure, streaming, authorization, duplicate ID, local/H2 interop, Agent, and Dispatcher suites.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Local Host peer implementation, streaming routing, and public API integration' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Local Host peer implementation, streaming routing, and public API integration' (Protocol in workflow.md)
     - [x] Commit and push the Phase 2 checkpoint branch before requesting manual validation so the PR is current.
-    - [ ] Request user manual validation after the pushed checkpoint is available.
+    - [x] Request user manual validation after the pushed checkpoint is available.
 
     Phase 2 checkpoint commit: `ae4045d`; readability refactor commit: `b2d0918`.
 
 ## Phase 3: Documentation, compatibility hardening, and final validation
 
-- [ ] Task: Write or update failing documentation/package-surface tests first
-    - [ ] Update docs tests to expect local peer documentation in relevant user docs or package READMEs.
-    - [ ] Update package import/consumer tests if new public exports need source, staging, tarball, or GitHub-package coverage.
-    - [ ] Confirm tests fail before documentation/package-surface updates where applicable.
-- [ ] Task: Complete error parity, lifecycle polish, and compatibility hardening
-    - [ ] Normalize local-peer errors through existing Verser error codes and serialized error behavior where possible.
-    - [ ] Ensure request-started, request-completed, error, registered, disconnected, route-advertised, and closed events are coherent for local and H2 peers.
-    - [ ] Ensure local close/detach fails pending requests or waiters with actionable errors.
-    - [ ] Confirm H2 behavior remains unchanged unless the spec explicitly requires an alignment fix.
-    - [ ] Address any review findings from Phase 2 manual verification.
-- [ ] Task: Update documentation and examples
-    - [ ] Document the local Host-side Guest/Broker attachment API.
-    - [ ] Document local authorization metadata and the fact that it is Host-owned and not caller-tamperable.
-    - [ ] Document supported local/H2 routing combinations.
-    - [ ] Document streaming behavior, lifecycle, close/detach behavior, and error boundaries.
-    - [ ] Continue documenting that Verser2 is not a complete public gateway and does not implement per-request Broker target authorization.
-- [ ] Task: Final deduplication and compatibility review
-    - [ ] Re-scan `@signicode/verser-common` and affected packages for repeated protocol, route-control, header, lifecycle, stream, and error logic introduced during the track.
-    - [ ] Move reusable code into common libraries where appropriate.
-    - [ ] Confirm Host package dependencies remain appropriate and runtime-specific dependencies stay in runtime packages.
-    - [ ] Confirm docs, tests, and code agree on feature scope and non-goals.
-- [ ] Task: Run final validation
-    - [ ] Run the narrowest complete validation set that proves local peer registration, authorization, routing, streaming, interop, API exports, and docs.
-    - [ ] Run `npm run build` for affected TypeScript packages or the full repo if package boundaries changed.
-    - [ ] Run `npm run lint`.
-    - [ ] Run `npm run test` before final phase completion unless a narrower documented command fully covers all changed behavior.
-    - [ ] Confirm 95% meaningful coverage for changed behavior or record why exact measurement is not emitted by the current runner.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Documentation, compatibility hardening, and final validation' (Protocol in workflow.md)
+- [x] Task: Write or update failing documentation/package-surface tests first
+    - [x] Update docs tests to expect local peer documentation in relevant user docs or package READMEs.
+    - [x] Update package import/consumer tests if new public exports need source, staging, tarball, or GitHub-package coverage.
+    - [x] Confirm tests fail before documentation/package-surface updates where applicable.
+
+    Validation note: `node --test test/docs.test.js` failed as expected after adding local peer documentation assertions, before docs were updated, because `packages/verser2-host/README.md` did not yet mention `attachLocalGuest`.
+- [x] Task: Complete error parity, lifecycle polish, and compatibility hardening
+    - [x] Normalize local-peer errors through existing Verser error codes and serialized error behavior where possible.
+    - [x] Ensure request-started, request-completed, error, registered, disconnected, route-advertised, and closed events are coherent for local and H2 peers.
+    - [x] Ensure local close/detach fails pending requests or waiters with actionable errors.
+    - [x] Confirm H2 behavior remains unchanged unless the spec explicitly requires an alignment fix.
+    - [x] Address any review findings from Phase 2 manual verification.
+
+    Hardening note: Oracle review found local Broker route waiters could hang on Broker/Host close, local Broker handles could remain usable after Host close, local request body stream errors needed explicit mapping, and response status validation should reuse common routing validation. Phase 3 now rejects local route waiters and post-close requests with `disconnected-target`, aborts active local dispatch/response streams on local peer detach or Host close, maps local request body failures to `stream-failure`, and validates local response metadata with `createRoutedResponseEnvelope()`.
+- [x] Task: Update documentation and examples
+    - [x] Document the local Host-side Guest/Broker attachment API.
+    - [x] Document local authorization metadata and the fact that it is Host-owned and not caller-tamperable.
+    - [x] Document supported local/H2 routing combinations.
+    - [x] Document streaming behavior, lifecycle, close/detach behavior, and error boundaries.
+    - [x] Continue documenting that Verser2 is not a complete public gateway and does not implement per-request Broker target authorization.
+- [x] Task: Final deduplication and compatibility review
+    - [x] Re-scan `@signicode/verser-common` and affected packages for repeated protocol, route-control, header, lifecycle, stream, and error logic introduced during the track.
+    - [x] Move reusable code into common libraries where appropriate.
+    - [x] Confirm Host package dependencies remain appropriate and runtime-specific dependencies stay in runtime packages.
+    - [x] Confirm docs, tests, and code agree on feature scope and non-goals.
+
+    Deduplication note: Phase 3 reused `createRoutedResponseEnvelope`, `createVerserError`, and header validation/flattening from `@signicode/verser-common`. Local Broker route waiter and minimal HTTP shim logic remains Host-local because it is currently only reused inside `@signicode/verser2-host`; a future shared route-table/waiter helper may be worthwhile if another runtime-independent Broker state emerges. Host dependencies remain Node built-ins plus `@signicode/verser-common`; Agent/Dispatcher/fetch wrappers remain outside the Host package.
+- [x] Task: Run final validation
+    - [x] Run the narrowest complete validation set that proves local peer registration, authorization, routing, streaming, interop, API exports, and docs.
+    - [x] Run `npm run build` for affected TypeScript packages or the full repo if package boundaries changed.
+    - [x] Run `npm run lint`.
+    - [x] Run `npm run test` before final phase completion unless a narrower documented command fully covers all changed behavior.
+    - [x] Confirm 95% meaningful coverage for changed behavior or record why exact measurement is not emitted by the current runner.
+
+    Validation note: `npm test` passed (209 tests), `npm run test:package-tarballs` passed (51 tarball-mode tests, including `local-peer-smoke`), and final `npm run lint` passed. Exact percentage coverage is not emitted by the current runner; changed behavior is meaningfully covered by local peer registration, authorization, routing, local/H2 interop, streaming, post-close waiter/request rejection, body stream error mapping, package API, docs, and tarball consumer smoke tests.
+- [~] Task: Conductor - User Manual Verification 'Phase 3: Documentation, compatibility hardening, and final validation' (Protocol in workflow.md)
     - [ ] Commit and push the Phase 3 checkpoint branch before requesting manual validation so the PR is current.
     - [ ] Request user manual validation after the pushed checkpoint is available.
+
+    Phase 3 checkpoint commit: pending.

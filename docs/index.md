@@ -13,6 +13,9 @@ Three implemented roles work together:
   local HTTP handler without calling `listen()`.
 - **[Broker](./connecting.md#broker)** — connects outbound to a Host and sends
   requests to advertised Guest routes.
+- The Node Host can also attach **in-process local peers** with
+  `attachLocalGuest()` and `attachLocalBroker()` when a Guest or Broker runs in
+  the same process as the Host.
 
 ## Getting started
 
@@ -36,7 +39,10 @@ Three implemented roles work together:
 
 ## Transport
 
-- Host, Guest, and Broker communicate over TLS HTTP/2.
+- Host, Guest, and Broker communicate over TLS HTTP/2 for remote peer
+  connections.
+- In-process local peers are supported on the Node Host as an alternative to a
+  TLS HTTP/2 Guest or Broker connection when all participants are colocated.
 - Guests attach local handlers in-process: Node HTTP handlers, Bun Fetch-style
   handlers, or Python ASGI apps. They never call `listen()` for this routing
   path.
@@ -51,6 +57,6 @@ Three implemented roles work together:
 | **Host** | A TLS HTTP/2 server that accepts outbound Peer connections |
 | **Guest**| A Peer that registers HTTP routes and handles requests     |
 | **Broker**| A Peer that sends requests to advertised Guest routes      |
-| **Peer** | A generic Host-connected client (Guest or Broker)          |
+| **Peer** | A generic Host-connected client (Guest or Broker), either remote over TLS HTTP/2 or local in-process |
 | **Route**| A domain name that the Host maps to a registered Guest     |
 | **Lease**| A one-use HTTP/2 stream assigned for request/response body transport |

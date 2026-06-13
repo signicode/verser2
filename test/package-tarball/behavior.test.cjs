@@ -100,3 +100,51 @@ test('host-guest-broker-smoke: installed packages route a lightweight request', 
     await host.close('test-complete');
   }
 });
+
+test('local-peer-smoke: installed host package routes in-process peers', async () => {
+  const { createVerserHost } = require('@signicode/verser2-host');
+  const cert = trusted.certificate;
+  const key = trusted.key;
+
+  const host = createVerserHost({ port: 0, tls: { cert, key } });
+  await host.start();
+  let broker;
+  let guest;
+
+  try {
+    guest = await host.attachLocalGuest({
+      guestId: 'guest-tarball-local',
+      routedDomains: ['tarball-local.local.test'],
+      listener(request, response) {
+        const chunks = [];
+        request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on('end', () => {
+          response.writeHead(203, { 'x-local-tarball': 'yes' });
+          response.end(Buffer.concat(chunks));
+        });
+      },
+    });
+    broker = await host.attachLocalBroker({ brokerId: 'broker-tarball-local' });
+    await broker.waitForRoute('tarball-local.local.test');
+
+    const response = await broker.request({
+      targetId: 'guest-tarball-local',
+      method: 'POST',
+      path: '/local-smoke',
+      body: [Buffer.from('local-tarball-body')],
+    });
+    const bodyChunks = [];
+
+    for await (const chunk of response.body) {
+      bodyChunks.push(Buffer.from(chunk));
+    }
+
+    assert.equal(response.statusCode, 203);
+    assert.equal(response.headers['x-local-tarball'], 'yes');
+    assert.deepEqual(Buffer.concat(bodyChunks), Buffer.from('local-tarball-body'));
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});

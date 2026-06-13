@@ -48,6 +48,46 @@ test('task docs document Bun Guest usage and non-listen behavior', () => {
   assert.match(exposingDocs, /listen\(\)/);
 });
 
+test('user docs document local Host peer attachment APIs', () => {
+  const hostReadme = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-host/README.md'),
+    'utf8',
+  );
+  const indexDocs = fs.readFileSync(path.join(rootDirectory, 'docs/index.md'), 'utf8');
+  const connectingDocs = fs.readFileSync(path.join(rootDirectory, 'docs/connecting.md'), 'utf8');
+  const exposingDocs = fs.readFileSync(path.join(rootDirectory, 'docs/exposing-http.md'), 'utf8');
+  const makingRequestsDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/making-requests.md'),
+    'utf8',
+  );
+  const routesDocs = fs.readFileSync(path.join(rootDirectory, 'docs/routes.md'), 'utf8');
+  const authorizationDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/authorization.md'),
+    'utf8',
+  );
+  const lifecycleDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/lifecycle-and-errors.md'),
+    'utf8',
+  );
+
+  assert.match(hostReadme, /attachLocalGuest/);
+  assert.match(hostReadme, /attachLocalBroker/);
+  assert.match(hostReadme, /VerserLocalGuestHandle/);
+  assert.match(hostReadme, /VerserLocalBrokerHandle/);
+  assert.match(connectingDocs, /Local Host peers/);
+  assert.match(connectingDocs, /attachLocalGuest/);
+  assert.match(connectingDocs, /attachLocalBroker/);
+  assert.match(exposingDocs, /VerserLocalGuestRequestListener|attachLocalGuest/);
+  assert.match(makingRequestsDocs, /Local Broker/);
+  assert.match(makingRequestsDocs, /VerserLocalBrokerRequest|attachLocalBroker/);
+  assert.match(routesDocs, /local Brokers/i);
+  assert.match(authorizationDocs, /local peer authorization/i);
+  assert.match(authorizationDocs, /local: true/);
+  assert.match(authorizationDocs, /certificate: undefined/);
+  assert.match(lifecycleDocs, /local peers/i);
+  assert.match(indexDocs, /in-process local peers/i);
+});
+
 test('Bun package README documents handler and entrypoint semantics', () => {
   const bunReadme = fs.readFileSync(
     path.join(rootDirectory, 'packages/verser2-guest-bun/README.md'),

@@ -24,6 +24,11 @@ unsubscribe();
 `host.address` is available after `start()` and throws before the Host is
 listening. Use `host.close()` for shutdown.
 
+Host lifecycle events are emitted for local peers attached with
+`attachLocalGuest()` and `attachLocalBroker()` as well as remote TLS HTTP/2
+peers. Local registrations, route advertisements, request start/completion,
+errors, disconnections, and Host close events use the same event surface.
+
 ### Node and Bun Guest lifecycle
 
 ```ts
@@ -55,6 +60,9 @@ console.log(broker.getRoutes());
 Node/Bun Brokers provide `getRoutes()` and `waitForRoute(domain)`. Python Brokers
 provide `get_routes()` and `wait_for_route(domain)`. If waiting forever is not
 acceptable, wrap the wait in an application timeout.
+Local Broker handles returned by `host.attachLocalBroker()` provide
+`getRoutes()`, `waitForRoute(domain)`, `request()`, `routedRequestCount`, and
+`close()`.
 
 ### Python lifecycle
 
