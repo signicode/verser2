@@ -57,7 +57,7 @@ Future package targets:
 - Package publish staging: generated publish-only package manifests retain runtime metadata and omit development scripts, private/workspace fields, and test-only metadata.
 - GitHub Actions: `.github/workflows/package-publish.yml` validates package build/stage/pack/consumer/tarball behavior for pull requests and publishes staged packages to GitHub Packages on main/tag push events using scoped npm registry configuration for `@signicode` after versioned tarball behavior tests pass.
 - Documentation: package publishing and release-engineering workflow details live in `docs/package-publishing.md`.
-- Documentation: TLS certificate generation and reload guidance lives in `docs/ssl-certificate-generation.md`.
+- Documentation: TLS certificate generation and reload guidance lives in `docs/certificates.md`.
 
 ## Implementation Priorities
 

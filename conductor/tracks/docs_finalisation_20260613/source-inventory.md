@@ -128,7 +128,7 @@
 
 - Task-focused docs were created under `docs/` for connecting, exposing handlers, making requests, routes, certificates, authorization, lifecycle, and errors.
 - Root and package READMEs were trimmed or added. Stale Python Broker deferred/unimplemented claims were removed; Python Broker is documented as implemented while Python Host remains unsupported.
-- `docs/ssl-certificate-generation.md` now redirects to `docs/certificates.md`, where certificate-generation and TLS setup content is consolidated.
+- `docs/ssl-certificate-generation.md` was removed after its certificate-generation and TLS setup content was consolidated into `docs/certificates.md`.
 - Automated review checked source accuracy, Node/Bun/Python wording consistency, unsupported-feature boundaries, Python Broker URL-hostname examples, lifecycle API names, and Bun Broker wrapper wording. Required fixes were applied.
 - Command: `npm run lint`
   - Result: passed; Biome checked 118 files with no fixes applied.
