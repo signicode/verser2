@@ -3,6 +3,20 @@ import { normalizeHeaders } from './headers';
 import type { VerserCommonBrokerRequest, VerserHeaderInput, VerserHeaders } from './types';
 import { requireNonEmpty } from './utils';
 
+/**
+ * Validates and normalizes a common Broker request.
+ *
+ * Trims and uppercases the method, ensures the path starts with `/` (or is `*`),
+ * normalizes headers to a flat string record, and converts the body to a
+ * supported transport format.
+ *
+ * @typeParam TBody - The input body type.
+ * @param request - The raw Broker request.
+ * @returns A normalized Broker request ready for dispatch.
+ * @throws {VerserError} If `targetId`, `method`, or required fields are empty.
+ * @throws {Error} If the body type is not supported.
+ * @public
+ */
 export function createCommonBrokerRequest<TBody>(
   request: VerserCommonBrokerRequest<TBody>,
 ): VerserCommonBrokerRequest<TBody> {

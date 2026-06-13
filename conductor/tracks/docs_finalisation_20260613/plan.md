@@ -40,29 +40,29 @@
 
 ## Phase 2: Public API JSDoc and Python docstrings
 
-- [ ] Task: Add JSDoc to common and Host public APIs
-    - [ ] Document exported public APIs and types in `packages/verser-common/src/**`.
-    - [ ] Document Host public APIs, options, lifecycle types, TLS reload behavior, and registration authorization types.
-- [ ] Task: Add JSDoc to Node, JS common, and Bun public APIs
-    - [ ] Document Node Guest/Broker public APIs, options, request APIs, Agent/Dispatcher/fetch helpers, lifecycle behavior, and exposed request/response types.
-    - [ ] Document JS common public APIs and Bun Guest/Broker public APIs, including Bun handler/route types and WebSocket limitation.
-- [ ] Task: Add docstrings to Python public APIs
-    - [ ] Document `create_verser_guest`, `VerserGuest`, `attach`, `connect`, `close`, `dispatch_routed_request`, and public Guest option/response shapes.
-    - [ ] Document `create_verser_broker`, `VerserBroker`, `connect`, `close`, `request`, convenience request methods, route discovery, and response body helpers.
-    - [ ] Explain ASGI 3 expectations, URL hostname routing, one-shot response bodies, streaming iteration, TLS CA/client identity behavior, and raised exceptions.
-- [ ] Task: Align API docs with implementation inventory
-    - [ ] Ensure source-level docs use Host/Guest/Broker terminology precisely.
-    - [ ] Ensure TLS, route, target ID, lifecycle, streaming, and failure-mode descriptions match source behavior.
-    - [ ] Avoid documenting unsupported roadmap-only behavior as implemented.
-- [ ] Task: Automated review after all source-level API documentation
-    - [ ] Verify JSDoc and Python docstrings match public exports, method signatures, and implementation behavior.
-    - [ ] Verify unsupported runtime features are marked as unsupported rather than implemented.
-    - [ ] Run targeted TypeScript declaration/build validation and Python validation if useful for this group.
-    - [ ] Record any skipped validation with rationale.
-- [ ] Task: Phase 2 validation and checkpoint preparation
-    - [ ] Run lint/format validation for changed source files.
-    - [ ] Run any TypeScript/Python validation not already covered by group reviews.
-    - [ ] Record commands run, results, skipped validation, and rationale.
+- [x] Task: Add JSDoc to common and Host public APIs
+    - [x] Document exported public APIs and types in `packages/verser-common/src/**`.
+    - [x] Document Host public APIs, options, lifecycle types, TLS reload behavior, and registration authorization types.
+- [x] Task: Add JSDoc to Node, JS common, and Bun public APIs
+    - [x] Document Node Guest/Broker public APIs, options, request APIs, Agent/Dispatcher/fetch helpers, lifecycle behavior, and exposed request/response types.
+    - [x] Document JS common public APIs and Bun Guest/Broker public APIs, including Bun handler/route types and WebSocket limitation.
+- [x] Task: Add docstrings to Python public APIs
+    - [x] Document `create_verser_guest`, `VerserGuest`, `attach`, `connect`, `close`, `dispatch_routed_request`, and public Guest option/response shapes.
+    - [x] Document `create_verser_broker`, `VerserBroker`, `connect`, `close`, `request`, convenience request methods, route discovery, and response body helpers.
+    - [x] Explain ASGI 3 expectations, URL hostname routing, one-shot response bodies, streaming iteration, TLS CA/client identity behavior, and raised exceptions.
+- [x] Task: Align API docs with implementation inventory
+    - [x] Ensure source-level docs use Host/Guest/Broker terminology precisely.
+    - [x] Ensure TLS, route, target ID, lifecycle, streaming, and failure-mode descriptions match source behavior.
+    - [x] Avoid documenting unsupported roadmap-only behavior as implemented.
+- [x] Task: Automated review after all source-level API documentation
+    - [x] Verify JSDoc and Python docstrings match public exports, method signatures, and implementation behavior.
+    - [x] Verify unsupported runtime features are marked as unsupported rather than implemented.
+    - [x] Run targeted TypeScript declaration/build validation and Python validation if useful for this group.
+    - [x] Record any skipped validation with rationale.
+- [~] Task: Phase 2 validation and checkpoint preparation
+    - [x] Run lint/format validation for changed source files.
+    - [x] Run any TypeScript/Python validation not already covered by group reviews.
+    - [x] Record commands run, results, skipped validation, and rationale.
     - [ ] Create the scoped Phase 2 commit with a concise summary body.
     - [ ] Push the branch/PR update for review before manual verification.
     - [ ] Record the phase checkpoint commit SHA in `plan.md`.

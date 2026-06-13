@@ -1,19 +1,44 @@
+/**
+ * The package name for
+ * {@link https://www.npmjs.com/package/@signicode/verser2-guest-bun | `@signicode/verser2-guest-bun`}.
+ *
+ * @public
+ */
 export { VERSER2_GUEST_BUN_PACKAGE_NAME } from './lib/constants';
 
+/**
+ * Public types for the Bun Guest and Broker.
+ *
+ * @public
+ */
 export type {
+  /** Broker interface for outbound request routing. */
   VerserBroker,
+  /** Options for creating a Broker. */
   VerserBrokerOptions,
+  /** Request sent through a Broker to a target Guest. */
   VerserBrokerRequest,
+  /** Response returned by a Broker. */
   VerserBrokerResponse,
+  /** Bun Guest interface for outbound connection and handler attachment. */
   VerserBunGuest,
+  /** Lifecycle event emitted by a Bun Guest. */
   VerserBunGuestLifecycleEvent,
+  /** Options for creating a Bun Guest. */
   VerserBunGuestOptions,
+  /** Bun Request extended with route params. */
   VerserBunRequest,
+  /** Path-based route table type. */
   VerserBunRoutes,
+  /** HTTP methods supported in route method maps. */
   VerserBunRouteMethod,
+  /** Route handler function signature. */
   VerserBunRouteHandler,
+  /** Route value (Response or handler). */
   VerserBunRouteValue,
+  /** Per-method route map type. */
   VerserBunRoutesPerMethod,
+  /** Bun Guest request handler object. */
   VerserBunGuestRequestHandler,
 } from './lib/types';
 
@@ -34,6 +59,22 @@ import {
 } from '@signicode/verser2-guest-node';
 import { createNodeStyleHandler } from './lib/adapter';
 
+/**
+ * Creates a new Bun Guest that connects outbound to a Verser Host.
+ *
+ * Wraps the Node Guest transport. The Guest registers as role `guest`, opens
+ * a control stream, and maintains a pool of lease streams. Use
+ * {@link VerserBunGuest.attach | attach()} with a Bun-style handler object
+ * that exposes `fetch` and/or `routes`.
+ *
+ * {@link VerserBunGuest.attach} does **not** call `listen()` — the local
+ * handler processes requests without opening an inbound port.
+ *
+ * @param options - Guest configuration including the Host URL, Guest ID, and TLS options.
+ * @returns A {@link VerserBunGuest} instance.
+ *
+ * @public
+ */
 export function createVerserBunGuest(options: VerserBunGuestOptions): VerserBunGuest {
   const nodeGuest: VerserNodeGuest = createVerserNodeGuest(options);
 
@@ -69,6 +110,22 @@ export function createVerserBunGuest(options: VerserBunGuestOptions): VerserBunG
 
 type VerserBunFetch = ReturnType<VerserBroker['createFetch']>;
 
+/**
+ * Creates a new Broker that connects outbound to a Verser Host.
+ *
+ * Wraps the Node Broker. The Broker registers as role `broker`, receives
+ * route-control frames from the Host, and sends requests to the Host path
+ * `/verser/request`.
+ *
+ * The returned `createFetch()` provides a Web Fetch-style `fetch` function
+ * that resolves target hostnames from the advertised route table and streams
+ * response bodies as Web `ReadableStream`.
+ *
+ * @param options - Broker configuration including the Host URL, Broker ID, and TLS options.
+ * @returns A {@link VerserBroker} instance with a Bun-adapted `createFetch()`.
+ *
+ * @public
+ */
 export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
   const nodeBroker = createVerserNodeBroker(options);
 

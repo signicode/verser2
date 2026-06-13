@@ -10,10 +10,29 @@ function isHeaderPairIterable(
   return Symbol.iterator in Object(value) && !Array.isArray(value);
 }
 
+/**
+ * Checks whether a string is a valid HTTP header name per RFC 7230.
+ *
+ * Allows token characters: `!#$%&'*+.^_``|~0-9A-Za-z-`.
+ *
+ * @param headerName - The header name to validate.
+ * @returns `true` if the name is a valid HTTP token.
+ * @public
+ */
 export function isValidHeaderName(headerName: string): boolean {
   return /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(headerName);
 }
 
+/**
+ * Checks whether a string is a valid HTTP header value per RFC 7230.
+ *
+ * Rejects control characters (0x00–0x08, 0x0a–0x1f, 0x7f).
+ * Backslash and DEL are also rejected.
+ *
+ * @param headerValue - The header value to validate.
+ * @returns `true` if the value contains no forbidden control characters.
+ * @public
+ */
 export function isValidHeaderValue(headerValue: string): boolean {
   for (let index = 0; index < headerValue.length; index += 1) {
     const code = headerValue.charCodeAt(index);
@@ -25,6 +44,17 @@ export function isValidHeaderValue(headerValue: string): boolean {
   return true;
 }
 
+/**
+ * Validates header names and values according to runtime-neutral HTTP rules.
+ *
+ * Throws a `VerserError` with code `protocol-error` if any header name or value
+ * is invalid.
+ *
+ * @param headers - The headers to validate (name → string).
+ * @returns The same headers object if valid (pass-through).
+ * @throws {VerserError} If any header name or value is invalid.
+ * @public
+ */
 export function validateRuntimeNeutralHeaders(
   headers: Record<string, string>,
 ): Record<string, string> {
@@ -46,6 +76,17 @@ export function validateRuntimeNeutralHeaders(
   return validatedHeaders;
 }
 
+/**
+ * Flattens a single {@link VerserHeaderValue} to a string or `undefined`.
+ *
+ * - `null` / `undefined` → `undefined` (omitted)
+ * - Arrays → joined with `,`
+ * - Other values → `String(value)`
+ *
+ * @param value - The header value to flatten.
+ * @returns The flattened string, or `undefined` if the value should be omitted.
+ * @public
+ */
 export function flattenHeaderValue(value: VerserHeaderValue): string | undefined {
   if (value === null || value === undefined) {
     return undefined;
@@ -57,6 +98,20 @@ export function flattenHeaderValue(value: VerserHeaderValue): string | undefined
   return String(value);
 }
 
+/**
+ * Normalizes a {@link VerserHeaderInput} into a flat `Record<string, string>`.
+ *
+ * Accepts a record, an even-length array `[name, value, name, value, …]`,
+ * or an iterable of `[name, value]` pairs. All header names are lowercased.
+ * Null and undefined values are omitted; booleans and numbers are stringified.
+ * The result is validated via
+ * {@link validateRuntimeNeutralHeaders}.
+ *
+ * @param headers - The headers to normalize.
+ * @returns A flat record of lowercase header names to string values.
+ * @throws {VerserError} If any header name or value is invalid.
+ * @public
+ */
 export function normalizeHeaders(headers: VerserHeaderInput | undefined): Record<string, string> {
   const normalizedHeaders: Record<string, string> = {};
   if (headers === undefined) {
@@ -98,6 +153,16 @@ export function normalizeHeaders(headers: VerserHeaderInput | undefined): Record
   return validateRuntimeNeutralHeaders(normalizedHeaders);
 }
 
+/**
+ * Normalizes Node.js `OutgoingHttpHeaders` into a flat string record.
+ *
+ * Supports string, number, and array values. Intended for use when forwarding
+ * headers from a Node Guest's local HTTP handler response.
+ *
+ * @param headers - Node.js outgoing HTTP headers.
+ * @returns A flat record of header names to string values.
+ * @public
+ */
 export function normalizeRequestHeaders(
   headers: import('node:http').OutgoingHttpHeaders | undefined,
 ): Record<string, string> {
@@ -115,6 +180,17 @@ export function normalizeRequestHeaders(
   return normalizedHeaders;
 }
 
+/**
+ * Validates headers for inclusion in a Verser routed envelope.
+ *
+ * Forbids `connection`, `upgrade`, and `keep-alive` as they have no meaning in
+ * the Verser HTTP/2 transport. All header names are lowercased and validated.
+ *
+ * @param headers - The headers to validate.
+ * @returns The validated headers with string or string[] values.
+ * @throws {VerserError} If a header name is invalid or a forbidden header is present.
+ * @public
+ */
 export function validateVerserHeaders(headers: VerserHeaders): Record<string, string | string[]> {
   const validatedHeaders: Record<string, string | string[]> = {};
   for (const [name, value] of Object.entries(headers)) {

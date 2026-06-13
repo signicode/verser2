@@ -3,6 +3,21 @@ import type { Readable } from 'node:stream';
 import { createVerserError } from './errors';
 import type { VerserStreamReadContext } from './types';
 
+/**
+ * Reads exactly `byteCount` bytes from a Node.js `Readable` stream.
+ *
+ * Uses internal buffering and `stream.read()` calls. If insufficient data is
+ * available, waits for the `'readable'` event. The stream must not be in
+ * flowing mode.
+ *
+ * @param stream - The readable stream to read from.
+ * @param byteCount - The exact number of bytes to read.
+ * @param context - Optional diagnostic context for error messages.
+ * @returns A buffer containing exactly `byteCount` bytes.
+ * @throws {VerserError} With code `protocol-error` if the stream ends or closes
+ *   before the requested number of bytes is available.
+ * @public
+ */
 export async function readExactly(
   stream: Readable,
   byteCount: number,
