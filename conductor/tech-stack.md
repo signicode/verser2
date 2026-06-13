@@ -43,7 +43,7 @@ Future package targets:
 - Python package command runner: `uv` for `packages/verser2-guest-python` commands and dependency resolution.
 - Python package dependencies: `h2` for TLS HTTP/2 framing and `cryptography` for Python Broker PFX/PKCS12 mTLS client identities.
 - Build command: `npm run build`.
-- Package staging command: `npm run stage:packages`, which writes publish-ready package directories under `dist/packages` from built workspace artifacts.
+- Package staging command: `npm run stage:packages`, which writes publish-ready package directories under `dist/packages` from built workspace artifacts and copies package READMEs with repository-relative documentation links rewritten to GitHub `blob/<sha-or-tag>/...` URLs. The default docs ref is the current Git SHA and can be overridden with `VERSER_PACKAGE_DOCS_REF` for tag-based releases.
 - Package consumer validation command: `npm run test:package-consumers -- --source=<source|staging|tarball|github>`.
 - Package tarball behavior validation command: `npm run test:package-tarballs`, which packs staged packages, installs the tarballs into an isolated temporary consumer project, and runs reusable automated tests against package-name imports from `node_modules`.
 - Package version policy command: `npm run package:version-policy`, which maps stable versions to `latest`, prereleases to `next`, and computes SHA-labeled main-build versions for GitHub Packages.
@@ -58,6 +58,7 @@ Future package targets:
 - GitHub Actions: `.github/workflows/package-publish.yml` validates package build/stage/pack/consumer/tarball behavior for pull requests and publishes staged packages to GitHub Packages on main/tag push events using scoped npm registry configuration for `@signicode` after versioned tarball behavior tests pass.
 - Documentation: package publishing and release-engineering workflow details live in `docs/package-publishing.md`.
 - Documentation: TLS certificate generation and reload guidance lives in `docs/certificates.md`.
+- Documentation: task-focused user guidance lives under `docs/`, repository development guidance lives in `docs/development.md`, and codemap state lives in `.slim/codemap.json` with the root atlas at `codemap.md`.
 
 ## Implementation Priorities
 
