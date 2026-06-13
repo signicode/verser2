@@ -122,7 +122,8 @@ const host = createVerserHost({
 
 This enables `requestCert` and `rejectUnauthorized` on the Host TLS socket.
 
-Guests and Brokers can present client identities as PEM files:
+Node and Bun Guests, and Node/Bun Brokers, can present client identities as PEM
+files:
 
 ```ts
 const guest = createVerserNodeGuest({
@@ -164,6 +165,11 @@ broker = create_verser_broker(
     tls_key_file="/etc/verser/client.key",
 )
 ```
+
+Python Guest currently supports Host CA trust via `tls_ca_file`, but does not
+support presenting a PEM or PFX/PKCS12 client certificate. If the Host requires
+mTLS client certificates for all Guests, use Node/Bun Guests for those routes or
+add Python Guest client identity support in a future implementation track.
 
 ## Self-signed certificates
 

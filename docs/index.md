@@ -31,6 +31,8 @@ Three implemented roles work together:
   handling, and reconnection.
 - [Development](./development.md) — repository setup, validation, and package
   staging.
+- [Examples: tiny Bun gateway](./examples/gateway.md) — application-owned public
+  gateway forwarding to Node and Python Guests.
 
 ## Transport
 

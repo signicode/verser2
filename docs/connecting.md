@@ -29,6 +29,9 @@ await host.start();
 - `host.address` throws before the Host starts listening.
 - Server certificate material can be reloaded while running via
   `host.reloadTlsCertificate()`.
+- Examples often use one Host, but this is not a built-in cluster or HA model.
+  Route state is per Host instance and per connected peer set. Multi-Host
+  topologies and shared route state are deployment architecture and future work.
 
 ## Guest
 

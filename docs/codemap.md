@@ -9,7 +9,7 @@ Also covers the package publishing runbook (version policy, staging, CI) and rep
 ## Design/Patterns
 
 - **Index + specialized pages** — `docs/index.md` is the landing page with role definitions, getting-started links, transport summary, and terminology table. Each remaining page covers one topic.
-- **11 documentation files** covering:
+- **12 documentation areas** covering:
   - `connecting.md` — Host creation, Guests (Node/Bun/Python), Broker connection
   - `exposing-http.md` — Node `http.Server`, Bun `fetch` handler, Python ASGI 3 attachment
   - `making-requests.md` — Broker.request(), Agent, Dispatcher, Fetch helper
@@ -18,11 +18,12 @@ Also covers the package publishing runbook (version policy, staging, CI) and rep
   - `authorization.md` — Registration-time authorization callback
   - `lifecycle-and-errors.md` — Host/Guest lifecycle events, Broker errors, reconnection
   - `development.md` — Repository setup, build, test, lint, package staging commands
+  - `examples/gateway.md` — Tiny application-owned Bun gateway forwarding to Node and Python Guests
   - `common-issues.md` — Non-terminating read-loop mocks, OOM debugging, flow control guidance
   - `package-publishing.md` — Version/dist-tag policy, staging, pack, CI publish workflow
   - `index.md` — Landing page, role definitions, terminology
 - **README.md link rewriting** — The root `README.md` and package READMEs link into `docs/` via relative paths. The `stage-packages.js` script rewrites these to GitHub blob URLs (`https://github.com/signicode/verser2/blob/<ref>/...`) for published package consumers.
-- **Cross-reference style** — Pages link to each other with `[text](./other-page.md)` relative references. No absolute or external doc host links.
+- **Cross-reference style** — Pages link to each other with repository-relative Markdown references. No absolute or external doc host links are used in source docs.
 - **Code-first** — All API usage is demonstrated with TypeScript/Python code blocks. No prose-driven tutorial narrative beyond setup steps.
 
 ## Data & Control Flow
@@ -37,7 +38,8 @@ Root README.md
        ├─ certificates.md    → TLS, mTLS, self-signed, reloading
        ├─ authorization.md   → registration-time auth
        ├─ lifecycle-and-errors.md → events, errors, reconnection
-       └─ development.md     → repository setup, validation
+       ├─ development.md     → repository setup, validation
+       └─ examples/gateway.md → application-owned public gateway pattern
 
 Package READMEs (packages/*/README.md)
   └─ link to relevant docs/ pages (exposing-http.md, making-requests.md, connecting.md)
