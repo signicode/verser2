@@ -83,6 +83,7 @@ response.body.pipe(process.stdout);
 - [Certificates](./docs/certificates.md) — TLS configuration, mTLS, self-signed certs
 - [Authorization](./docs/authorization.md) — registration-time mTLS authorization
 - [Lifecycle and errors](./docs/lifecycle-and-errors.md) — events, errors, reconnection
+- [Development](./docs/development.md) — repository setup, validation, and package staging
 
 ## Development
 
@@ -93,6 +94,9 @@ npm test             # Run tests
 npm run test:coverage
 npm run lint         # Biome linting and formatting
 ```
+
+See [Development](./docs/development.md) for package staging and release-oriented
+validation commands.
 
 ## What verser2 is not
 
