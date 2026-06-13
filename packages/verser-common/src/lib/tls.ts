@@ -8,6 +8,23 @@ import type {
   VerserHostTlsOptions,
 } from './types';
 
+/**
+ * Normalizes and validates Host TLS options, resolving file paths and reading
+ * certificate material as needed.
+ *
+ * Supports four mutually exclusive identity modes:
+ * - Inline PEM (`cert` + `key`)
+ * - PEM file paths (`certFile` + `keyFile`)
+ * - Inline PFX/PKCS12 (`pfx`)
+ * - PFX file path (`pfxFile`)
+ *
+ * Key file permission `0600` is enforced on non-Windows platforms.
+ *
+ * @param options - The Host TLS options.
+ * @returns Normalized TLS options suitable for Node's `tls.createSecureContext` or `http2.createSecureServer`.
+ * @throws {Error} If the options are ambiguous, incomplete, or key file permissions are insecure.
+ * @public
+ */
 export function normalizeServerTlsOptions(options?: VerserHostTlsOptions): {
   cert?: string;
   key?: string;
@@ -105,6 +122,19 @@ export function normalizeServerTlsOptions(options?: VerserHostTlsOptions): {
   );
 }
 
+/**
+ * Normalizes client (Guest/Broker) TLS options, resolving file paths and reading
+ * certificate material as needed.
+ *
+ * Supports optional CA trust chain and optional client certificate identity
+ * (PEM inline, PEM files, or PFX/PKCS12). Key file permission `0600` is enforced
+ * on non-Windows platforms.
+ *
+ * @param options - The client TLS options.
+ * @returns Normalized TLS options, or `undefined` if no options were provided.
+ * @throws {Error} If the options are ambiguous, incomplete, or key file permissions are insecure.
+ * @public
+ */
 export function normalizeClientTlsOptions(
   options?: VerserClientTlsOptions,
 ): { ca?: string; cert?: string; key?: string; pfx?: Buffer; passphrase?: string } | undefined {
@@ -198,6 +228,19 @@ export function normalizeClientTlsOptions(
   return undefined;
 }
 
+/**
+ * Normalizes Host mTLS client authentication options.
+ *
+ * When `ca` or `caFile` is provided, returns an options object that enables
+ * `requestCert` and `rejectUnauthorized` on the Host's TLS context. If neither
+ * is provided (and `authorizeRegistration` is absent), returns `undefined`
+ * (no client cert verification).
+ *
+ * @param options - The Host client auth TLS options.
+ * @returns Normalized options for Node's TLS context, or `undefined` if client auth is not configured.
+ * @throws {Error} If both `ca` and `caFile` are specified (ambiguous).
+ * @public
+ */
 export function normalizeHostClientAuthTlsOptions(options?: VerserHostClientAuthTlsOptions):
   | {
       ca: string;
@@ -231,6 +274,16 @@ export function normalizeHostClientAuthTlsOptions(options?: VerserHostClientAuth
   };
 }
 
+/**
+ * Computes the SHA-256 fingerprint of a PEM-encoded X.509 certificate.
+ *
+ * The fingerprint is returned in `sha256:<hex>` format (lowercase hex),
+ * matching the format used in {@link VerserCertificateIdentity.fingerprint256}.
+ *
+ * @param certificate - The PEM-encoded certificate string.
+ * @returns The fingerprint string in `sha256:<hex>` format.
+ * @public
+ */
 export function getCertificateFingerprint(certificate: string): string {
   const normalizedCertificate = certificate.replace(
     /-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s/g,
@@ -240,6 +293,17 @@ export function getCertificateFingerprint(certificate: string): string {
   return `sha256:${createHash('sha256').update(certificateBytes).digest('hex')}`;
 }
 
+/**
+ * Verifies a PEM-encoded certificate against an expected SHA-256 fingerprint.
+ *
+ * This is a simple certificate pinning check: the computed fingerprint must
+ * match the expected value exactly.
+ *
+ * @param certificate - The PEM-encoded certificate string.
+ * @param expectedFingerprint - The expected `sha256:<hex>` fingerprint.
+ * @returns An object with `{ valid: true }` on success, or `{ valid: false, reason }` on mismatch.
+ * @public
+ */
 export function verifyPinnedCertificate(
   certificate: string,
   expectedFingerprint: string,
@@ -262,6 +326,18 @@ interface PeerCertificateLike {
   readonly customExtensions?: Readonly<Record<string, string | undefined>>;
 }
 
+/**
+ * Extracts a structured {@link VerserCertificateIdentity} from a Node.js
+ * `PeerCertificate` object (returned by `tlsSocket.getPeerCertificate()`).
+ *
+ * Parses the common name, DNS/URI SANs, SHA-256 fingerprint, subject, issuer,
+ * validity period, and selected X.509v3 custom extensions.
+ *
+ * @param certificate - The Node.js peer certificate object, or `undefined`.
+ * @param knownExtensionOids - Optional list of X.509v3 extension OIDs to extract.
+ * @returns A structured certificate identity, or `undefined` if no certificate is provided.
+ * @public
+ */
 export function extractCertificateIdentity(
   certificate: PeerCertificateLike | undefined,
   knownExtensionOids: readonly string[] = [],

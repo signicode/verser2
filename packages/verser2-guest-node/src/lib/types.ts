@@ -11,80 +11,251 @@ import type {
   VerserError,
 } from '@signicode/verser-common';
 
+/**
+ * Options for creating a Node Guest via {@link createVerserNodeGuest}.
+ *
+ * @public
+ */
 export interface VerserNodeGuestOptions {
+  /** The Host URL to connect to (e.g. `https://host.example:443`). */
   readonly hostUrl: string;
+  /** Unique identifier for this Guest. Duplicate peer IDs are rejected by the Host. */
   readonly guestId: string;
+  /** Optional routed domains to register with the Host. If omitted, routes may be supplied by `attach()` before `connect()`; `attach()` without a domain uses the Guest ID. If neither is supplied before registration, no route domain is advertised. */
   readonly routedDomains?: readonly string[];
+  /** Minimum number of lease streams the Guest should keep ready for incoming requests. Defaults to `1`. */
   readonly minWaitingStreams?: number;
+  /** Maximum number of concurrent lease streams. Defaults to `16`. */
   readonly maxOpenStreams?: number;
+  /** Timeout (ms) for lease stream acquisition. No timeout by default. */
   readonly leaseAcquireTimeoutMs?: number;
+  /** Maximum metadata bytes accepted on lease request envelopes. Defaults to 64 KiB. */
   readonly maxMetadataBytes?: number;
+  /** Maximum buffered response body bytes when no lease stream is available. Defaults to 10 MiB. */
   readonly maxResponseBytes?: number;
+  /** TLS options for the outbound HTTP/2 connection (CA trust, client certificates). */
   readonly tls?: VerserClientTlsOptions;
 }
 
+/**
+ * Lifecycle event emitted by a Node Guest.
+ *
+ * Events are delivered via the listener registered with
+ * {@link VerserNodeGuest.onLifecycle}. Event names correspond to
+ * {@link VERSER_LIFECYCLE_EVENTS} values.
+ *
+ * @public
+ */
 export interface VerserNodeGuestLifecycleEvent {
+  /** The event name (one of `VERSER_LIFECYCLE_EVENTS`). */
   readonly name: string;
+  /** The Guest ID that emitted the event. */
   readonly guestId: string;
+  /** Present for request-scoped events. */
   readonly requestId?: string;
+  /** Present for close events. */
   readonly reason?: string;
+  /** Present for error events. */
   readonly error?: VerserError;
 }
 
+/**
+ * Envelope of a routed request dispatched to a local Node Guest handler.
+ *
+ * The body is delivered as an ordered list of string or Buffer chunks.
+ *
+ * @public
+ */
 export interface VerserNodeGuestDispatchRequest extends RoutedRequestEnvelope {
   readonly body: readonly (string | Buffer)[];
 }
 
+/**
+ * Envelope of a response produced by a local Node Guest handler.
+ *
+ * The complete response body is buffered into a single Buffer.
+ *
+ * @public
+ */
 export interface VerserNodeGuestDispatchResponse extends RoutedResponseEnvelope {
   readonly body: Buffer;
 }
 
+/**
+ * Options for creating a Broker via {@link createVerserBroker}.
+ *
+ * @public
+ */
 export interface VerserBrokerOptions {
+  /** The Host URL to connect to (e.g. `https://host.example:443`). */
   readonly hostUrl: string;
+  /** Unique identifier for this Broker. Duplicate peer IDs are rejected by the Host. */
   readonly brokerId: string;
+  /** Timeout (ms) for lease acquisition when sending requests. No timeout by default. */
   readonly leaseAcquireTimeoutMs?: number;
+  /** Maximum bytes allowed for HTTP/1 request headers when using the Agent socket. Defaults to 64 KiB. */
   readonly maxRequestHeaderBytes?: number;
+  /** Maximum bytes for a single chunk-size line when decoding chunked transfer. Defaults to 1024. */
   readonly maxChunkSizeLineBytes?: number;
+  /** Maximum pending bytes buffered by the chunked-body decoder. Defaults to 64 KiB. */
   readonly maxChunkDecoderPendingBytes?: number;
+  /** TLS options for the outbound HTTP/2 connection (CA trust, client certificates). */
   readonly tls?: VerserClientTlsOptions;
 }
 
+/**
+ * Request sent through a Broker to a target Guest.
+ *
+ * The `targetId` must match a Guest peer ID that has registered with the Host.
+ * The `body` may be omitted, provided as a list of Buffer chunks, or supplied
+ * as a Node.js `Readable` stream.
+ *
+ * @public
+ */
 export interface VerserBrokerRequest {
+  /** Target Guest peer ID. */
   readonly targetId: string;
+  /** HTTP method (e.g. `GET`, `POST`). */
   readonly method: string;
+  /** Request path (e.g. `/api/resource?id=1`). */
   readonly path: string;
+  /** Optional request headers. */
   readonly headers?: Record<string, string>;
+  /** Request body — omitted for no body, Buffer array, or a Readable stream. */
   readonly body?: readonly Buffer[] | Readable;
 }
 
+/**
+ * Response returned by a Broker after forwarding a request.
+ *
+ * The body is a Node.js `Readable` stream. Consume it via standard
+ * stream APIs (`data` events, `pipe()`, or async iteration).
+ *
+ * @public
+ */
 export interface VerserBrokerResponse extends RoutedResponseEnvelope {
   readonly body: Readable;
 }
 
+/**
+ * Broker interface for outbound request routing to advertised Guest targets.
+ *
+ * Connect to a Host, receive route-control frames, and route requests by target
+ * domain. The Broker also exposes {@link createAgent}, {@link createDispatcher},
+ * and {@link createFetch} helpers that transparently resolve route hostnames
+ * without DNS resolution.
+ *
+ * @public
+ */
 export interface VerserBroker {
+  /** Number of active HTTP/2 sessions (0 or 1). */
   readonly sessionCount: number;
+  /** Total number of routed requests issued through this Broker. */
   readonly routedRequestCount: number;
+  /** Establishes the outbound TLS HTTP/2 connection and registers with the Host. */
   connect(): Promise<void>;
+  /** Closes the Broker connection and cleans up resources. */
   close(reason?: string): Promise<void>;
+  /**
+   * Returns an `http.Agent` that routes advertised hostnames through the Broker.
+   *
+   * The Agent resolves target hostnames from the Broker's advertised route table
+   * rather than performing DNS resolution. Requests are forwarded via the Broker's
+   * outbound HTTP/2 connection.
+   */
   createAgent(): http.Agent;
+  /**
+   * Returns an Undici `Dispatcher` that routes advertised hostnames through the Broker.
+   *
+   * Supports common buffer, string, stream, and iterable body forms.
+   * Upgrade requests are rejected. The dispatcher resolves target hostnames
+   * from the Broker's route table.
+   */
   createDispatcher(): Dispatcher;
+  /**
+   * Returns a `fetch` function that routes advertised hostnames through the Broker.
+   *
+   * Wraps Undici `fetch` with the Broker dispatcher by default.
+   */
   createFetch(): typeof undiciFetch;
+  /** Returns a snapshot of the current advertised route table. */
   getRoutes(): { targetId: string; domain: string }[];
+  /**
+   * Resolves when a route for the given domain is advertised.
+   *
+   * If the route is already known the promise resolves immediately.
+   */
   waitForRoute(domain: string): Promise<void>;
+  /**
+   * Sends a request to the target Guest through the Host.
+   *
+   * The target is identified by `targetId`. The response body is returned
+   * as a `Readable` stream.
+   */
   request(request: VerserBrokerRequest): Promise<VerserBrokerResponse>;
 }
 
+/**
+ * Node Guest interface for outbound Host connection and local handler attachment.
+ *
+ * The Guest connects outbound over TLS HTTP/2, registers as role `guest`, and
+ * maintains a pool of lease streams. Incoming routed requests are dispatched to
+ * the locally attached HTTP handler.
+ *
+ * {@link attach} does **not** call `server.listen()` — the local handler processes
+ * requests without opening an inbound port.
+ *
+ * @public
+ */
 export interface VerserNodeGuest {
+  /** Whether the Guest has an active HTTP/2 session. */
   readonly connected: boolean;
+  /** Establishes the outbound TLS HTTP/2 connection and registers with the Host. */
   connect(): Promise<void>;
+  /** Closes the Guest connection and cleans up resources. */
   close(reason?: string): Promise<void>;
+  /**
+   * Attaches a local HTTP handler without calling `listen()`.
+   *
+   * Accepts either an `http.Server` with a single request listener or a
+   * {@link NodeRequestListener} function. When no `domain` is supplied the
+   * route domain defaults to the Guest ID.
+   *
+   * @param serverOrListener - An `http.Server` instance or a listener function.
+   * @param domain - Optional route domain (defaults to Guest ID).
+   * @returns `this` for chaining.
+   */
   attach(serverOrListener: import('node:http').Server | NodeRequestListener, domain?: string): this;
+  /**
+   * Dispatches a pre-parsed routed request directly to the local handler.
+   *
+   * Intended for direct dispatch and focused tests with synthetic request
+   * envelopes. Host-connected request routing uses the Guest lease stream path.
+   */
   dispatchRoutedRequest(
     request: VerserNodeGuestDispatchRequest,
   ): Promise<VerserNodeGuestDispatchResponse>;
+  /**
+   * Registers a lifecycle event listener.
+   *
+   * Returns an unsubscribe function.
+   */
   onLifecycle(listener: (event: VerserNodeGuestLifecycleEvent) => void): () => void;
 }
 
+/**
+ * Signature of a listener accepted by {@link VerserNodeGuest.attach}.
+ *
+ * Compatible with standard Node.js `http.Server` request listeners but
+ * receives minimal request/response objects. These objects do not implement
+ * the full Node `IncomingMessage` or `ServerResponse` surface — they lack
+ * socket access, trailers, upgrade support, and informational responses.
+ *
+ * @param request - Minimal incoming request with `method`, `url`, `headers`, and `on` for body events.
+ * @param response - Minimal server response with `statusCode`, `setHeader`, `writeHead`, `write`, `end`.
+ *
+ * @public
+ */
 export type NodeRequestListener = (
   request: {
     readonly method: string;
@@ -103,11 +274,22 @@ export type NodeRequestListener = (
   },
 ) => void;
 
+/**
+ * Minimal router interface required by the Broker Agent and Dispatcher.
+ *
+ * @internal
+ */
 export interface BrokerRequestRouter {
   request(request: VerserBrokerRequest): Promise<VerserBrokerResponse>;
   getRoutes(): { targetId: string; domain: string }[];
 }
 
+/**
+ * @public
+ */
 export type BrokerControlFrame = VerserBrokerControlFrame;
 
+/**
+ * @public
+ */
 export type BrokerRoute = RoutedDomainRegistration;

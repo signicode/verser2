@@ -1,89 +1,18 @@
 # verser2
 
-`verser2` is a reverse HTTP connectivity package for exposing HTTP servers from client-side processes.
+verser2 is a reverse HTTP connectivity toolkit that lets applications route
+requests to HTTP handlers that connect **outbound** to a Host instead of
+listening for inbound traffic. It uses TLS HTTP/2 for multiplexed transport
+between three roles:
 
-It lets a client process host an HTTP/1 server without opening a listening port, then allows other connected servers to call that HTTP/1 server through a multiplexed connection.
+- **Host** — listens for outbound Peer connections and routes requests to
+  advertised Guest routes.
+- **Guest** — connects outbound to a Host and attaches a local HTTP handler
+  without calling `listen()`.
+- **Broker** — connects outbound to a Host and sends requests to advertised
+  Guest routes.
 
-## Development Setup
-
-This repository is an npm workspace monorepo using `packages/*`.
-
-Implemented packages:
-
-- `@signicode/verser-common` in `packages/verser-common`
-- `@signicode/verser2-guest-js-common` in `packages/verser2-guest-js-common`
-- `@signicode/verser2-host` in `packages/verser2-host`
-- `@signicode/verser2-guest-node` in `packages/verser2-guest-node`
-- `@signicode/verser2-guest-bun` in `packages/verser2-guest-bun`
-- `@signicode/verser2-guest-python` in `packages/verser2-guest-python`
-
-Install dependencies:
-
-```sh
-npm install
-```
-
-Build all workspace packages:
-
-```sh
-npm run build
-```
-
-Run tests:
-
-```sh
-npm test
-```
-
-Run coverage with Node's test coverage support:
-
-```sh
-npm run test:coverage
-```
-
-Run Biome linting and formatting checks:
-
-```sh
-npm run lint
-```
-
-## What It Does
-
-`verser2` is for cases where a process can make outbound connections but cannot accept inbound connections.
-
-Examples include:
-
-- local development agents
-- NAT-restricted clients
-- sandboxed runtimes
-- worker processes
-- containers without exposed ports
-- private network services
-- temporary remote clients
-
-The client creates or owns a normal HTTP/1 server, but does not need to call `listen()`. Instead, `verser2` receives remote requests over a shared connection and dispatches them into that local HTTP server.
-
-```txt
-Connected Guest
-    │
-    │ HTTP request
-    ▼
-verser2 connection layer
-    │
-    │ TLS HTTP/2 routed request stream plus leased body stream
-    ▼
-Client Process
-    │
-    │ in-process HTTP/1 dispatch
-    ▼
-Non-listening HTTP/1 Server
-```
-
-## Core Idea
-
-A guest-side (client side) HTTP server can be called by other connected servers even when it is not listening on a network port.
-
-The TypeScript packages expose a Host, a Node Guest, and a guest-side Broker. A Guest attaches a normal Node HTTP handler without listening on a port, while a Broker connects to the Host and sends requests to advertised Guest routes.
+## Quickstart
 
 ```ts
 import fs from 'node:fs';
@@ -95,737 +24,90 @@ const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
 const cert = fs.readFileSync('/etc/verser/host.crt', 'utf8');
 const key = fs.readFileSync('/etc/verser/host.key', 'utf8');
 
+// Start the Host
 const host = createVerserHost({ port: 8443, tls: { cert, key } });
 await host.start();
 
-const hostUrl = 'https://localhost:8443';
-const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a', tls: { ca } });
-const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a', tls: { ca } });
-
-const localServer = http.createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  res.writeHead(404);
-  res.end();
-});
-
-guest.attach(localServer, 'client-a.local.test');
-
-await broker.connect();
-await guest.connect();
-await broker.waitForRoute('client-a.local.test');
-```
-
-The Broker can then call the Guest-side server:
-
-```ts
-const response = await broker.request({
-  targetId: 'client-a',
-  method: 'GET',
-  path: '/health',
-});
-
-console.log(response.statusCode);
-response.body.pipe(process.stdout);
-```
-
-## TypeScript package usage
-
-The workspace packages expose APIs for the Host, Node Guest, Bun Guest, Broker, plain HTTP Agent path, and Undici/fetch routing path.
-
-```ts
-import fs from 'node:fs';
-import http from 'node:http';
-import { createVerserHost } from '@signicode/verser2-host';
-import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
-
-const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
-const cert = fs.readFileSync('/etc/verser/host.crt', 'utf8');
-const key = fs.readFileSync('/etc/verser/host.key', 'utf8');
-
-const host = createVerserHost({ port: 8443, tls: { cert, key } });
-await host.start();
-
-const hostUrl = 'https://localhost:8443';
-const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a', tls: { ca } });
-const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a', tls: { ca } });
-
-await broker.connect();
-```
-
-Serve a response from the attached Guest handler:
-
-```ts
-const jsonServer = http.createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  res.writeHead(404);
-  res.end();
-});
-
-guest.attach(jsonServer, 'client-json.local.test');
-
-await guest.connect();
-await broker.waitForRoute('client-json.local.test');
-```
-
-Send a routed request directly through the Broker:
-
-```ts
-const brokerResponse = await broker.request({
-  targetId: 'client-a',
-  method: 'GET',
-  path: '/health',
-});
-
-console.log(brokerResponse.statusCode);
-brokerResponse.body.pipe(process.stdout);
-```
-
-Use the Broker's `http.Agent` with ordinary Node HTTP APIs:
-
-```ts
-const agent = broker.createAgent();
-http.get('http://client-json.local.test/health', { agent }, (response) => {
-  response.pipe(process.stdout);
-});
-```
-
-Use the Broker's Undici `Dispatcher` with `fetch`:
-
-```ts
-const dispatcher = broker.createDispatcher();
-const fetchResponse = await fetch('http://client-json.local.test/health', { dispatcher });
-console.log(await fetchResponse.text());
-```
-
-Or create a fetch helper that is already wired to the Broker:
-
-```ts
-const routedFetch = broker.createFetch();
-const helperResponse = await routedFetch('http://client-json.local.test/health');
-console.log(await helperResponse.text());
-```
-
-## Bun Guest usage
-
-`@signicode/verser2-guest-bun` lets Bun handlers expose requests to connected
-peers without opening a listening port.
-
-```ts
-import { createVerserBunGuest } from '@signicode/verser2-guest-bun';
-
-const bunGuest = createVerserBunGuest({
-  hostUrl: 'https://localhost:8443',
-  guestId: 'bun-client-a',
-  tls: { caFile: '/etc/verser/ca.crt' },
-});
-
-bunGuest.attach({
-  fetch(request, server) {
-    if (request.url.endsWith('/health')) {
-      return Response.json({ ok: true, runtime: 'bun' });
-    }
-
-    if (request.url.endsWith('/ws')) {
-      return Response.json({ upgrade: server.upgrade(request) }, { status: 501 });
-    }
-
-    return new Response('not found', { status: 404 });
-  },
-}, 'bun-client-a.local.test');
-
-await bunGuest.connect();
-```
-
-Route handling is local Bun-style dispatch on the attached peer. The `routes` table
-provides local path dispatch (`exact`, `:param`, and `*` wildcard patterns) and
-`fetch` remains the fallback for unmatched paths. This local dispatch does not
-change host/agent route advertisements.
-
-```ts
-bunGuest.attach({
-  routes: {
-    '/health': new Response('ok'),
-    '/users/:id': (request) => Response.json({ id: request.params.id }),
-    '/api/*': () => Response.json({ wildcard: true }),
-    '/items': {
-      GET: new Response('read', { status: 200 }),
-      POST: () => new Response('created', { status: 201 }),
-    },
-  },
-  fetch: (request) => {
-    return Response.json({ path: new URL(request.url).pathname, fallback: true });
-  },
-}, 'bun-client-a.local.test');
-```
-
-Use Bun peers through the standard Broker APIs:
-
-```ts
-import { createVerserBroker, createVerserBunGuest } from '@signicode/verser2-guest-bun';
-import http from 'node:http';
-
-const broker = createVerserBroker({
-  hostUrl: 'https://localhost:8443',
-  brokerId: 'broker-a',
-  tls: { caFile: '/etc/verser/ca.crt' },
-});
-
-const agent = broker.createAgent();
-const dispatcher = broker.createDispatcher();
-const routedFetch = broker.createFetch();
-
-await broker.connect();
-await broker.waitForRoute('bun-client-a.local.test');
-
-await routedFetch('http://bun-client-a.local.test/health');
-http.get('http://bun-client-a.local.test/health', { agent }, (response) => response.resume());
-await fetch('http://bun-client-a.local.test/health', { dispatcher });
-```
-
-The Bun guest transport uses the same reconnect/lifecycle/route-advertisement flow as
-the Node Guest, including routed domain registration and close semantics.
-
-## Streaming and request body notes for Bun Guests
-
-- Request bodies can be routed from plain strings, `Buffer`, and web streams.
-- Response objects may return textual or binary payloads; `text()`/`json()` helpers
-  remain available for the returned dispatch result.
-- WebSocket upgrades are intentionally not forwarded; `server.upgrade()` returns
-  `false` in this Bun adapter.
-
-The same non-listening host exposure rule applies here: Bun Guests do not call
-`listen()` or otherwise bind a local TCP socket for routed exposure.
-
-Streaming is forwarded through the public routing paths (not pre-aggregated in a
-legacy adapter step), including request/response bodies.
-
-The same public paths support streamed request and response bodies:
-
-```ts
-const uploadResponse = await broker.request({
-  targetId: 'client-a',
-  method: 'POST',
-  path: '/upload',
-  body: readableStream,
-});
-
-uploadResponse.body.pipe(destination);
-```
-
-```ts
-const streamResponse = await fetch('http://client-json.local.test/upload', {
-  method: 'POST',
-  body: readableStream,
-  duplex: 'half',
-  dispatcher: broker.createDispatcher(),
-});
-
-console.log(streamResponse.status);
-```
-
-## Python ASGI Guest usage
-
-`@signicode/verser2-guest-python` exposes a Python ASGI Guest that connects
-outbound to the existing Verser2 Host and serves an ASGI 3 app without opening
-an inbound listening port. The package uses `uv` for Python command execution
-and the `h2` library for the TLS HTTP/2 Guest transport.
-
-```py
-import asyncio
-from verser2_guest_python import create_verser_guest
-
-
-async def app(scope, receive, send):
-    body = b""
-    while True:
-        event = await receive()
-        body += event.get("body", b"")
-        if not event.get("more_body", False):
-            break
-
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [(b"content-type", b"text/plain")],
-        }
-    )
-    await send({"type": "http.response.body", "body": b"Handled " + body})
-
-
-async def main():
-    guest = create_verser_guest(
-        host_url="https://localhost:8443",
-        guest_id="python-client-a",
-        app=app,
-        routed_domains=["python-client-a.local.test"],
-        tls_ca_file="/etc/verser/ca.crt",
-    )
-    await guest.connect()
-    await asyncio.Event().wait()
-
-
-asyncio.run(main())
-```
-
-FastAPI-compatible and Starlette-compatible apps can be attached because the
-Guest calls the normal ASGI 3 `app(scope, receive, send)` interface. FastAPI is
-not a required runtime dependency of the package.
-
-Python Guest streaming support maps routed request body chunks to ASGI
-`http.request` events and sends ASGI `http.response.body` chunks back through the
-Host lease stream. Current Python Guest limits: one minimal HTTP/2 session path,
-no Python Host, no full Python Broker, no Python-side fetch helper yet, no
-HTTP/3, and no built-in authentication/authorization policy.
-
-### Transport notes
-
-- The Host uses TLS HTTP/2 and requires application-provided certificate and private key material.
-- Host `keyFile` private keys must be readable only by the owner (`chmod 0600`) on POSIX systems.
-- The Broker and Guest use normal Node.js TLS trust by default, or application-provided `ca`/`caFile` trust when configured. Passing `ca` or `caFile` replaces Node's default CA set for that outbound HTTP/2 connection.
-- The Host can opt into mutual TLS by configuring `tls.clientAuth` with a trusted client CA. In that mode, Guest and Broker connections must present a trusted client certificate during the TLS handshake.
-- HTTP/3 and QUIC are explicitly not implemented.
-- A Broker uses one TLS HTTP/2 session and one Broker→Host HTTP/2 stream per routed request.
-- The Guest maintains a configurable pool of one-use leased HTTP/2 streams. Routed request and response bodies are transferred as raw octets over an assigned lease, not as base64 NDJSON control frames.
-- Guest control streams remain for coordination such as route advertisements.
-- Node Guest lease pool options include `minWaitingStreams`, `maxOpenStreams`, `leaseAcquireTimeoutMs`, and `maxMetadataBytes`.
-- Successful `broker.request()` calls expose `body` as a Node.js `Readable` stream. Error response bodies may be read internally so routed errors include actionable diagnostics.
-- The Agent supports plain `http.request`/`http.get` for Host-advertised domains only. Non-advertised hostnames are rejected instead of falling back to DNS.
-- The Node Broker also exposes `createDispatcher()` for Undici `fetch(url, { dispatcher })` and `createFetch()` for a local fetch helper preconfigured with Verser routing.
-- Agent keep-alive pooling, HTTPS Agent behavior, trailers, upgrades, CONNECT, WebSocket, target TLS semantics, and advanced socket features are not implemented.
-
-### TLS setup
-
-TLS applies to the remote Host/Guest/Broker HTTP/2 transport only. Guest-attached local HTTP/1 servers remain plain in-process Node HTTP handlers; they do not need HTTPS certificates and do not call `listen()` for this routing path.
-
-The Host certificate must be valid for the hostname or IP address used in `hostUrl` because Node.js still performs normal TLS hostname verification.
-
-See [SSL certificate generation](./docs/ssl-certificate-generation.md) for local self-signed certificates, encrypted keys, and Let's Encrypt DNS-01 examples.
-
-Configure Host TLS with direct PEM values:
-
-```ts
-import fs from 'node:fs';
-import { createVerserHost } from '@signicode/verser2-host';
-
-const host = createVerserHost({
-  port: 8443,
-  tls: {
-    cert: fs.readFileSync('/etc/verser/host.crt', 'utf8'),
-    key: fs.readFileSync('/etc/verser/host.key', 'utf8'),
-    passphrase: process.env.VERSER_TLS_KEY_PASSPHRASE,
-  },
-});
-```
-
-Or configure Host TLS with certificate files:
-
-```ts
-const host = createVerserHost({
-  port: 8443,
-  tls: {
-    certFile: '/etc/verser/host.crt',
-    keyFile: '/etc/verser/host.key',
-    passphrase: process.env.VERSER_TLS_KEY_PASSPHRASE,
-  },
-});
-```
-
-Or configure Host TLS with PFX/PKCS12 identity material:
-
-```ts
-const host = createVerserHost({
-  port: 8443,
-  tls: {
-    pfx: fs.readFileSync('/etc/verser/host.p12'),
-    passphrase: process.env.VERSER_TLS_PFX_PASSPHRASE,
-  },
-});
-```
-
-When using `keyFile`, set the private key mode to `0600` on POSIX systems:
-
-```sh
-chmod 0600 /etc/verser/host.key
-```
-
-File-based Host TLS can be reloaded after certificate renewal without restarting the process. The new certificate is used for new TLS handshakes; existing HTTP/2 sessions keep their current TLS state.
-
-```ts
-await host.start();
-
-host.reloadTlsCertificate();
-```
-
-Verser does not install process signal handlers. Applications that want signal-driven reloads can wire them explicitly, and can reuse the same handler later for broader reload work:
-
-```ts
-process.on('SIGUSR1', () => {
-  try {
-    host.reloadTlsCertificate();
-  } catch (error) {
-    console.error('Failed to reload Verser TLS certificate:', error);
-  }
-});
-```
-
-Configure Guest and Broker trust with direct CA PEM values:
-
-```ts
-import fs from 'node:fs';
-import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
-
-const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
-
+// Create a Guest and attach a local HTTP handler
 const guest = createVerserNodeGuest({
   hostUrl: 'https://localhost:8443',
   guestId: 'client-a',
   tls: { ca },
 });
 
-const broker = createVerserBroker({
-  hostUrl: 'https://localhost:8443',
-  brokerId: 'broker-a',
-  tls: { ca },
-});
-```
-
-Or configure trust with CA files:
-
-```ts
-const guest = createVerserNodeGuest({
-  hostUrl: 'https://localhost:8443',
-  guestId: 'client-a',
-  tls: { caFile: '/etc/verser/ca.crt' },
-});
-
-const broker = createVerserBroker({
-  hostUrl: 'https://localhost:8443',
-  brokerId: 'broker-a',
-  tls: { caFile: '/etc/verser/ca.crt' },
-});
-```
-
-To require Guest and Broker client certificates, configure the Host with trusted client CA material under `tls.clientAuth`:
-
-```ts
-const host = createVerserHost({
-  port: 8443,
-  tls: {
-    certFile: '/etc/verser/host.crt',
-    keyFile: '/etc/verser/host.key',
-    clientAuth: {
-      caFile: '/etc/verser/client-ca.crt',
-      authorizeRegistration(context) {
-        if (context.role === 'guest' && context.routedDomains.includes('internal.example.com')) {
-          return { action: 'allow' };
-        }
-        if (context.role === 'broker' && context.certificate?.commonName === 'broker-a') {
-          return { action: 'allow' };
-        }
-        return { action: 'close', reason: 'certificate identity is not authorized' };
-      },
-    },
-  },
-});
-```
-
-Guests and Brokers can present client identities as PEM files:
-
-```ts
-const guest = createVerserNodeGuest({
-  hostUrl: 'https://localhost:8443',
-  guestId: 'client-a',
-  routedDomains: ['internal.example.com'],
-  tls: {
-    caFile: '/etc/verser/host-ca.crt',
-    certFile: '/etc/verser/client-a.crt',
-    keyFile: '/etc/verser/client-a.key',
-  },
-});
-
-const broker = createVerserBroker({
-  hostUrl: 'https://localhost:8443',
-  brokerId: 'broker-a',
-  tls: {
-    caFile: '/etc/verser/host-ca.crt',
-    certFile: '/etc/verser/broker-a.crt',
-    keyFile: '/etc/verser/broker-a.key',
-  },
-});
-```
-
-They can also present PFX/PKCS12 identities:
-
-```ts
-const broker = createVerserBroker({
-  hostUrl: 'https://localhost:8443',
-  brokerId: 'broker-a',
-  tls: {
-    caFile: '/etc/verser/host-ca.crt',
-    pfxFile: '/etc/verser/broker-a.p12',
-    passphrase: process.env.VERSER_CLIENT_PFX_PASSPHRASE,
-  },
-});
-```
-
-`authorizeRegistration` receives the peer id, role, Guest requested routed domains, structured certificate identity metadata, and registration metadata. Guest routed-domain authorization is callback-driven. Broker authorization in this release is identity-only at registration time; Broker per-request target authorization is not implemented. mTLS authenticates the remote transport and supports registration policy, but `verser2` is still not a complete public gateway; applications remain responsible for authentication, authorization, and routing policy beyond these transport-level checks.
-
-Changing Host `tls.clientAuth` mode or trusted client CA material requires restarting the Host so new TLS handshakes use the new mTLS policy. `reloadTlsCertificate()` reloads Host server identity material for new handshakes, but existing HTTP/2 sessions keep their current TLS state and mTLS mode changes are not applied to the already-running secure server.
-
-## Features
-
-- Expose client-side HTTP/1 servers without opening inbound ports.
-- Dispatch remote requests into non-listening `http.Server` instances.
-- Allow connected servers to call each other through a shared broker or connection layer.
-- Use HTTP/2 streams for multiplexed connectivity.
-- Keep HTTP/3 streams as future work; they are not implemented.
-- Carry many concurrent requests over one physical connection.
-- Preserve HTTP method, path, headers, body, and response semantics.
-- Support request and response streaming where the transport supports it.
-- Keep local application code compatible with normal Node.js HTTP server handlers.
-
-## Why HTTP/2 Now, And HTTP/3 Later
-
-HTTP/2 and HTTP/3 both support multiplexed streams. The TypeScript packages use TLS HTTP/2; HTTP/3 is roadmap work.
-
-That means one client connection can carry many independent HTTP requests at the same time:
-
-```txt
-single client connection
-    ├── stream: GET /health
-    ├── stream: POST /jobs
-    ├── stream: GET /metrics
-    └── stream: POST /rpc/process
-```
-
-This avoids opening a new TCP connection for every logical request and makes reverse connectivity more efficient and easier to manage.
-
-## Connection Model
-
-`verser2` has three main implemented roles.
-
-### Host
-
-The Host listens for outbound Guest and Broker connections and routes requests to registered Guest routes.
-
-```ts
-const host = createVerserHost({
-  port: 8443,
-  tls: {
-    certFile: '/etc/verser/host.crt',
-    keyFile: '/etc/verser/host.key',
-  },
-});
-
-await host.start();
-```
-
-### Broker
-
-The Broker connects outbound to a Host and sends requests to advertised Guest routes.
-
-```ts
-const broker = createVerserBroker({
-  hostUrl: 'https://localhost:8443',
-  brokerId: 'broker-a',
-  tls: { caFile: '/etc/verser/ca.crt' },
-});
-
-await broker.connect();
-```
-
-### Guest
-
-The Guest connects outbound to a Host and attaches a local HTTP/1 handler without listening on a port.
-
-```ts
-const guest = createVerserNodeGuest({
-  hostUrl: 'https://localhost:8443',
-  guestId: 'client-a',
-  tls: { caFile: '/etc/verser/ca.crt' },
-});
-
-guest.attach(localHttpServer, 'client-a.local.test');
-
-await guest.connect();
-```
-
-## Non-Listening HTTP/1 Servers
-
-A key feature of `verser2` is that local HTTP/1 servers do not need to bind a port.
-
-Instead of this:
-
-```ts
-server.listen(3000);
-```
-
-Use this:
-
-```ts
-guest.attach(server, 'client-a.local.test');
-await guest.connect();
-```
-
-Verser dispatches to normal request listeners through `IncomingMessage`-like and `ServerResponse`-like shims. Application handlers can remain close to ordinary Node.js HTTP code, while advanced socket internals, upgrades, trailers, and full `IncomingMessage`/`ServerResponse` compatibility remain outside the supported surface.
-
-## Multiplexed Requests
-
-Multiple requests can be active at once over a single client connection.
-
-```ts
-await Promise.all([
-  broker.request({ targetId: 'client-a', method: 'GET', path: '/health' }),
-  broker.request({ targetId: 'client-a', method: 'GET', path: '/metrics' }),
-  broker.request({ targetId: 'client-a', method: 'POST', path: '/jobs', body: ['payload'] }),
-]);
-```
-
-Each Broker-to-Host request maps to a separate HTTP/2 stream. The Guest leg uses an assigned one-use Guest-opened lease stream for raw routed request and response body bytes, while the Guest control stream remains available for route advertisements and coordination.
-
-## Streaming Status
-
-`verser2` supports streaming request and response bodies on the leased HTTP/2 routed path. Successful `broker.request()` calls return a response body `Readable`, and request bodies may be provided as a `Readable` or as explicit chunks. Error response bodies may still be read internally to produce actionable routed error diagnostics.
-
-Direct in-process dispatch helpers, such as Node Guest `dispatchRoutedRequest()`, are batch-only convenience paths. They buffer the local handler response before returning it and enforce a configurable `maxResponseBytes` limit so oversized direct-dispatch responses fail before full concatenation. Leased Broker/Guest routing remains the streaming path for large or incremental response bodies.
-
-```ts
-const response = await broker.request({
-  targetId: 'client-a',
-  method: 'POST',
-  path: '/upload',
-  body: readableStream,
-});
-
-response.body.pipe(destination);
-```
-
-## Protocol Selection
-
-`verser2` prefers modern multiplexed transports.
-
-Protocol roles:
-
-1. TLS HTTP/2 is the implemented remote multiplexed transport between Host, Guest, and Broker.
-2. HTTP/1 is used for local in-process server dispatch into normal Node request handlers.
-3. HTTP/3 remains roadmap work and is not implemented.
-
-```ts
-const host = createVerserHost({
-  port: 8443,
-  tls: {
-    certFile: '/etc/verser/host.crt',
-    keyFile: '/etc/verser/host.key',
-  },
-});
-await host.start();
-
-const guest = createVerserNodeGuest({
-  hostUrl: 'https://localhost:8443',
-  guestId: 'client-a',
-  tls: { caFile: '/etc/verser/ca.crt' },
-});
-```
-
-## End-to-End Example
-
-```ts
-import fs from 'node:fs';
-import http from 'node:http';
-import { createVerserHost } from '@signicode/verser2-host';
-import { createVerserBroker, createVerserNodeGuest } from '@signicode/verser2-guest-node';
-
-const ca = fs.readFileSync('/etc/verser/ca.crt', 'utf8');
-const cert = fs.readFileSync('/etc/verser/host.crt', 'utf8');
-const key = fs.readFileSync('/etc/verser/host.key', 'utf8');
-
-const host = createVerserHost({ port: 8443, tls: { cert, key } });
-await host.start();
-
-const hostUrl = 'https://localhost:8443';
-const broker = createVerserBroker({ hostUrl, brokerId: 'broker-a', tls: { ca } });
-const guest = createVerserNodeGuest({ hostUrl, guestId: 'client-a', tls: { ca } });
-
-const localServer = http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/plain' });
   res.end(`Handled ${req.method} ${req.url}`);
 });
 
-guest.attach(localServer, 'client-a.local.test');
+guest.attach(server, 'client-a.local.test');
+
+// Create a Broker and connect
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  tls: { ca },
+});
 
 await broker.connect();
 await guest.connect();
 await broker.waitForRoute('client-a.local.test');
 
+// Send a request through the Broker
 const response = await broker.request({
   targetId: 'client-a',
   method: 'GET',
-  path: '/hello',
+  path: '/health',
 });
 
 response.body.pipe(process.stdout);
 ```
 
-## Error Handling
+## Packages
 
-Errors should identify:
+| Package | npm | Description |
+|---------|-----|-------------|
+| `@signicode/verser-common` | [packages/verser-common](./packages/verser-common) | Shared protocol, types, utilities |
+| `@signicode/verser2-host` | [packages/verser2-host](./packages/verser2-host) | Host creation and lifecycle |
+| `@signicode/verser2-guest-js-common` | [packages/verser2-guest-js-common](./packages/verser2-guest-js-common) | JS foundations for adapters |
+| `@signicode/verser2-guest-node` | [packages/verser2-guest-node](./packages/verser2-guest-node) | Node Guest, Broker, Agent, Dispatcher, Fetch |
+| `@signicode/verser2-guest-bun` | [packages/verser2-guest-bun](./packages/verser2-guest-bun) | Bun Guest and Broker wrapper |
+| `@signicode/verser2-guest-python` | [packages/verser2-guest-python](./packages/verser2-guest-python) | Python ASGI Guest and Broker |
 
-- connection id
-- target client id
-- selected protocol
-- request method
-- request path
-- stream id, when available
-- remote close reason
-- timeout reason
-- retry status
+## Documentation
 
-## Lifecycle
+- [Connecting](./docs/connecting.md) — create a Host, connect Guests and Brokers
+- [Exposing HTTP handlers](./docs/exposing-http.md) — attach Node, Bun, or Python handlers
+- [Making requests](./docs/making-requests.md) — Broker request, Agent, Dispatcher, Fetch
+- [Routes](./docs/routes.md) — route advertisement and exact hostname matching
+- [Certificates](./docs/certificates.md) — TLS configuration, mTLS, self-signed certs
+- [Authorization](./docs/authorization.md) — registration-time mTLS authorization
+- [Lifecycle and errors](./docs/lifecycle-and-errors.md) — events, errors, reconnection
+- [Development](./docs/development.md) — repository setup, validation, and package staging
 
-Typical lifecycle events:
+## Development
 
-```ts
-client.on("connect", session => {});
-client.on("disconnect", reason => {});
-client.on("error", error => {});
-client.on("reconnect", attempt => {});
-
-broker.on("client", client => {});
-broker.on("request", request => {});
-broker.on("streamError", error => {});
+```sh
+npm install          # Install dependencies
+npm run build        # Build all workspace packages
+npm test             # Run tests
+npm run test:coverage
+npm run lint         # Biome linting and formatting
 ```
 
-## Use Cases
+See [Development](./docs/development.md) for package staging and release-oriented
+validation commands.
 
-- Calling HTTP services running inside client processes.
-- Exposing local developer tools without opening a port.
-- Connecting private services to shared brokers.
-- Running HTTP handlers in sandboxes or workers.
-- Building peer-to-peer-like HTTP routing through connected servers.
-- Supporting agents that can call out but cannot receive direct inbound traffic.
+## What verser2 is not
 
-## Limitations
-
-- `verser2` is not a general-purpose public HTTP gateway by itself.
-- HTTP/3 is not implemented; availability will depend on future runtime and platform support.
-- Local HTTP/1 servers are dispatched in-process and are not automatically exposed as public network listeners.
-- Authentication, authorization, and target routing policies must be configured by the application or broker layer.
+- HTTP/3 is not implemented.
+- Browser, Rust, Go, Java, and Python Host implementations are not implemented.
+- WebSocket upgrade, CONNECT tunneling, trailers, and informational responses
+  are not forwarded through the verser transport.
+- verser2 is not a complete public gateway. Applications remain responsible for
+  authentication, authorization, and routing policy.
+- Per-request Broker target authorization is not implemented.
 
 ## Status
 
-`verser2` is intended as a modern replacement for reverse HTTP connectivity built around multiplexed sessions. The TypeScript packages use TLS HTTP/2; HTTP/3 remains roadmap work.
-
-The primary design goal is simple:
-
-> Let connected servers call HTTP/1 servers running inside client processes, even when those client-side servers are not listening on a network port.
+verser2 uses TLS HTTP/2 for multiplexed transport. HTTP/3 remains roadmap work.

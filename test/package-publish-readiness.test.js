@@ -54,12 +54,29 @@ function assertStagedPackageArtifacts(packageName) {
     fs.existsSync(path.join(packageDirectory, 'LICENSE')),
     `Expected staged license for ${packageName}`,
   );
+  assert.ok(
+    fs.existsSync(path.join(packageDirectory, 'README.md')),
+    `Expected staged README for ${packageName}`,
+  );
 }
 
 test('central staging tree contains publish-ready packages', () => {
   for (const packageDirectory of packageDirectories) {
     const packageName = getPackageName(packageDirectory);
     assertStagedPackageArtifacts(packageName);
+  }
+});
+
+test('staged package READMEs use GitHub documentation links', () => {
+  for (const packageDirectory of packageDirectories) {
+    const packageName = getPackageName(packageDirectory);
+    const stagedPackageDirectory = getStagedPackageDirectory(packageName);
+    assertStagedPackageArtifacts(packageName);
+
+    const readme = fs.readFileSync(path.join(stagedPackageDirectory, 'README.md'), 'utf8');
+    assert.match(readme, /https:\/\/github\.com\/signicode\/verser2\/blob\//);
+    assert.doesNotMatch(readme, /\.\.\/\.\.\/docs\//);
+    assert.doesNotMatch(readme, /\.\.\/\.\.\/README\.md/);
   }
 });
 
@@ -104,6 +121,7 @@ test('staged packages are packable with npm pack dry-run', () => {
 
     assert.ok(packedFiles.includes('package.json'));
     assert.ok(packedFiles.includes('LICENSE'));
+    assert.ok(packedFiles.includes('README.md'));
     assert.ok(packedFiles.includes('dist/index.js'));
     assert.ok(packedFiles.includes('dist/index.d.ts'));
     assert.equal(

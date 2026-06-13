@@ -24,18 +24,18 @@ The product uses the repo nomenclature:
 - **Verser2 Host:** The main server that guests connect to. It manages connections and routes requests between guests.
 - **Verser2 Guest:** A client that connects to the host. It can make requests to the host and receive requests from the host.
 - **Verser2 Broker:** The guest component that connects to the host or hosts and allows making requests to other guests through the host.
-- **Verser2 Peer:** A connected client that can send and receive requests through the host or directly to other peers if supported.
+- **Verser2 Peer:** A generic connected-client concept used in shared terminology. Current public registration roles are Guest and Broker; direct peer-to-peer behavior is not implemented.
 
 ## Initial Milestone
 
-The implemented foundation includes the TypeScript/Node.js package path, a Bun Guest/Broker package, and a Python ASGI Guest:
+The implemented foundation includes the TypeScript/Node.js package path, a Bun Guest/Broker package, and a Python ASGI Guest/Broker package:
 
 - A shared `@signicode/verser-common` package for reusable protocol-neutral primitives, types, constants, and helpers.
 - A configurable TLS HTTP/2 Host that accepts outbound Guest and Broker connections, optionally enforces trusted client certificates for mTLS transport, registers routed domains, and advertises route updates.
 - A Node Guest that owns or receives a normal `http.Server` or request listener without calling `listen()`.
 - A Bun Guest that adapts Bun/Fetch-style handlers and local Bun-style routes without calling `Bun.serve()` or opening an inbound port, plus a Bun-facing Broker API that reuses the existing transport internally.
 - A Python Guest that connects outbound to the existing Host and dispatches routed requests into an ASGI 3 app without opening an inbound port.
-- A Broker that can present client certificate identity when configured and route requests through the Host into a connected Guest's local HTTP/1 handler.
+- Node, Bun-facing, and Python Broker APIs that can present client certificate identity when configured and route requests through the Host into a connected Guest's local handler.
 - A minimal plain `node:http` Agent path for Host-advertised domains.
 - End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
 
@@ -48,7 +48,7 @@ Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Ja
 - **Streaming support:** Request and response bodies should preserve streaming behavior where the selected transport supports it.
 - **Shared foundations:** Reusable solution code belongs in common packages before it is duplicated across Host, Guest, Broker, Peer, or runtime-specific packages.
 - **Transport incrementality:** Transport behavior, multiplexing, routing, and HTTP/3 support should be introduced only by explicit implementation tracks, not by scaffold or documentation-only work.
-- **Incremental language expansion:** TypeScript/Node is the primary implementation target, with Bun Guest/Broker and Python ASGI Guest support implemented. Browser, Rust, Go, and Java guests belong on the roadmap after the core model is proven.
+- **Incremental language expansion:** TypeScript/Node is the primary implementation target, with Bun Guest/Broker and Python ASGI Guest/Broker support implemented. Browser, Rust, Go, and Java guests belong on the roadmap after the core model is proven.
 
 ## Primary Use Cases
 
@@ -70,7 +70,7 @@ Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Ja
 - A Node guest can attach a normal HTTP/1 server without opening a port.
 - A Bun guest can attach a Bun/Fetch-style handler or local Bun-style route table without opening a port.
 - A Python guest can attach an ASGI 3 application without opening a port.
-- A connected peer can issue a request through the host to that guest server.
+- A connected Broker can issue a request through the host to that guest server.
 - Method, path, headers, request body, status, response headers, and response body are preserved.
 - Shared primitives needed by multiple packages are provided by `@signicode/verser-common` instead of duplicated in package-local implementations.
 - Concurrent request or multiplexing behavior is proven only when a track explicitly introduces that transport behavior.

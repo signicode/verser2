@@ -24,6 +24,43 @@ from .protocol import VERSER_ENVELOPE_PREFIX_BYTES, decode_envelope, encode_enve
 
 
 class VerserGuest:
+    """An outbound Verser Guest peer that routes HTTP requests to a local ASGI app.
+
+    The Guest connects to a Verser Host (TLS + HTTP/2), registers as role
+    ``"guest"``, opens a control stream and one or more lease streams, and
+    dispatches each routed request to the attached ASGI application via the
+    **ASGI 3** protocol (``scope["asgi"]["version"] == "3.0"``,
+    ``scope["asgi"]["spec_version"] == "2.5"``).
+
+    URL hostname matching
+        The Host matches incoming request URLs against the Guest's advertised
+        ``routed_domains`` using exact hostname equality.  No wildcard or
+        suffix matching is supported.
+
+    Lifecycle
+        1. Instantiate with connection parameters and (optionally) an app.
+        2. Attach or provide the ASGI app before ``connect()``. To advertise
+           a route at registration, also pass ``routed_domains=...`` to the
+           constructor or call ``attach(domain=...)`` before ``connect()``.
+           Calling ``attach(app)`` without ``domain`` only changes the local
+           app. Route changes made after registration are not re-advertised to
+           the Host.
+        3. ``await guest.connect()`` — initiates TLS with ALPN ``h2``,
+           performs the HTTP/2 handshake, registers with the Host, opens a
+           control stream, and establishes lease streams.
+        4. The Guest automatically dispatches incoming requests on lease
+           streams.
+        5. ``await guest.close()`` — cancels lease/reader tasks and closes the
+           TCP/TLS connection.
+
+    Errors
+        ``RuntimeError`` is raised if the Host rejects registration, a lease
+        stream is rejected, or a lease stream ends without complete request
+        metadata.  App exceptions captured after a response has started are
+        silently discarded; before a response starts they are returned as error
+        envelopes with code ``"local-handler-failure"``.
+    """
+
     def __init__(
         self,
         *,
@@ -35,6 +72,31 @@ class VerserGuest:
         min_waiting_streams: int = 1,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
+        """Initialise the Guest peer.
+
+        Parameters
+        ----------
+        host_url : str
+            The Host URL (e.g. ``"https://host.example.com:8443"``).
+        guest_id : str
+            A unique peer identifier for the Host registration.  Must not
+            collide with any other peer ID on the same Host.
+        app : ASGIApp or None
+            An optional ASGI 3 callable that will receive dispatched requests.
+            Can also be set later via :meth:`attach`.
+        routed_domains : list[str] or None
+            List of hostnames this Guest advertises to the Host.  Route
+            matching on the Host uses exact hostname equality.
+        tls_ca_file : str or None
+            Path to a PEM CA bundle for verifying the Host's TLS certificate.
+        min_waiting_streams : int
+            Minimum number of lease streams to maintain (default 1, minimum 1).
+        max_response_bytes : int
+            Maximum cumulative response body bytes for direct dispatch (default
+            10 MiB).  Exceeding this raises
+            :exc:`ResponseBodyTooLargeError` which is caught and returned as an
+            error envelope.
+        """
         self.host_url = host_url
         self.guest_id = guest_id
         self.app = app
@@ -53,6 +115,23 @@ class VerserGuest:
         self._closed = False
 
     def attach(self, app: ASGIApp, domain: str | None = None) -> "VerserGuest":
+        """Attach an ASGI app to this Guest.
+
+        Parameters
+        ----------
+        app : ASGIApp
+            An ASGI 3 callable ``(scope, receive, send) -> None``.
+        domain : str or None
+            If provided, replaces ``routed_domains`` with a single-domain list.
+            This is a convenience for the common single-route case and affects
+            Host route advertisement only when called before ``connect()``. If
+            omitted, the attached app changes but routed domains are unchanged.
+
+        Returns
+        -------
+        VerserGuest
+            ``self`` (for chaining).
+        """
         self.app = app
         if domain is not None:
             self.routed_domains = [domain]
@@ -61,6 +140,33 @@ class VerserGuest:
     async def dispatch_routed_request(
         self, metadata: dict[str, Any], body: bytes | list[bytes]
     ) -> DispatchResponse:
+        """Dispatch a single routed request to the attached ASGI app.
+
+        This is a synchronous (in-async) convenience for testing or direct
+        dispatch *without* a live lease stream.  The app is run to completion
+        and the response is buffered in memory.
+
+        Parameters
+        ----------
+        metadata : dict
+            Verser envelope metadata containing at least ``requestId``,
+            ``method``, ``path``, and optionally ``headers``.
+        body : bytes or list[bytes]
+            Raw request body chunks.
+
+        Returns
+        -------
+        DispatchResponse
+            A frozen dataclass with ``request_id``, ``status_code``,
+            ``headers``, ``body``, and optionally ``error``.
+
+        Raises
+        ------
+        RuntimeError
+            Raised directly (not caught) for app exceptions that occur *after*
+            response headers have been sent and are not
+            :exc:`ResponseBodyTooLargeError`.
+        """
         if self.app is None:
             return DispatchResponse(
                 request_id=str(metadata.get("requestId") or ""),
@@ -83,6 +189,27 @@ class VerserGuest:
         )
 
     async def connect(self) -> None:
+        """Establish the outbound TLS+HTTP/2 connection and register with the Host.
+
+        The connection sequence is:
+
+        1.  Open a TCP+TLS connection to ``host_url`` with ALPN ``h2``.
+        2.  Perform the HTTP/2 client preface.
+        3.  POST a JSON registration to ``/verser/register`` with
+            ``peerId`` and ``role`` set to ``"guest"``.
+        4.  Open a control stream at ``/verser/guest/control``.
+        5.  Start ``min_waiting_streams`` lease streams on
+            ``/verser/guest/lease``.
+
+        Calling ``connect()`` on an already-connected Guest is a no-op.
+
+        Raises
+        ------
+        RuntimeError
+            If the Host rejects the registration.
+        OSError
+            If the TLS or TCP connection fails.
+        """
         if self._conn is not None:
             return
         parsed = urlsplit(self.host_url)
@@ -108,6 +235,17 @@ class VerserGuest:
             self._start_lease_task()
 
     async def close(self, reason: str = "guest-close") -> None:
+        """Tear down the Guest connection.
+
+        Cancels all lease tasks and the reader task, then closes the TCP/TLS
+        writer and awaits its graceful shutdown.
+
+        Parameters
+        ----------
+        reason : str
+            Reason string (not currently sent over the wire; reserved for
+            future use).
+        """
         del reason
         self._closed = True
         for task in self._lease_tasks:
@@ -424,4 +562,17 @@ class VerserGuest:
 
 
 def create_verser_guest(**options: Any) -> VerserGuest:
+    """Create a :class:`VerserGuest` with the given keyword options.
+
+    This is a factory convenience wrapper around ``VerserGuest(**options)``.
+
+    Parameters
+    ----------
+    **options : Any
+        Forwarded directly to :class:`VerserGuest.__init__`.
+
+    Returns
+    -------
+    VerserGuest
+    """
     return VerserGuest(**options)

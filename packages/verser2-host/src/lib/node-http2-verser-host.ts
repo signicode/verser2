@@ -60,6 +60,26 @@ interface QueuedLeaseAcquisition {
   readonly reject: (error: VerserError) => void;
 }
 
+/**
+ * TLS HTTP/2 server implementation of the {@link VerserHost} interface.
+ *
+ * Accepts outbound connections from Guests (registering route domains) and Brokers
+ * (discovering routes and issuing requests). See {@link VerserHost} for the full
+ * API contract and supported paths.
+ *
+ * @remarks
+ * - Creates a Node `http2.createSecureServer` with TLS.
+ * - Listens on `127.0.0.1` port `0` (ephemeral) by default.
+ * - Handles only the four Verser protocol paths (`/verser/register`,
+ *   `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`).
+ * - Peer sessions are tracked for lifecycle management; duplicate peer IDs
+ *   are rejected at registration time.
+ * - Lease streams are managed as an idle pool; when a Broker request arrives,
+ *   the Host acquires a lease from the pool (or queues the request waiting for one).
+ * - Route changes are advertised to all connected Brokers via NDJSON control frames.
+ *
+ * @internal
+ */
 export class NodeHttp2VerserHost implements VerserHost {
   private readonly options: VerserHostOptions;
 
@@ -83,10 +103,16 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.options = options;
   }
 
+  /**
+   * {@inheritDoc VerserHost.running}
+   */
   public get running(): boolean {
     return this.server !== undefined;
   }
 
+  /**
+   * {@inheritDoc VerserHost.address}
+   */
   public get address(): import('node:net').AddressInfo {
     const server = this.server;
     if (server === undefined) {
@@ -101,6 +127,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     return address;
   }
 
+  /**
+   * {@inheritDoc VerserHost.start}
+   */
   public async start(): Promise<void> {
     if (this.server !== undefined) {
       return;
@@ -138,6 +167,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.server = server;
   }
 
+  /**
+   * {@inheritDoc VerserHost.reloadTlsCertificate}
+   */
   public reloadTlsCertificate(): void {
     if (this.server === undefined) {
       throw new Error('Host is not running; cannot reload TLS certificate.');
@@ -147,6 +179,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.server.setSecureContext(certificate);
   }
 
+  /**
+   * {@inheritDoc VerserHost.close}
+   */
   public async close(reason = 'host-close'): Promise<void> {
     const server = this.server;
     if (server === undefined) {
@@ -176,10 +211,16 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.closed, reason });
   }
 
+  /**
+   * {@inheritDoc VerserHost.getRoutedDomains}
+   */
   public getRoutedDomains(): RoutedDomainRegistration[] {
     return [...this.guestRegistrations.values()].flat();
   }
 
+  /**
+   * {@inheritDoc VerserHost.onLifecycle}
+   */
   public onLifecycle(listener: (event: VerserHostLifecycleEvent) => void): () => void {
     this.lifecycle.on('event', listener);
     return () => this.lifecycle.off('event', listener);
