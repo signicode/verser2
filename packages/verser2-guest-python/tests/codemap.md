@@ -3,8 +3,8 @@
 ## Responsibility
 
 Provides Python-focused unit tests for ASGI dispatch, envelope protocol helpers,
-Guest lifecycle behavior, Broker route/request APIs, TLS trust, and mTLS client
-identity handling.
+Guest lifecycle behavior, Broker route/request APIs, TLS trust, and Guest/Broker
+mTLS client identity handling.
 
 ## Design
 

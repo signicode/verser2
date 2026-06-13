@@ -69,9 +69,7 @@ await guest.connect();
 ## Python service container
 
 The Python service attaches an ASGI app and connects outbound. Python Guests
-currently support Host CA trust, but not client certificate identity. If your
-Host requires mTLS client certificates for Guests, use Node/Bun Guests today or
-add Python Guest client identity support in a future implementation track.
+support Host CA trust plus PEM or PFX/PKCS12 client identity for mTLS Hosts.
 
 ```py
 from verser2_guest_python import create_verser_guest
