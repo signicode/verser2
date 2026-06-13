@@ -116,6 +116,17 @@ function openBrokerRegistration(session, payload) {
   });
 }
 
+async function waitForRoutes(peer, expectedRoutes) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (JSON.stringify(peer.getRoutes()) === JSON.stringify(expectedRoutes)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(peer.getRoutes(), expectedRoutes);
+}
+
 test('Host starts and stops a TLS HTTP/2 server', async () => {
   const host = createHost({ port: 0 });
 
@@ -182,6 +193,173 @@ test('Host accepts registrations and advertises routed domains to Brokers', asyn
   } finally {
     broker.close();
     guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host attaches local Guests and Brokers with route advertisement and retraction', async () => {
+  const host = createHost({ port: 0 });
+  const events = [];
+  host.onLifecycle((event) => events.push(event));
+
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-registration-1' });
+    assert.deepEqual(localBroker.getRoutes(), []);
+
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-guest-registration-1',
+      routedDomains: ['local-registration.local.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    assert.deepEqual(host.getRoutedDomains(), [
+      { targetId: 'local-guest-registration-1', domain: 'local-registration.local.test' },
+    ]);
+    await localBroker.waitForRoute('local-registration.local.test');
+    assert.deepEqual(localBroker.getRoutes(), [
+      { targetId: 'local-guest-registration-1', domain: 'local-registration.local.test' },
+    ]);
+
+    await localGuest.close('test-detach');
+    assert.deepEqual(host.getRoutedDomains(), []);
+    await waitForRoutes(localBroker, []);
+
+    const eventNames = events.map((event) => event.name);
+    assert.ok(eventNames.includes('connected'));
+    assert.ok(eventNames.includes('registered'));
+    assert.ok(eventNames.includes('route-advertised'));
+    assert.ok(eventNames.includes('disconnected'));
+  } finally {
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Host rejects duplicate peer ids across local and HTTP/2 peers', async () => {
+  const host = createHost({ port: 0 });
+
+  await host.start();
+  const h2Guest = await connectClient(host.address.port);
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'duplicate-local-peer',
+      routedDomains: ['duplicate-local.local.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    const duplicateH2Response = await requestJson(h2Guest, {
+      peerId: 'duplicate-local-peer',
+      role: 'guest',
+      routedDomains: ['duplicate-h2.local.test'],
+    });
+    assert.equal(duplicateH2Response.error.code, 'invalid-registration');
+    assert.match(duplicateH2Response.error.message, /duplicate-local-peer/);
+
+    await assert.rejects(
+      () =>
+        host.attachLocalBroker({
+          brokerId: 'duplicate-local-peer',
+        }),
+      (error) => {
+        assert.equal(error.code, 'invalid-registration');
+        assert.equal(error.context.peerId, 'duplicate-local-peer');
+        return true;
+      },
+    );
+  } finally {
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    h2Guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host authorizes local peer registration with Host-owned local metadata', async () => {
+  const contexts = [];
+  const host = createHost({
+    port: 0,
+    tls: {
+      clientAuth: {
+        authorizeRegistration(context) {
+          contexts.push(context);
+          return { action: 'allow' };
+        },
+      },
+    },
+  });
+
+  await host.start();
+  let localGuest;
+  let localBroker;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-authorized-guest',
+      routedDomains: ['local-authorized.local.test'],
+      certificate: { commonName: 'caller-supplied' },
+      metadata: { authorized: false, local: false },
+      listener: (_request, response) => response.end('ok'),
+    });
+    localBroker = await host.attachLocalBroker({
+      brokerId: 'local-authorized-broker',
+      certificate: { commonName: 'caller-supplied' },
+      metadata: { authorized: false, local: false },
+    });
+
+    assert.equal(contexts.length, 2);
+    assert.equal(contexts[0].peerId, 'local-authorized-guest');
+    assert.equal(contexts[0].role, 'guest');
+    assert.deepEqual(contexts[0].routedDomains, ['local-authorized.local.test']);
+    assert.equal(contexts[0].certificate, undefined);
+    assert.deepEqual(contexts[0].metadata, { local: true, authorized: true });
+    assert.equal(contexts[1].peerId, 'local-authorized-broker');
+    assert.equal(contexts[1].role, 'broker');
+    assert.deepEqual(contexts[1].routedDomains, []);
+    assert.equal(contexts[1].certificate, undefined);
+    assert.deepEqual(contexts[1].metadata, { local: true, authorized: true });
+  } finally {
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Host rejects local registration when authorization closes the peer', async () => {
+  const host = createHost({
+    port: 0,
+    tls: {
+      clientAuth: {
+        authorizeRegistration() {
+          return { action: 'close', reason: 'local peers disabled' };
+        },
+      },
+    },
+  });
+
+  await host.start();
+
+  try {
+    await assert.rejects(
+      () =>
+        host.attachLocalGuest({
+          guestId: 'local-rejected-guest',
+          routedDomains: ['local-rejected.local.test'],
+          listener: (_request, response) => response.end('ok'),
+        }),
+      (error) => {
+        assert.equal(error.code, 'invalid-registration');
+        assert.match(error.message, /local peers disabled/);
+        return true;
+      },
+    );
+    assert.deepEqual(host.getRoutedDomains(), []);
+  } finally {
     await host.close('test-complete');
   }
 });
