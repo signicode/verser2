@@ -572,6 +572,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       path: request.path,
       headers: flattenVerserHeaders(validateVerserHeaders(request.headers ?? {})),
       body,
+      leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs({
+        'x-verser-lease-acquire-timeout-ms': request.leaseAcquireTimeoutMs,
+      }),
     });
   }
 
@@ -591,10 +594,17 @@ export class NodeHttp2VerserHost implements VerserHost {
       role: 'guest',
     });
     const controller = new AbortController();
+    const cancelFromUpstream = (): void => controller.abort();
+    if (request.signal?.aborted) {
+      controller.abort();
+    } else {
+      request.signal?.addEventListener('abort', cancelFromUpstream, { once: true });
+    }
     this.trackLocalRequestController(request.sourceId, controller);
     this.trackLocalRequestController(request.targetId, controller);
     let response: VerserLocalBrokerResponse | undefined;
     const untrackController = (): void => {
+      request.signal?.removeEventListener('abort', cancelFromUpstream);
       this.untrackLocalRequestController(request.sourceId, controller);
       this.untrackLocalRequestController(request.targetId, controller);
     };
@@ -659,7 +669,11 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async routeLocalRequestToH2Guest(
     request: LocalDispatchRequest,
   ): Promise<VerserLocalBrokerResponse> {
-    const lease = await this.acquireLease(request.targetId, request.requestId, 30_000);
+    const lease = await this.acquireLease(
+      request.targetId,
+      request.requestId,
+      request.leaseAcquireTimeoutMs,
+    );
     const cancelLease = (): void => {
       if (!lease.stream.closed) {
         lease.stream.close(http2.constants.NGHTTP2_CANCEL);
@@ -866,27 +880,54 @@ export class NodeHttp2VerserHost implements VerserHost {
     requestId: string,
     targetId: VerserPeerId,
   ): Promise<void> {
-    const response = await this.routeLocalRequest({
-      requestId,
-      sourceId: String(headers['x-verser-source-id'] ?? ''),
-      targetId,
-      method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
-      path: String(headers['x-verser-path'] ?? '/'),
-      headers: flattenVerserHeaders(
-        validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
-      ),
-      body: stream,
-    });
-    stream.respond({
-      ':status': response.statusCode,
-      ...validateVerserHeaders(response.headers),
-    });
-    response.body.once('error', () => {
-      if (!stream.closed) {
-        stream.close(http2.constants.NGHTTP2_CANCEL);
+    const controller = new AbortController();
+    let completed = false;
+    const cancelLocalDispatch = (): void => {
+      if (!completed) {
+        controller.abort();
       }
-    });
-    response.body.pipe(stream);
+    };
+    const cleanupCancellation = (): void => {
+      stream.off('aborted', cancelLocalDispatch);
+      stream.off('error', cancelLocalDispatch);
+      stream.off('close', cancelLocalDispatch);
+    };
+    stream.once('aborted', cancelLocalDispatch);
+    stream.once('error', cancelLocalDispatch);
+    stream.once('close', cancelLocalDispatch);
+
+    try {
+      const response = await this.routeLocalRequest({
+        requestId,
+        sourceId: String(headers['x-verser-source-id'] ?? ''),
+        targetId,
+        method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
+        path: String(headers['x-verser-path'] ?? '/'),
+        headers: flattenVerserHeaders(
+          validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+        ),
+        body: stream,
+        leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs(headers),
+        signal: controller.signal,
+      });
+      stream.respond({
+        ':status': response.statusCode,
+        ...validateVerserHeaders(response.headers),
+      });
+      response.body.once('error', () => {
+        if (!stream.closed) {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+        }
+      });
+      response.body.pipe(stream);
+      stream.once('finish', () => {
+        completed = true;
+        cleanupCancellation();
+      });
+    } catch (error) {
+      cleanupCancellation();
+      throw error;
+    }
   }
 
   private async routeBrokerRequestOverLease(

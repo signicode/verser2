@@ -41,6 +41,7 @@ export interface LocalDispatchRequest {
   readonly path: string;
   readonly headers: Record<string, string>;
   readonly body: Readable;
+  readonly leaseAcquireTimeoutMs: number;
   readonly signal?: AbortSignal;
 }
 

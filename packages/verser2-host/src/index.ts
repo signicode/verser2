@@ -62,6 +62,7 @@ export type {
   VerserLocalBrokerResponse,
   VerserLocalGuestHandle,
   VerserLocalGuestOptions,
+  VerserLocalGuestResponse,
   VerserLocalGuestRequestListener,
   VerserHostOptions,
   VerserHostRegistrationRequest,

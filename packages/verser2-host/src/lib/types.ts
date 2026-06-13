@@ -55,15 +55,22 @@ export type VerserLocalGuestRequestListener = (
     readonly url: string;
     readonly headers: Record<string, string>;
   },
-  response: {
-    statusCode: number;
-    setHeader(name: string, value: string | number | boolean): unknown;
-    getHeader(name: string): string | undefined;
-    writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): unknown;
-    write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
-    end(chunk?: string | Buffer, encoding?: BufferEncoding): unknown;
-  },
+  response: VerserLocalGuestResponse,
 ) => void;
+
+/**
+ * Minimal Node-compatible response surface used by local Host-side Guests.
+ *
+ * @public
+ */
+export interface VerserLocalGuestResponse {
+  statusCode: number;
+  setHeader(name: string, value: string | number | boolean): this;
+  getHeader(name: string): string | undefined;
+  writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): this;
+  write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
+  end(chunk?: string | Buffer, encoding?: BufferEncoding): this;
+}
 
 /**
  * Options for attaching an in-process Guest directly to the Host.
@@ -103,6 +110,11 @@ export interface VerserLocalBrokerRequest {
   readonly path: string;
   readonly headers?: Record<string, string>;
   readonly body?: readonly Buffer[] | Readable;
+  /**
+   * Timeout in milliseconds while waiting for an HTTP/2 Guest lease.
+   * Defaults to the same 5000 ms used by remote Broker requests.
+   */
+  readonly leaseAcquireTimeoutMs?: number;
 }
 
 /**

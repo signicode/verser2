@@ -376,6 +376,89 @@ test('Local Broker routes to an HTTP/2 Guest through Host target checks', async 
   }
 });
 
+test('Local Broker uses configurable lease acquire timeout for HTTP/2 Guests', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const h2Guest = await connectClient(host.address.port);
+  let localBroker;
+
+  try {
+    await requestJson(h2Guest, {
+      peerId: 'h2-guest-local-timeout-1',
+      role: 'guest',
+      routedDomains: ['local-timeout-to-h2.local.test'],
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-timeout-1' });
+    await localBroker.waitForRoute('local-timeout-to-h2.local.test');
+
+    await assert.rejects(
+      () =>
+        localBroker.request({
+          targetId: 'h2-guest-local-timeout-1',
+          method: 'GET',
+          path: '/timeout',
+          leaseAcquireTimeoutMs: 1,
+        }),
+      (error) => {
+        assert.equal(error.code, 'timeout');
+        assert.equal(error.context.targetId, 'h2-guest-local-timeout-1');
+        return true;
+      },
+    );
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    h2Guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('HTTP/2 Broker abort cancels an in-flight local Guest dispatch', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const h2Broker = await connectClient(host.address.port);
+  let localGuest;
+
+  try {
+    const localRequestError = new Promise((resolve) => {
+      localGuest = host.attachLocalGuest({
+        guestId: 'local-guest-h2-abort-1',
+        routedDomains: ['h2-abort-local.local.test'],
+        listener: (request, response) => {
+          request.once('error', resolve);
+          response.writeHead(200, { 'x-abort-test': 'started' });
+          response.write('first');
+        },
+      });
+    });
+    localGuest = await localGuest;
+
+    const stream = h2Broker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-target-id': 'local-guest-h2-abort-1',
+      'x-verser-request-id': 'h2-abort-local-request-1',
+      'x-verser-source-id': 'h2-broker-abort-local-1',
+      'x-verser-method': 'POST',
+      'x-verser-path': '/abort',
+      'x-verser-headers': '{}',
+    });
+    await new Promise((resolve) => stream.once('response', resolve));
+    stream.close();
+
+    const error = await Promise.race([
+      localRequestError,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('local dispatch was not cancelled')), 1000),
+      ),
+    ]);
+    assert.equal(error.code, 'disconnected-target');
+  } finally {
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    h2Broker.close();
+    await host.close('test-complete');
+  }
+});
+
 test('HTTP/2 Broker routes to a local Guest through Host target checks', async () => {
   const host = createHost({ port: 0 });
   await host.start();

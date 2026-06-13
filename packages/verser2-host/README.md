@@ -11,9 +11,10 @@ can also attach in-process local Guests and local Brokers directly to the Host.
   `host.attachLocalBroker(options)`
 - Types: `VerserHost`, `VerserHostLifecycleEvent`, `VerserHostOptions`,
   `VerserHostRegistrationRequest`, `VerserLocalGuestRequestListener`,
-  `VerserLocalGuestOptions`, `VerserLocalBrokerOptions`,
-  `VerserLocalBrokerRequest`, `VerserLocalBrokerResponse`,
-  `VerserLocalGuestHandle`, `VerserLocalBrokerHandle`
+  `VerserLocalGuestResponse`, `VerserLocalGuestOptions`,
+  `VerserLocalBrokerOptions`, `VerserLocalBrokerRequest`,
+  `VerserLocalBrokerResponse`, `VerserLocalGuestHandle`,
+  `VerserLocalBrokerHandle`
 - Re-exported: `VerserPeerRole`
 - Constant: `VERSER2_HOST_PACKAGE_NAME`
 
