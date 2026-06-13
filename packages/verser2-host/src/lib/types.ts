@@ -1,4 +1,6 @@
+import type { Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { Readable } from 'node:stream';
 
 import type {
   VerserPeerRole as CommonVerserPeerRole,
@@ -43,6 +45,113 @@ export interface VerserHostOptions {
 export type VerserHostRegistrationRequest = VerserRegistrationRequest;
 
 /**
+ * Minimal Node-compatible request listener used by local Host-side Guests.
+ *
+ * @public
+ */
+export type VerserLocalGuestRequestListener = (
+  request: Readable & {
+    readonly method: string;
+    readonly url: string;
+    readonly headers: Record<string, string>;
+  },
+  response: VerserLocalGuestResponse,
+) => void;
+
+/**
+ * Minimal Node-compatible response surface used by local Host-side Guests.
+ *
+ * @public
+ */
+export interface VerserLocalGuestResponse {
+  statusCode: number;
+  setHeader(name: string, value: string | number | boolean): this;
+  getHeader(name: string): string | undefined;
+  writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): this;
+  write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
+  end(chunk?: string | Buffer, encoding?: BufferEncoding): this;
+}
+
+/**
+ * Options for attaching an in-process Guest directly to the Host.
+ *
+ * Local registration authorization receives Host-owned local metadata; caller
+ * supplied certificate or metadata values are not accepted by this options
+ * object.
+ *
+ * @public
+ */
+export interface VerserLocalGuestOptions {
+  readonly guestId: string;
+  readonly routedDomains?: readonly string[];
+  readonly listener: VerserLocalGuestRequestListener | HttpServer;
+}
+
+/**
+ * Options for attaching an in-process Broker directly to the Host.
+ *
+ * Local registration authorization receives Host-owned local metadata with no
+ * TLS certificate identity.
+ *
+ * @public
+ */
+export interface VerserLocalBrokerOptions {
+  readonly brokerId: string;
+}
+
+/**
+ * Request shape accepted by an in-process Broker handle.
+ *
+ * @public
+ */
+export interface VerserLocalBrokerRequest {
+  readonly targetId: string;
+  readonly method: string;
+  readonly path: string;
+  readonly headers?: Record<string, string>;
+  readonly body?: readonly Buffer[] | Readable;
+  /**
+   * Timeout in milliseconds while waiting for an HTTP/2 Guest lease.
+   * Defaults to the same 5000 ms used by remote Broker requests.
+   */
+  readonly leaseAcquireTimeoutMs?: number;
+}
+
+/**
+ * Response shape returned by an in-process Broker handle.
+ *
+ * @public
+ */
+export interface VerserLocalBrokerResponse {
+  readonly requestId: string;
+  readonly statusCode: number;
+  readonly headers: Record<string, string>;
+  readonly body: Readable;
+}
+
+/**
+ * Handle returned for an attached in-process Guest.
+ *
+ * @public
+ */
+export interface VerserLocalGuestHandle {
+  close(reason?: string): Promise<void>;
+}
+
+/**
+ * Handle returned for an attached in-process Broker.
+ *
+ * @public
+ */
+export interface VerserLocalBrokerHandle {
+  readonly routedRequestCount: number;
+  getRoutes(): RoutedDomainRegistration[];
+  waitForRoute(domain: string): Promise<void>;
+  request(request: VerserLocalBrokerRequest): Promise<VerserLocalBrokerResponse>;
+  close(reason?: string): Promise<void>;
+}
+
+/**
  * A lifecycle event emitted by the Verser Host.
  *
  * Events include connection/disconnection, registration, route advertisement,
@@ -74,12 +183,15 @@ export interface VerserHostLifecycleEvent {
  * - Manages Guest lease streams at `/verser/guest/lease` for request forwarding.
  * - Routes Broker requests at `/verser/request` to the target Guest.
  * - Advertises route changes to Brokers via NDJSON control frames.
+ * - Can attach colocated in-process local Guests and Brokers without opening a
+ *   TLS HTTP/2 peer connection.
  *
  * **Only protocol paths** `/verser/register`, `/verser/guest/control`,
  * `/verser/guest/lease`, and `/verser/request` are supported.
  *
  * @remarks
- * - The Host requires TLS and only supports TLS HTTP/2 connections.
+ * - The Host requires TLS for remote peer connections. Local peers bypass TLS
+ *   because they are attached in-process.
  * - Route matching uses exact hostname equality — no wildcard or suffix matching.
  * - The Host does **not** implement WebSocket, HTTP upgrade, CONNECT tunneling,
  *   trailers, or informational response forwarding.
@@ -126,6 +238,10 @@ export interface VerserHost {
    * @returns The current route table.
    */
   getRoutedDomains(): RoutedDomainRegistration[];
+  /** Attaches an in-process local Guest without opening a TLS HTTP/2 connection. */
+  attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle>;
+  /** Attaches an in-process local Broker without opening a TLS HTTP/2 connection. */
+  attachLocalBroker(options: VerserLocalBrokerOptions): Promise<VerserLocalBrokerHandle>;
   /**
    * Subscribes to Host lifecycle events.
    *

@@ -43,6 +43,27 @@ const host = createVerserHost({
 The callback returns an `action` of `'allow'` to accept the registration or
 `'close'` to reject it with an optional reason string.
 
+## Local peer authorization
+
+Local Guests and Brokers attached through `host.attachLocalGuest()` or
+`host.attachLocalBroker()` also invoke `authorizeRegistration` when it is
+configured. Local peers do not have a TLS client certificate, so the Host calls
+the callback with `certificate: undefined` and Host-owned metadata:
+
+```ts
+authorizeRegistration(context) {
+  if (context.metadata.local === true && context.metadata.authorized === true) {
+    return { action: 'allow' };
+  }
+  return { action: 'close', reason: 'not authorized' };
+}
+```
+
+Caller-supplied `certificate` or `metadata` values in local attachment options
+are not trusted or forwarded; the Host replaces them with `{ local: true,
+authorized: true }`. Applications that rely on mTLS certificate identity should
+treat local peers as a separate trusted in-process path.
+
 ## Certificate identity and fingerprints
 
 When mTLS is enabled, the Host extracts structured certificate identity metadata
@@ -93,5 +114,6 @@ Guest request handlers or by wrapping the Broker request path.
 |-----------------|--------------------------------------------------------|
 | TLS handshake   | Encrypted transport, optional mTLS client verification |
 | Registration    | Certificate-based `authorizeRegistration` hook         |
+| Local peer attach | In-process registration hook with Host-owned metadata |
 | Request routing | No per-request authorization                           |
 | Guest handler   | Application-controlled (token validation, etc.)        |

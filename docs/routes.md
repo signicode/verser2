@@ -24,6 +24,9 @@ guest.attach(server, 'app.example.com');
 The domain sent to `attach()` takes precedence over the Guest constructor's
 `routedDomains`.
 
+Local Host Guests attached with `host.attachLocalGuest()` register their
+`routedDomains` through the same Host route table as remote TLS HTTP/2 Guests.
+
 ## Route matching
 
 Route matching is **exact URL hostname equality**. There is no wildcard, suffix,
@@ -46,7 +49,11 @@ empty route list signals retraction of previously advertised routes.
 
 Brokers update their internal route state from these control frames. Application
 code can inspect the current route table with `getRoutes()` on Node/Bun Brokers
-or `get_routes()` on the Python Broker.
+and local Brokers, or `get_routes()` on the Python Broker.
+
+Local Brokers returned by `host.attachLocalBroker()` receive the same full
+route-table replacement semantics as remote Brokers, including initial snapshots,
+additions, retractions, `getRoutes()`, and `waitForRoute()`.
 
 ## waitForRoute
 

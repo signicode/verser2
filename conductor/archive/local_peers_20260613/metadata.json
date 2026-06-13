@@ -1,0 +1,8 @@
+{
+  "track_id": "local_peers_20260613",
+  "type": "feature",
+  "status": "completed",
+  "created_at": "2026-06-13T19:48:34Z",
+  "updated_at": "2026-06-13T21:02:21Z",
+  "description": "In-process local Host-side Guest/Broker peers"
+}

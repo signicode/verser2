@@ -30,19 +30,40 @@ import {
   validateVerserHeaders,
 } from '@signicode/verser-common';
 import { sendError, writeJsonLine } from './http2-io';
+import {
+  type LocalBrokerState,
+  type LocalDispatchRequest,
+  type LocalGuestState,
+  closeLocalBrokerState,
+  createLocalBrokerState,
+  dispatchLocalGuestRequest,
+  extractLocalGuestListener,
+  toReadableBody,
+  updateLocalBrokerRoutes,
+  waitForLocalBrokerRoute,
+} from './local-peers';
 import type {
   VerserHost,
   VerserHostLifecycleEvent,
   VerserHostOptions,
   VerserHostRegistrationRequest,
+  VerserLocalBrokerHandle,
+  VerserLocalBrokerOptions,
+  VerserLocalBrokerRequest,
+  VerserLocalBrokerResponse,
+  VerserLocalGuestHandle,
+  VerserLocalGuestOptions,
 } from './types';
 import { toVerserError } from './utils';
 
 interface RegisteredPeer {
   readonly peerId: VerserPeerId;
   readonly role: VerserPeerRole;
-  readonly session: http2.Http2Session;
+  readonly transport: 'h2' | 'local';
+  readonly session?: http2.Http2Session;
   readonly controlStream?: http2.ServerHttp2Stream;
+  readonly localGuest?: LocalGuestState;
+  readonly localBroker?: LocalBrokerState;
 }
 
 interface GuestLeaseStream {
@@ -96,6 +117,8 @@ export class NodeHttp2VerserHost implements VerserHost {
   private readonly queuedLeaseAcquisitions = new Map<VerserPeerId, QueuedLeaseAcquisition[]>();
 
   private readonly guestRegistrations = new Map<VerserPeerId, RoutedDomainRegistration[]>();
+
+  private readonly activeLocalRequests = new Map<VerserPeerId, Set<AbortController>>();
 
   private server?: http2.Http2SecureServer;
 
@@ -192,7 +215,11 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     for (const peer of this.peers.values()) {
       peer.controlStream?.close(http2.constants.NGHTTP2_NO_ERROR);
+      if (peer.localBroker !== undefined) {
+        closeLocalBrokerState(peer.localBroker, reason);
+      }
     }
+    this.abortAllLocalRequests();
 
     this.closeAllLeases();
     this.failAllQueuedLeaseAcquisitions(reason);
@@ -216,6 +243,84 @@ export class NodeHttp2VerserHost implements VerserHost {
    */
   public getRoutedDomains(): RoutedDomainRegistration[] {
     return [...this.guestRegistrations.values()].flat();
+  }
+
+  public async attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle> {
+    const peerId = createPeerId(options.guestId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
+
+    await this.authorizeLocalRegistration(peerId, {
+      peerId,
+      role: 'guest',
+      routedDomains: [...(options.routedDomains ?? [])],
+    });
+
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'guest' });
+    this.peers.set(peerId, {
+      peerId,
+      role: 'guest',
+      transport: 'local',
+      localGuest: { listener: extractLocalGuestListener(peerId, options.listener) },
+    });
+    this.guestRegistrations.set(
+      peerId,
+      (options.routedDomains ?? []).map((domain) =>
+        createRoutedDomainRegistration({ targetId: peerId, domain }),
+      ),
+    );
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'guest' });
+    this.advertiseRoutes();
+
+    let closed = false;
+    return {
+      close: async (reason = 'local-guest-close') => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        this.detachLocalPeer(peerId, reason);
+      },
+    };
+  }
+
+  public async attachLocalBroker(
+    options: VerserLocalBrokerOptions,
+  ): Promise<VerserLocalBrokerHandle> {
+    const peerId = createPeerId(options.brokerId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
+
+    await this.authorizeLocalRegistration(peerId, {
+      peerId,
+      role: 'broker',
+      routedDomains: [],
+    });
+
+    const localBroker = createLocalBrokerState(this.getRoutedDomains());
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'broker' });
+    this.peers.set(peerId, { peerId, role: 'broker', transport: 'local', localBroker });
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'broker' });
+
+    return {
+      get routedRequestCount() {
+        return localBroker.requestCounter;
+      },
+      getRoutes: () => [...localBroker.routes],
+      waitForRoute: (domain: string) => waitForLocalBrokerRoute(localBroker, domain),
+      request: (request: VerserLocalBrokerRequest) =>
+        this.routeLocalBrokerRequest(peerId, localBroker, request),
+      close: async (reason = 'local-broker-close') => {
+        if (localBroker.closed) {
+          return;
+        }
+        closeLocalBrokerState(localBroker, reason);
+        this.abortLocalRequestsForPeer(peerId);
+        this.detachLocalPeer(peerId, reason);
+      },
+    };
   }
 
   /**
@@ -294,6 +399,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     const peer: RegisteredPeer = {
       peerId,
       role: registration.role,
+      transport: 'h2',
       session,
       controlStream: registration.role === 'broker' ? stream : undefined,
     };
@@ -383,9 +489,283 @@ export class NodeHttp2VerserHost implements VerserHost {
     );
   }
 
+  private async authorizeLocalRegistration(
+    peerId: VerserPeerId,
+    registration: VerserRegistrationRequest,
+  ): Promise<void> {
+    const callback = this.options.tls?.clientAuth?.authorizeRegistration;
+    if (callback === undefined) {
+      return;
+    }
+
+    const action = await callback({
+      peerId,
+      role: registration.role,
+      routedDomains: registration.routedDomains ?? [],
+      certificate: undefined,
+      metadata: { local: true, authorized: true },
+    });
+    if (action.action === 'allow') {
+      return;
+    }
+
+    const reason = action.reason ?? 'registration rejected by local peer policy';
+    const error = createVerserError('invalid-registration', reason, {
+      peerId,
+      role: registration.role,
+    });
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.error,
+      peerId,
+      role: registration.role,
+      error,
+    });
+    throw error;
+  }
+
+  private detachLocalPeer(peerId: VerserPeerId, reason: string): void {
+    const peer = this.peers.get(peerId);
+    if (peer === undefined || peer.transport !== 'local') {
+      return;
+    }
+
+    this.peers.delete(peerId);
+    const shouldAdvertiseRoutes = peer.role === 'guest';
+    if (shouldAdvertiseRoutes) {
+      this.guestRegistrations.delete(peerId);
+      this.closeGuestLeases(peerId);
+      this.failQueuedLeaseAcquisitions(peerId, reason);
+      this.abortLocalRequestsForPeer(peerId);
+    }
+    if (peer.localBroker !== undefined) {
+      closeLocalBrokerState(peer.localBroker, reason);
+      this.abortLocalRequestsForPeer(peerId);
+    }
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.disconnected,
+      peerId,
+      role: peer.role,
+      reason,
+    });
+    if (shouldAdvertiseRoutes) {
+      this.advertiseRoutes();
+    }
+  }
+
+  private routeLocalBrokerRequest(
+    sourceId: VerserPeerId,
+    broker: LocalBrokerState,
+    request: VerserLocalBrokerRequest,
+  ): Promise<VerserLocalBrokerResponse> {
+    if (broker.closed) {
+      return Promise.reject(createVerserError('disconnected-target', 'Local Broker is closed'));
+    }
+
+    const requestId = `${sourceId}-${++broker.requestCounter}`;
+    const targetId = createPeerId(request.targetId);
+    const body = toReadableBody(request.body);
+    return this.routeLocalRequest({
+      requestId,
+      sourceId,
+      targetId,
+      method: request.method,
+      path: request.path,
+      headers: flattenVerserHeaders(validateVerserHeaders(request.headers ?? {})),
+      body,
+      leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs({
+        'x-verser-lease-acquire-timeout-ms': request.leaseAcquireTimeoutMs,
+      }),
+    });
+  }
+
+  private async routeLocalRequest(
+    request: LocalDispatchRequest,
+  ): Promise<VerserLocalBrokerResponse> {
+    const target = this.peers.get(request.targetId);
+    if (target === undefined || target.role !== 'guest') {
+      throw createVerserError('missing-guest', 'Target Guest is not registered', {
+        targetId: request.targetId,
+      });
+    }
+
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.requestStarted,
+      peerId: request.targetId,
+      role: 'guest',
+    });
+    const controller = new AbortController();
+    const cancelFromUpstream = (): void => controller.abort();
+    if (request.signal?.aborted) {
+      controller.abort();
+    } else {
+      request.signal?.addEventListener('abort', cancelFromUpstream, { once: true });
+    }
+    this.trackLocalRequestController(request.sourceId, controller);
+    this.trackLocalRequestController(request.targetId, controller);
+    let response: VerserLocalBrokerResponse | undefined;
+    const untrackController = (): void => {
+      request.signal?.removeEventListener('abort', cancelFromUpstream);
+      this.untrackLocalRequestController(request.sourceId, controller);
+      this.untrackLocalRequestController(request.targetId, controller);
+    };
+    try {
+      response =
+        target.transport === 'local'
+          ? await this.routeLocalRequestToAttachedGuest(
+              { ...request, signal: controller.signal },
+              target,
+            )
+          : await this.routeLocalRequestToH2Guest({ ...request, signal: controller.signal });
+      this.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
+        peerId: request.targetId,
+        role: 'guest',
+      });
+      const cancelResponse = (): void => {
+        response?.body.destroy(
+          createVerserError('disconnected-target', 'Local peer disconnected during request', {
+            requestId: request.requestId,
+            targetId: request.targetId,
+            sourceId: request.sourceId,
+          }),
+        );
+      };
+      response.body.once('close', untrackController);
+      response.body.once('end', untrackController);
+      response.body.once('error', untrackController);
+      controller.signal.addEventListener('abort', cancelResponse, { once: true });
+      return response;
+    } catch (error) {
+      const verserError = toVerserError(error);
+      this.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.error,
+        peerId: request.targetId,
+        role: 'guest',
+        error: verserError,
+      });
+      throw verserError;
+    } finally {
+      if (response === undefined) {
+        untrackController();
+      }
+    }
+  }
+
+  private routeLocalRequestToAttachedGuest(
+    request: LocalDispatchRequest,
+    target: RegisteredPeer,
+  ): Promise<VerserLocalBrokerResponse> {
+    if (target.localGuest === undefined) {
+      return Promise.reject(
+        createVerserError('disconnected-target', 'Target local Guest is not attached', {
+          targetId: request.targetId,
+        }),
+      );
+    }
+
+    return dispatchLocalGuestRequest(request, target.localGuest.listener);
+  }
+
+  private async routeLocalRequestToH2Guest(
+    request: LocalDispatchRequest,
+  ): Promise<VerserLocalBrokerResponse> {
+    const lease = await this.acquireLease(
+      request.targetId,
+      request.requestId,
+      request.leaseAcquireTimeoutMs,
+    );
+    const cancelLease = (): void => {
+      if (!lease.stream.closed) {
+        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    };
+    if (request.signal?.aborted) {
+      cancelLease();
+      throw createVerserError('disconnected-target', 'Local peer disconnected during request', {
+        requestId: request.requestId,
+        targetId: request.targetId,
+        sourceId: request.sourceId,
+      });
+    }
+    request.signal?.addEventListener('abort', cancelLease, { once: true });
+    const responsePromise = readLeaseResponseMetadataFromStream(lease.stream, {
+      requestId: request.requestId,
+      targetId: request.targetId,
+    });
+    lease.stream.write(
+      encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId: request.requestId,
+          sourceId: request.sourceId,
+          targetId: request.targetId,
+          method: request.method,
+          path: request.path,
+          headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
+        },
+      }),
+    );
+    request.body.once('error', (error) => lease.stream.destroy(error));
+    request.body.pipe(lease.stream);
+    try {
+      const metadata = await responsePromise;
+      return {
+        requestId: request.requestId,
+        statusCode: metadata.statusCode,
+        headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),
+        body: lease.stream,
+      };
+    } finally {
+      request.signal?.removeEventListener('abort', cancelLease);
+    }
+  }
+
+  private trackLocalRequestController(peerId: VerserPeerId, controller: AbortController): void {
+    const controllers = this.activeLocalRequests.get(peerId) ?? new Set<AbortController>();
+    controllers.add(controller);
+    this.activeLocalRequests.set(peerId, controllers);
+  }
+
+  private untrackLocalRequestController(peerId: VerserPeerId, controller: AbortController): void {
+    const controllers = this.activeLocalRequests.get(peerId);
+    if (controllers === undefined) {
+      return;
+    }
+    controllers.delete(controller);
+    if (controllers.size === 0) {
+      this.activeLocalRequests.delete(peerId);
+    }
+  }
+
+  private abortLocalRequestsForPeer(peerId: VerserPeerId): void {
+    const controllers = this.activeLocalRequests.get(peerId);
+    if (controllers === undefined) {
+      return;
+    }
+    for (const controller of controllers) {
+      controller.abort();
+    }
+    this.activeLocalRequests.delete(peerId);
+  }
+
+  private abortAllLocalRequests(): void {
+    for (const peerId of [...this.activeLocalRequests.keys()]) {
+      this.abortLocalRequestsForPeer(peerId);
+    }
+  }
+
   private advertiseRoutes(): void {
     const routes = this.getRoutedDomains();
     for (const peer of this.peers.values()) {
+      if (peer.role === 'broker' && peer.transport === 'local' && peer.localBroker !== undefined) {
+        updateLocalBrokerRoutes(peer.localBroker, routes);
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
+          peerId: peer.peerId,
+          role: peer.role,
+        });
+        continue;
+      }
       if (
         peer.role === 'broker' &&
         peer.controlStream !== undefined &&
@@ -464,6 +844,18 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (target === undefined) {
       throw createVerserError('missing-guest', 'Target Guest is not registered', { targetId });
     }
+    if (target.role !== 'guest') {
+      throw createVerserError('missing-guest', 'Target peer is not a Guest', { targetId });
+    }
+    if (target.transport === 'local') {
+      await this.routeH2BrokerRequestToLocalGuest(
+        stream,
+        headers,
+        requestId,
+        createPeerId(targetId),
+      );
+      return;
+    }
     const lease = await this.tryAcquireLease(
       createPeerId(targetId),
       requestId,
@@ -480,6 +872,62 @@ export class NodeHttp2VerserHost implements VerserHost {
       parseLeaseAcquireTimeoutMs(headers),
     );
     await this.routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
+  }
+
+  private async routeH2BrokerRequestToLocalGuest(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+    requestId: string,
+    targetId: VerserPeerId,
+  ): Promise<void> {
+    const controller = new AbortController();
+    let completed = false;
+    const cancelLocalDispatch = (): void => {
+      if (!completed) {
+        controller.abort();
+      }
+    };
+    const cleanupCancellation = (): void => {
+      stream.off('aborted', cancelLocalDispatch);
+      stream.off('error', cancelLocalDispatch);
+      stream.off('close', cancelLocalDispatch);
+    };
+    stream.once('aborted', cancelLocalDispatch);
+    stream.once('error', cancelLocalDispatch);
+    stream.once('close', cancelLocalDispatch);
+
+    try {
+      const response = await this.routeLocalRequest({
+        requestId,
+        sourceId: String(headers['x-verser-source-id'] ?? ''),
+        targetId,
+        method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
+        path: String(headers['x-verser-path'] ?? '/'),
+        headers: flattenVerserHeaders(
+          validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+        ),
+        body: stream,
+        leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs(headers),
+        signal: controller.signal,
+      });
+      stream.respond({
+        ':status': response.statusCode,
+        ...validateVerserHeaders(response.headers),
+      });
+      response.body.once('error', () => {
+        if (!stream.closed) {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+        }
+      });
+      response.body.pipe(stream);
+      stream.once('finish', () => {
+        completed = true;
+        cleanupCancellation();
+      });
+    } catch (error) {
+      cleanupCancellation();
+      throw error;
+    }
   }
 
   private async routeBrokerRequestOverLease(
