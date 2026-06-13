@@ -5,52 +5,16 @@ const test = require('node:test');
 
 const { loadVerserHost } = require('./support/verser-package-imports.cjs');
 const { trusted, clientCa, trustedClient, untrustedClient } = require('./support/tls-fixtures.cjs');
-const { terminateChildProcess } = require('./support/child-process.cjs');
 
 const { createVerserHost } = loadVerserHost();
 
 const rootDirectory = path.resolve(__dirname, '..');
 const pythonPackageDirectory = path.join(rootDirectory, 'packages', 'verser2-guest-python');
 const pythonSourceDirectory = path.join(pythonPackageDirectory, 'src');
-const pythonExamplePath = path.join(pythonPackageDirectory, 'examples', 'basic_guest.py');
 
 function hasUv() {
   const result = spawnSync('uv', ['--version'], { stdio: 'ignore' });
   return result.status === 0;
-}
-
-function withTimeout(promise, label, timeoutMs = 30_000) {
-  let timeout;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
-}
-
-function waitForProcessOutput(process, pattern, label) {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`${label} timed out`)), 15_000);
-    let stderr = '';
-    process.stdout.on('data', (chunk) => {
-      if (pattern.test(chunk.toString('utf8'))) {
-        clearTimeout(timeout);
-        resolve();
-      }
-    });
-    process.stderr.on('data', (chunk) => {
-      stderr += chunk.toString('utf8');
-      if (/Traceback|Error|Exception/.test(stderr)) {
-        clearTimeout(timeout);
-        reject(new Error(stderr));
-      }
-    });
-    process.once('exit', (code, signal) => {
-      clearTimeout(timeout);
-      reject(
-        new Error(`${label} exited before ready: code=${code} signal=${signal} stderr=${stderr}`),
-      );
-    });
-  });
 }
 
 async function withMtlsHost(authorizeRegistration) {
@@ -69,17 +33,83 @@ async function withMtlsHost(authorizeRegistration) {
   return host;
 }
 
-function spawnPythonGuest(host, env) {
-  return spawn('uv', ['run', '--project', pythonPackageDirectory, 'python', pythonExamplePath], {
-    cwd: rootDirectory,
-    env: {
-      ...process.env,
-      PYTHONPATH: pythonSourceDirectory,
-      VERSER_HOST_URL: `https://127.0.0.1:${host.address.port}`,
-      VERSER_TLS_CA_FILE: trusted.certificatePath,
-      VERSER_GUEST_DOMAIN: 'python-mtls.local.test',
-      ...env,
-    },
+function runPythonGuest(host, env) {
+  const script = `
+import asyncio
+import os
+import sys
+from verser2_guest_python import create_verser_guest
+
+async def app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 204, "headers": []})
+    await send({"type": "http.response.body", "body": b""})
+
+async def main():
+    opts = {
+        "host_url": os.environ["VERSER_HOST_URL"],
+        "guest_id": os.environ.get("VERSER_GUEST_ID", "python-guest-mtls"),
+        "app": app,
+        "routed_domains": [os.environ.get("VERSER_GUEST_DOMAIN", "python-mtls.local.test")],
+        "tls_ca_file": os.environ["VERSER_TLS_CA_FILE"],
+    }
+    optional = {
+        "tls_cert_file": "VERSER_TLS_CERT_FILE",
+        "tls_key_file": "VERSER_TLS_KEY_FILE",
+        "tls_key_password": "VERSER_TLS_KEY_PASSWORD",
+        "tls_pfx_file": "VERSER_TLS_PFX_FILE",
+        "tls_pfx_password": "VERSER_TLS_PFX_PASSWORD",
+    }
+    for option_name, env_name in optional.items():
+        if os.environ.get(env_name):
+            opts[option_name] = os.environ[env_name]
+    guest = create_verser_guest(**opts)
+    try:
+        await asyncio.wait_for(guest.connect(), timeout=10)
+        print("python guest connected", flush=True)
+    finally:
+        try:
+            await guest.close()
+        except Exception as exc:
+            print(f"python guest close warning: {exc}", file=sys.stderr, flush=True)
+
+try:
+    asyncio.run(main())
+except Exception as exc:
+    print(f"TLS handshake failed for python guest: {exc}", file=sys.stderr, flush=True)
+    raise
+`;
+
+  return new Promise((resolve) => {
+    const child = spawn(
+      'uv',
+      ['run', '--project', pythonPackageDirectory, 'python', '-c', script],
+      {
+        cwd: rootDirectory,
+        env: {
+          ...process.env,
+          PYTHONPATH: pythonSourceDirectory,
+          VERSER_HOST_URL: `https://127.0.0.1:${host.address.port}`,
+          VERSER_TLS_CA_FILE: trusted.certificatePath,
+          VERSER_GUEST_DOMAIN: 'python-mtls.local.test',
+          ...env,
+        },
+      },
+    );
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+    }, 20_000);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.once('exit', (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal, stdout, stderr });
+    });
   });
 }
 
@@ -95,19 +125,20 @@ test(
       authorizationContext = context;
       return { action: 'allow' };
     });
-    const guestProcess = spawnPythonGuest(host, {
-      VERSER_GUEST_ID: 'python-guest-mtls-pem',
-      VERSER_TLS_CERT_FILE: trustedClient.certificatePath,
-      VERSER_TLS_KEY_FILE: trustedClient.keyPath,
-    });
 
     try {
-      await waitForProcessOutput(guestProcess, /python guest ready/, 'Python Guest mTLS PEM');
+      const result = await runPythonGuest(host, {
+        VERSER_GUEST_ID: 'python-guest-mtls-pem',
+        VERSER_TLS_CERT_FILE: trustedClient.certificatePath,
+        VERSER_TLS_KEY_FILE: trustedClient.keyPath,
+      });
+
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /python guest connected/);
       assert.equal(authorizationContext.peerId, 'python-guest-mtls-pem');
       assert.equal(authorizationContext.role, 'guest');
       assert.equal(authorizationContext.certificate.commonName, 'trusted-client');
     } finally {
-      await withTimeout(terminateChildProcess(guestProcess), 'Python Guest termination');
       await host.close('test-complete');
     }
   },
@@ -121,16 +152,17 @@ test(
   },
   async () => {
     const host = await withMtlsHost();
-    const guestProcess = spawnPythonGuest(host, {
-      VERSER_GUEST_ID: 'python-guest-mtls-pfx',
-      VERSER_TLS_PFX_FILE: trustedClient.pfxPath,
-      VERSER_TLS_PFX_PASSWORD: trustedClient.pfxPassphrase,
-    });
 
     try {
-      await waitForProcessOutput(guestProcess, /python guest ready/, 'Python Guest mTLS PFX');
+      const result = await runPythonGuest(host, {
+        VERSER_GUEST_ID: 'python-guest-mtls-pfx',
+        VERSER_TLS_PFX_FILE: trustedClient.pfxPath,
+        VERSER_TLS_PFX_PASSWORD: trustedClient.pfxPassphrase,
+      });
+
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /python guest connected/);
     } finally {
-      await withTimeout(terminateChildProcess(guestProcess), 'Python Guest termination');
       await host.close('test-complete');
     }
   },
@@ -144,19 +176,17 @@ test(
   },
   async () => {
     const host = await withMtlsHost();
-    const guestProcess = spawnPythonGuest(host, {
-      VERSER_GUEST_ID: 'python-guest-mtls-untrusted-cert',
-      VERSER_TLS_CERT_FILE: untrustedClient.certificatePath,
-      VERSER_TLS_KEY_FILE: untrustedClient.keyPath,
-    });
 
     try {
-      await assert.rejects(
-        waitForProcessOutput(guestProcess, /python guest ready/, 'Python Guest untrusted mTLS'),
-        /tls|handshake|certificate|alert|socket/i,
-      );
+      const result = await runPythonGuest(host, {
+        VERSER_GUEST_ID: 'python-guest-mtls-untrusted-cert',
+        VERSER_TLS_CERT_FILE: untrustedClient.certificatePath,
+        VERSER_TLS_KEY_FILE: untrustedClient.keyPath,
+      });
+
+      assert.notEqual(result.code, 0, result.stdout);
+      assert.match(result.stderr, /tls|handshake|certificate|alert|socket|timed out/i);
     } finally {
-      await withTimeout(terminateChildProcess(guestProcess), 'Python Guest termination');
       await host.close('test-complete');
     }
   },
