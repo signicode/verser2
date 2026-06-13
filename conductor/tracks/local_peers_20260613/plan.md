@@ -47,9 +47,9 @@
     - [x] Add tests for Agent, Dispatcher, or fetch compatibility if the track exposes local Broker wrappers through `@signicode/verser2-guest-node`.
     - [x] Add tests proving missing target, disconnected target, duplicate registration, lease timeout, local handler failure, stream error, and cancellation behavior match H2 semantics as closely as possible.
     - [x] Confirm the tests fail for the expected missing local routing, API, and error behavior.
-- [~] Task: Conductor - User Manual Verification 'Phase 1: Track setup, architecture discovery, and failing local-peer coverage' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Track setup, architecture discovery, and failing local-peer coverage' (Protocol in workflow.md)
     - [x] Commit and push the Phase 1 checkpoint branch before requesting manual validation so the PR is current.
-    - [ ] Request user manual validation after the pushed checkpoint is available.
+    - [x] Request user manual validation after the pushed checkpoint is available.
 
     Phase 1 checkpoint commit: `6a8a01a`
 

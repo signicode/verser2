@@ -356,7 +356,8 @@ test('Local Broker maps missing targets, detached targets, and local handler fai
   try {
     localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-errors-1' });
     await assert.rejects(
-      () => localBroker.request({ targetId: 'missing-local-guest', method: 'GET', path: '/missing' }),
+      () =>
+        localBroker.request({ targetId: 'missing-local-guest', method: 'GET', path: '/missing' }),
       (error) => {
         assert.equal(error.code, 'missing-guest');
         assert.equal(error.context.targetId, 'missing-local-guest');
@@ -385,7 +386,12 @@ test('Local Broker maps missing targets, detached targets, and local handler fai
 
     await localGuest.close('test-detach');
     await assert.rejects(
-      () => localBroker.request({ targetId: 'local-error-guest-1', method: 'GET', path: '/after-close' }),
+      () =>
+        localBroker.request({
+          targetId: 'local-error-guest-1',
+          method: 'GET',
+          path: '/after-close',
+        }),
       (error) => {
         assert.equal(error.code, 'missing-guest');
         assert.equal(error.context.targetId, 'local-error-guest-1');

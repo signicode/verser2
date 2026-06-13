@@ -28,6 +28,10 @@ test('workflow supports pull request and main/tag push triggers', () => {
   assert.match(content, /pull_request:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
   assert.match(content, /push:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
   assert.match(content, /tags:\n[\s\S]*?-\s*'v\*'/);
+  assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'packages\/\*\/src\/\*\*'/);
+  assert.match(content, /push:[\s\S]*?paths:[\s\S]*?-\s*'test\/\*\*'/);
+  assert.equal(/conductor\/\*\*/.test(content), false);
+  assert.equal(/docs\/\*\*/.test(content), false);
 });
 
 test('workflow sets required permissions for publish', () => {
@@ -43,10 +47,9 @@ test('workflow configures npm for GitHub Packages registry/scope', () => {
   );
 });
 
-test('workflow builds, stages, packs, and validates consumers locally', () => {
+test('workflow builds, stages, and validates consumers locally', () => {
   assertHas(/npm run build/, 'Expected build step to run.');
   assertHas(/npm run stage:packages/, 'Expected staging step to run.');
-  assertHas(/npm pack/, 'Expected pack step to run for staged packages.');
   assertHas(
     /npm run test:package-consumers -- --source=staging/,
     'Expected staged consumer validation.',
@@ -55,12 +58,17 @@ test('workflow builds, stages, packs, and validates consumers locally', () => {
     /npm run test:package-consumers -- --source=tarball/,
     'Expected tarball consumer validation.',
   );
+  assertHas(
+    /npm run test:package-tarballs/,
+    'Expected tarball behavior validation to pack staged packages internally.',
+  );
+  assert.equal(/Pack staged packages/.test(loadWorkflow()), false);
 });
 
-test('workflow runs full source tests and lint in validation job', () => {
+test('workflow reuses existing build outputs for source tests and lint in validation job', () => {
   assertHas(
-    /package-validation:[\s\S]*?npm test[\s\S]*?npm run lint[\s\S]*?Confirm validation job never publishes packages/,
-    'Expected validation job to run full source tests and lint before completing.',
+    /package-validation:[\s\S]*?node --test test\/\*\.test\.js[\s\S]*?npm run lint[\s\S]*?Confirm validation job never publishes packages/,
+    'Expected validation job to run source tests without re-running npm test build/stage work.',
   );
 });
 
