@@ -108,7 +108,7 @@
     - [x] Create the scoped Phase 3 commit with a concise summary body: `784131d`; correction commits: `29bfa04`, `a74a7e2`.
     - [x] Push the branch/PR update for review before manual verification.
     - [x] Record the phase checkpoint commit SHA in `plan.md`.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Task-focused Markdown documentation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Task-focused Markdown documentation' (Protocol in workflow.md)
 
 ## Phase 4: Codemaps, final review, and completion validation
 
