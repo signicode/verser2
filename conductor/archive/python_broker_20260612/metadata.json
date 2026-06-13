@@ -1,8 +1,8 @@
 {
   "track_id": "python_broker_20260612",
   "type": "feature",
-  "status": "new",
+  "status": "completed",
   "created_at": "2026-06-12T11:42:32Z",
-  "updated_at": "2026-06-12T11:42:32Z",
+  "updated_at": "2026-06-13T19:54:17Z",
   "description": "Python Broker support in verser2"
 }
