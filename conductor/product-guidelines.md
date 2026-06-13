@@ -12,7 +12,7 @@ The tone should be approachable but still technically precise. Avoid marketing l
 - **Explicit configuration:** Make important operational choices visible, including protocols, timeouts, routing identifiers, reconnect behavior, and lifecycle hooks.
 - **Familiar HTTP semantics:** Preserve ordinary method, path, headers, body, status, and response behavior wherever possible.
 - **Shared common code:** Put reusable protocol-neutral primitives, types, constants, validation helpers, lifecycle helpers, and error helpers in `@signicode/verser-common` before duplicating them across packages.
-- **Runtime portability:** Design shared concepts so future browser, Bun, Python, Rust, Go, and Java guests can map naturally to their runtime HTTP primitives.
+- **Runtime portability:** Design shared concepts so implemented Bun and Python packages, plus future browser, Rust, Go, and Java guests, can map naturally to their runtime HTTP primitives.
 
 ## Example Guidelines
 
@@ -30,7 +30,7 @@ Examples should include enough context to be understandable without becoming ful
 
 ## API Design Guidelines
 
-- Prefer names that reflect the project nomenclature: Host, Guest, Broker, and Peer.
+- Prefer names that reflect the project nomenclature: Host, Guest, Broker, and Peer; be clear when Peer is a generic shared concept rather than an implemented public role.
 - Keep the default flow close to ordinary HTTP server and request usage.
 - Use explicit identifiers for guests and peers so routing is understandable in logs and errors.
 - Avoid exposing transport internals in the basic API unless the user needs them for reliability or debugging.
@@ -61,5 +61,5 @@ Lifecycle documentation should cover connect, disconnect, reconnect, request rou
 - Treat HTTP/3 as a future or platform-dependent transport, not a blocker for the core product.
 - Keep TypeScript/Node.js as the initial implementation focus.
 - Keep `@signicode/verser-common` as the home for reused TypeScript foundations before adding duplicate package-local solutions.
-- Document non-TypeScript guests as roadmap items until the core Host/Guest model is proven.
+- Document implemented non-TypeScript guests, such as Bun and Python, from source behavior. Keep browser, Rust, Go, and Java guests as roadmap items until explicit implementation tracks land.
 - Avoid positioning `verser2` as a full public HTTP gateway; it is a reverse connectivity and routing layer for connected processes.
