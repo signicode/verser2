@@ -50,7 +50,7 @@ When applicable, include:
 - request method and path
 - stream id
 - timeout reason
-- remote close reason
+- local close reason, when surfaced by the implementation
 - retry or reconnect status
 
 Lifecycle documentation should cover connect, disconnect, reconnect, request routing, stream failure, and graceful shutdown behavior.

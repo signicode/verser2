@@ -12,6 +12,8 @@ The Host can provide an `authorizeRegistration` callback under
 peer's identity, role, requested routed domains, and certificate metadata:
 
 ```ts
+const allowedBrokerFingerprint = 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
 const host = createVerserHost({
   port: 8443,
   tls: {
@@ -23,11 +25,12 @@ const host = createVerserHost({
         // context.role: 'guest' | 'broker'
         // context.routedDomains: string[]
         // context.certificate?.commonName: string | undefined
+        // context.certificate?.fingerprint256: SHA-256 fingerprint | undefined
 
         if (context.role === 'guest' && context.routedDomains.includes('internal.example.com')) {
           return { action: 'allow' };
         }
-        if (context.role === 'broker' && context.certificate?.commonName === 'broker-a') {
+        if (context.role === 'broker' && context.certificate?.fingerprint256 === allowedBrokerFingerprint) {
           return { action: 'allow' };
         }
         return { action: 'close', reason: 'certificate identity is not authorized' };
@@ -39,6 +42,35 @@ const host = createVerserHost({
 
 The callback returns an `action` of `'allow'` to accept the registration or
 `'close'` to reject it with an optional reason string.
+
+## Certificate identity and fingerprints
+
+When mTLS is enabled, the Host extracts structured certificate identity metadata
+for the registration callback. Depending on the presented certificate, this can
+include the common name, DNS and URI subject alternative names, human-readable
+subject and issuer strings, validity timestamps, custom extensions, raw DER
+bytes encoded as Base64, and SHA fingerprints such as `fingerprint256`.
+
+Prefer stable certificate fingerprints for allowlists when possible:
+
+```ts
+const allowedBrokerFingerprints = new Set([
+  'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+]);
+
+authorizeRegistration(context) {
+  if (context.role === 'broker' && context.certificate?.fingerprint256) {
+    return allowedBrokerFingerprints.has(context.certificate.fingerprint256)
+      ? { action: 'allow' }
+      : { action: 'close', reason: 'broker certificate is not allowed' };
+  }
+  return { action: 'close', reason: 'client certificate is required' };
+}
+```
+
+Common names are useful for diagnostics and development certificates, but they
+are not unique by themselves. Fingerprints identify the exact certificate
+presented during the TLS handshake.
 
 ## What is not implemented
 

@@ -112,27 +112,27 @@
 
 ## Phase 4: Codemaps, final review, and completion validation
 
-- [ ] Task: Regenerate codemaps
-    - [ ] Locate the established codemap process, commands, outputs, and conventions.
-    - [ ] Run the established codemap generation process.
-    - [ ] Ensure codemap outputs reflect the final source and documentation state.
-    - [ ] Inspect generated diffs for unexpected or unrelated changes.
-- [ ] Task: Final Conductor and documentation consistency review
-    - [ ] Confirm Conductor documentation review findings were resolved or intentionally left unchanged.
-    - [ ] Verify all task docs are linked from `docs/index.md` and root/package READMEs.
-    - [ ] Verify no task doc contradicts source behavior discovered in Phase 1.
-    - [ ] Verify public API docs and task docs describe the same behavior.
-    - [ ] Verify examples use implemented package entrypoints and precise Host/Guest/Broker terminology.
-- [ ] Task: Automated final validation
-    - [ ] Run `npm run build` or the narrowest sufficient build command.
-    - [ ] Run `npm run lint` or the narrowest sufficient lint command.
-    - [ ] Run `npm run test` or narrower tests if sufficient for documentation/API-doc changes.
-    - [ ] Run Python-specific validation if not already covered.
-    - [ ] Run codemap-specific validation if available, or record why no codemap-specific validation was run.
-    - [ ] Record commands run, results, skipped validation, and rationale.
-    - [ ] Confirm coverage requirement is not applicable to behavior-neutral documentation/docstring changes, or record coverage evidence if behavior changed unexpectedly.
-    - [ ] Confirm the phase-end deduplication check for documentation content and common terminology.
-- [ ] Task: Commit and push Phase 4 for review before manual verification
+- [x] Task: Regenerate codemaps
+    - [x] Locate the established codemap process, commands, outputs, and conventions.
+    - [x] Run the established codemap generation process.
+    - [x] Ensure codemap outputs reflect the final source and documentation state.
+    - [x] Inspect generated diffs for unexpected or unrelated changes.
+- [x] Task: Final Conductor and documentation consistency review
+    - [x] Confirm Conductor documentation review findings were resolved or intentionally left unchanged.
+    - [x] Verify all task docs are linked from `docs/index.md` and root/package READMEs.
+    - [x] Verify no task doc contradicts source behavior discovered in Phase 1.
+    - [x] Verify public API docs and task docs describe the same behavior.
+    - [x] Verify examples use implemented package entrypoints and precise Host/Guest/Broker terminology.
+- [x] Task: Automated final validation
+    - [x] Run `npm run build` or the narrowest sufficient build command.
+    - [x] Run `npm run lint` or the narrowest sufficient lint command.
+    - [x] Run `npm run test` or narrower tests if sufficient for documentation/API-doc changes.
+    - [x] Run Python-specific validation if not already covered.
+    - [x] Run codemap-specific validation if available, or record why no codemap-specific validation was run.
+    - [x] Record commands run, results, skipped validation, and rationale.
+    - [x] Confirm coverage requirement is not applicable to behavior-neutral documentation/docstring changes, or record coverage evidence if behavior changed unexpectedly.
+    - [x] Confirm the phase-end deduplication check for documentation content and common terminology.
+- [~] Task: Commit and push Phase 4 for review before manual verification
     - [ ] Create the scoped Phase 4 commit with a concise summary body.
     - [ ] Push the branch/PR update for review.
     - [ ] Record the phase checkpoint commit SHA in `plan.md`.

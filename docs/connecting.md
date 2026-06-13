@@ -154,4 +154,5 @@ await guest.close('guest-shutdown');
 await broker.close();
 ```
 
-The optional reason string is sent to the Host in the close frame.
+The optional reason string is local lifecycle context for implementations that
+surface close events; it is not a cross-runtime application close message.
