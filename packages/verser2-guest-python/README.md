@@ -52,6 +52,12 @@ async def main():
         app=app,
         routed_domains=["python-guest-a.local.test"],
         tls_ca_file="/etc/verser/ca.crt",
+        # For mTLS Hosts, present a client identity as PEM:
+        # tls_cert_file="/etc/verser/client.crt",
+        # tls_key_file="/etc/verser/client.key",
+        # Or as PFX/PKCS12:
+        # tls_pfx_file="/etc/verser/client.p12",
+        # tls_pfx_password="...",
     )
     await guest.connect()
     await asyncio.Event().wait()
@@ -135,6 +141,10 @@ broker = create_verser_broker(
     # tls_pfx_password="...",
 )
 ```
+
+Python Guests support the same `tls_ca_file`, PEM client identity, and
+PFX/PKCS12 client identity options. PFX/PKCS12 support uses the package's
+`cryptography` dependency.
 
 ## Streaming behavior
 

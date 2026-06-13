@@ -13,6 +13,7 @@ import h2.connection
 import h2.config
 import h2.events
 
+from ._tls import create_client_ssl_context, load_pfx_client_identity, validate_h2_alpn
 from .asgi import (
     DEFAULT_MAX_RESPONSE_BYTES,
     ASGIApp,
@@ -69,6 +70,11 @@ class VerserGuest:
         app: ASGIApp | None = None,
         routed_domains: list[str] | None = None,
         tls_ca_file: str | None = None,
+        tls_cert_file: str | None = None,
+        tls_key_file: str | None = None,
+        tls_key_password: str | None = None,
+        tls_pfx_file: str | None = None,
+        tls_pfx_password: str | None = None,
         min_waiting_streams: int = 1,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
@@ -89,6 +95,16 @@ class VerserGuest:
             matching on the Host uses exact hostname equality.
         tls_ca_file : str or None
             Path to a PEM CA bundle for verifying the Host's TLS certificate.
+        tls_cert_file : str or None
+            Path to a PEM client certificate for mTLS client identity.
+        tls_key_file : str or None
+            Path to the corresponding PEM private key.
+        tls_key_password : str or None
+            Password for the private key (if encrypted).
+        tls_pfx_file : str or None
+            Path to a PFX/PKCS12 file containing client identity.
+        tls_pfx_password : str or None
+            Password for the PFX/PKCS12 file.
         min_waiting_streams : int
             Minimum number of lease streams to maintain (default 1, minimum 1).
         max_response_bytes : int
@@ -102,6 +118,11 @@ class VerserGuest:
         self.app = app
         self.routed_domains = routed_domains or []
         self.tls_ca_file = tls_ca_file
+        self.tls_cert_file = tls_cert_file
+        self.tls_key_file = tls_key_file
+        self.tls_key_password = tls_key_password
+        self.tls_pfx_file = tls_pfx_file
+        self.tls_pfx_password = tls_pfx_password
         self.min_waiting_streams = max(1, min_waiting_streams)
         self.max_response_bytes = max_response_bytes
         self._reader: asyncio.StreamReader | None = None
@@ -213,14 +234,19 @@ class VerserGuest:
         if self._conn is not None:
             return
         parsed = urlsplit(self.host_url)
-        context = ssl.create_default_context(cafile=self.tls_ca_file)
-        context.set_alpn_protocols(["h2"])
-        reader, writer = await asyncio.open_connection(
-            parsed.hostname,
-            parsed.port or 443,
-            ssl=context,
-            server_hostname=parsed.hostname,
-        )
+        context = self._create_ssl_context()
+        try:
+            reader, writer = await asyncio.open_connection(
+                parsed.hostname,
+                parsed.port or 443,
+                ssl=context,
+                server_hostname=parsed.hostname,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"TLS handshake failed for guest {self.guest_id} connecting to {self.host_url}: {exc}"
+            ) from exc
+        self._validate_h2_alpn(writer)
         self._reader = reader
         self._writer = writer
         self._conn = h2.connection.H2Connection(
@@ -233,6 +259,24 @@ class VerserGuest:
         await self._open_control_stream()
         for _ in range(self.min_waiting_streams):
             self._start_lease_task()
+
+    def _create_ssl_context(self) -> ssl.SSLContext:
+        return create_client_ssl_context(
+            tls_ca_file=self.tls_ca_file,
+            tls_cert_file=self.tls_cert_file,
+            tls_key_file=self.tls_key_file,
+            tls_key_password=self.tls_key_password,
+            tls_pfx_file=self.tls_pfx_file,
+            tls_pfx_password=self.tls_pfx_password,
+        )
+
+    def _load_pfx_client_identity(
+        self, context: ssl.SSLContext, pfx_file: str, password: str | None = None
+    ) -> None:
+        load_pfx_client_identity(context, pfx_file, password)
+
+    def _validate_h2_alpn(self, writer: asyncio.StreamWriter) -> None:
+        validate_h2_alpn(writer, peer_kind="guest", peer_id=self.guest_id)
 
     async def close(self, reason: str = "guest-close") -> None:
         """Tear down the Guest connection.
