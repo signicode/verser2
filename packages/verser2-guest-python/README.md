@@ -1,11 +1,17 @@
 # @signicode/verser2-guest-python
 
-Python ASGI Guest package for Verser2.
+Python package for verser2 providing Guest and Broker implementations.
 
-This package connects outbound to an existing Verser2 Host over TLS HTTP/2 and
-serves an ASGI 3 app without opening an inbound listening port. It is recognized
-by the repository's npm workspace tooling through `package.json` and by Python
-packaging tooling through `pyproject.toml`.
+This package connects outbound to an existing verser2 Host over TLS HTTP/2.
+It is recognized by the repository's npm workspace tooling through
+`package.json` and by Python packaging tooling through `pyproject.toml`.
+
+## Public API
+
+- `VERSER2_GUEST_PYTHON_PACKAGE_NAME`
+- `VerserGuest` / `create_verser_guest` — Python ASGI Guest
+- `VerserBroker` / `create_verser_broker` — Python Broker
+- `VerserBrokerResponse` — Broker response type
 
 ## Commands
 
@@ -18,7 +24,9 @@ npm run lint --workspace=@signicode/verser2-guest-python
 The package commands use `uv run --project .` so Python dependencies such as
 `h2` are resolved in an isolated project environment.
 
-## Basic usage
+## Python Guest usage
+
+The Guest serves an ASGI 3 app without opening an inbound listening port.
 
 ```py
 import asyncio
@@ -33,7 +41,6 @@ async def app(scope, receive, send):
         body += event.get("body", b"")
         if not event.get("more_body", False):
             break
-
     await send({"type": "http.response.start", "status": 200, "headers": []})
     await send({"type": "http.response.body", "body": body})
 
@@ -53,11 +60,14 @@ async def main():
 asyncio.run(main())
 ```
 
-## FastAPI-compatible apps
+**Domain note:** Unlike Node and Bun Guests, the Python Guest does **not**
+default the route domain to the Guest ID. You must provide `routed_domains`
+explicitly.
 
-FastAPI-compatible and Starlette-compatible applications can be passed anywhere
-an ASGI 3 callable is accepted. FastAPI is not a core runtime dependency; install
-it in the consuming application when needed.
+### FastAPI-compatible apps
+
+FastAPI and Starlette applications work because the Guest calls the standard
+ASGI 3 interface. FastAPI is not a core runtime dependency.
 
 ```py
 from fastapi import FastAPI
@@ -80,21 +90,67 @@ guest = create_verser_guest(
 )
 ```
 
+## Python Broker usage
+
+The Python Broker connects outbound, registers as `broker`, and sends requests
+to advertised Guest routes.
+
+```py
+import asyncio
+from verser2_guest_python import create_verser_broker
+
+
+async def main():
+    broker = create_verser_broker(
+        host_url="https://localhost:8443",
+        broker_id="broker-a",
+        tls_ca_file="/etc/verser/ca.crt",
+    )
+    await broker.connect()
+    await broker.wait_for_route("python-guest-a.local.test")
+
+    response = await broker.get("http://python-guest-a.local.test/health")
+    print(await response.text())
+
+
+asyncio.run(main())
+```
+
+The Broker supports `request`, `get`, `post`, `put`, `patch`, and `delete`
+helpers. `VerserBrokerResponse` exposes `status`, `headers`, `request_id`,
+`read()`, `text()`, `json()`, and `aiter_bytes(chunk_size=8192)`. Response
+bodies are one-shot.
+
+### TLS for Python Broker
+
+```py
+broker = create_verser_broker(
+    host_url="https://localhost:8443",
+    broker_id="broker-a",
+    tls_ca_file="/etc/verser/ca.crt",
+    tls_cert_file="/etc/verser/client.crt",
+    tls_key_file="/etc/verser/client.key",
+    # PFX/PKCS12 also supported:
+    # tls_pfx_file="/etc/verser/client.p12",
+    # tls_pfx_password="...",
+)
+```
+
 ## Streaming behavior
 
-- Routed request body chunks from the Host/Broker lease stream are delivered as
-  ASGI `http.request` events with `more_body` continuation flags.
-- ASGI `http.response.start` is converted to the Verser response envelope before
-  response bytes are written.
-- ASGI `http.response.body` events are written back to the Host lease stream;
-  `more_body: false` ends the response side of the lease.
-- Direct `dispatch_routed_request(...)` calls are batch-only convenience dispatches;
-  they buffer the ASGI response and enforce `max_response_bytes` before joining
-  chunks. Use leased Host/Broker routing for streaming response bodies.
-- In leased routing, HTTP/2 request-body flow-control credit is returned only
-  after the ASGI app consumes the corresponding `http.request` event.
-- App exceptions before response start are returned as Verser
+- Guest: routed request body chunks from the Host/Broker lease stream are
+  delivered as ASGI `http.request` events with `more_body` continuation flags.
+- Guest: ASGI `http.response.start` is converted to the Verser response
+  envelope before response bytes are written.
+- Guest: ASGI `http.response.body` events are written back to the Host lease
+  stream; `more_body: false` ends the response side of the lease.
+- Direct `dispatch_routed_request(...)` calls are batch-only — they buffer the
+  ASGI response and enforce `max_response_bytes` before joining chunks. Use
+  leased Host/Broker routing for streaming.
+- Guest app exceptions before response start are returned as Verser
   `local-handler-failure` error envelopes with Guest, request, and path context.
+- Broker response bodies are one-shot; `read()`, `text()`, and `json()` consume
+  the body.
 
 ## Avoid non-terminating async streams
 
@@ -104,10 +160,10 @@ signal completion:
 
 - `asyncio` stream readers should return `b""` for EOF.
 - Async request-body iterables should stop iteration when the body is complete.
-- Test mocks should not leave `reader.read()` as a bare `AsyncMock`, because each
-  awaited call can produce another truthy mock object forever.
+- Test mocks should not leave `reader.read()` as a bare `AsyncMock`, because
+  each awaited call can produce another truthy mock object forever.
 
-For tests, use an explicit EOF:
+Use an explicit EOF:
 
 ```py
 reader = AsyncMock()
@@ -120,22 +176,20 @@ or a finite sequence:
 reader.read = AsyncMock(side_effect=[b"first-frame", b""])
 ```
 
-If a stream never reaches EOF or never stops yielding chunks, the transport loop
-will keep waiting for more data and can consume unbounded memory in tests or in
-the application process.
-
 ## Known limits
 
-- The first implementation focuses on Python Guest behavior only.
-- Python Host, full Python Broker, and Python-side fetch helper APIs are deferred.
-- HTTP/3, authentication, authorization, public gateway policy, WebSockets,
-  upgrades, trailers, and advanced ASGI lifespan behavior are not implemented.
+- The first implementation focuses on Python Guest and Broker behavior.
+- Python Host, Python-side fetch helper APIs, and Python-side Agent/Dispatcher
+  are not implemented.
+- HTTP/3, complete application authentication, public gateway policy,
+  per-request Broker target authorization, WebSockets, upgrades, trailers, and
+  advanced ASGI lifespan behavior are not implemented.
 - The transport is intentionally minimal: one outbound TLS HTTP/2 session with a
   replenished pool of one-use Guest lease streams.
 
-## Scope
+## Links
 
-- Guest behavior connects outbound to an existing Verser2 Host.
-- The local application interface targets ASGI 3: `app(scope, receive, send)`.
-- Python Host, full Python Broker, HTTP/3, authentication, authorization, and
-  public gateway policy are out of scope for this package.
+- [Root README](../../README.md)
+- [Docs: Connecting](../../docs/connecting.md)
+- [Docs: Exposing HTTP](../../docs/exposing-http.md)
+- [Docs: Making requests](../../docs/making-requests.md)

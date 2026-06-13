@@ -9,24 +9,34 @@ function readText(relativePath) {
   return fs.readFileSync(path.join(rootDirectory, relativePath), 'utf8');
 }
 
-test('README documents the implemented Python ASGI Guest package', () => {
+test('README documents the implemented Python ASGI Guest and Broker package', () => {
   const readme = readText('README.md');
 
-  assert.match(readme, /Implemented packages:/);
   assert.match(readme, /@signicode\/verser2-guest-python/);
-  assert.match(readme, /Python ASGI Guest usage/);
-  assert.match(readme, /create_verser_guest/);
-  assert.match(readme, /FastAPI-compatible/);
+  assert.match(readme, /Python ASGI Guest and Broker/);
+  assert.match(readme, /docs\/exposing-http\.md/);
+  assert.match(readme, /docs\/making-requests\.md/);
+});
+
+test('task docs document Python ASGI Guest usage', () => {
+  const exposingDocs = readText('docs/exposing-http.md');
+
+  assert.match(exposingDocs, /## Python Guest/);
+  assert.match(exposingDocs, /ASGI 3/);
+  assert.match(exposingDocs, /create_verser_guest/);
+  assert.match(exposingDocs, /FastAPI compatibility/);
 });
 
 test('Python package README documents usage, streaming, and limits', () => {
   const readme = readText('packages/verser2-guest-python/README.md');
 
   assert.match(readme, /create_verser_guest/);
+  assert.match(readme, /create_verser_broker/);
   assert.match(readme, /ASGI 3/);
   assert.match(readme, /Streaming behavior/);
   assert.match(readme, /Known limits/);
   assert.match(readme, /FastAPI-compatible/);
+  assert.doesNotMatch(readme, /full Python Broker/);
 });
 
 test('Tech stack lists Python Guest as implemented with uv and h2', () => {

@@ -1,37 +1,66 @@
 # Verser2 roadmap
 
-This document describes the roadmap for Verser2, a distributed system for building scalable and resilient applications. The roadmap is organized into three main phases: development, testing, and deployment.
+This roadmap lists future implementation work only. Completed Node, Bun, Python
+Guest/Broker, TLS, packaging, and documentation work is described in the README,
+task docs, package READMEs, and codemaps.
 
-## Development
+Future work is tracked as Conductor tracks before implementation. Roadmap items
+below are not implemented unless a linked track and source code say otherwise.
 
-The specifications for the implementation of roadmap items will be created as conductor tracks under [conductor](./conductor) directory and will be linked above as they are created.
+## Priority 1
 
-### Node.js Implementation
+### Python Guest mTLS client identity
 
-Node.js implementation of Verser2 will be the first phase of development. This will include the core functionality of the client, broker, and connected server components, as well as the HTTP/2 and HTTP/3 transport layers. During development all requests must be streamed, no buffering of request or response bodies should be allowed.
+Python Broker can present PEM and PFX/PKCS12 client identities. Python Guest
+currently supports Host CA trust but does not support presenting a client
+certificate. Add Python Guest client identity options so Python ASGI Guests can
+connect to Hosts that require `tls.clientAuth` for all Guest and Broker peers.
 
-Specific tasks for the Node.js implementation include:
+## Priority 2
 
-- [x] Implement the core node.js functionality of Verser2, including the client, broker, and connected server components
-- [x] Implement the Broker API for routing requests between connected clients (registration, request forwarding, etc.)
-- [x] Implement the HTTP/2 transport layer for communication between clients via the broker
-- [ ] Implement the HTTP/3 transport layer for communication between clients via the broker
-- [x] Implement the http.Agent exposure for client-side requests
-- [x] Implement the undici dispatcher for client-side requests
+### Gateway and deployment work
 
-Status evidence, reviewed 2026-06-07:
+`verser2` is a reverse connectivity and routing layer, not a complete public API
+gateway. Applications can build gateways on top of Brokers today, but the public
+HTTP listener, auth, policy, observability, and operational behavior are owned by
+the application.
 
-- Node Host, Node Guest, and Broker entrypoints exist and expose connection, registration, routing, lifecycle, and local server attachment APIs in `packages/verser2-host/src/index.ts` and `packages/verser2-guest-node/src/index.ts`.
-- Broker registration, route advertisements, routed request forwarding, leased stream acquisition, request/response body streaming, and error handling are implemented over HTTP/2 streams in `packages/verser2-host/src/index.ts` and `packages/verser2-guest-node/src/index.ts`, with integration coverage in `test/broker-routing.test.js` and `test/end-to-end.test.js`.
-- `VerserBroker.createAgent()` returns a `node:http` Agent implementation for routed client requests in `packages/verser2-guest-node/src/index.ts`.
-- `VerserBroker.createDispatcher()` and `VerserBroker.createFetch()` provide Undici/fetch routing for advertised domains in `packages/verser2-guest-node/src/index.ts`, with focused coverage in `test/dispatcher.test.js` and end-to-end coverage in `test/end-to-end.test.js`.
-- No code evidence was found for HTTP/3/QUIC transport.
+Future gateway-oriented tracks, in priority order:
 
-### Browser Implementation
+- P2.1: Per-request Broker target authorization so a Host can decide whether a
+  Broker may route to a specific Guest, target ID, or domain.
+- P2.2: Host high-availability and shared route-state patterns. Current route
+  state is per Host instance and per connected peer set.
+- P2.3: Public gateway helper examples or small framework integrations that show how
+  to accept inbound HTTP and forward through a Broker.
+- P2.4: Built-in gateway policy helpers for authentication, rate limiting, and
+  observability primitives, without turning `verser2` into a mandatory gateway
+  framework.
+- P2.5: Additional gateway examples for container, Kubernetes, and service-mesh-style
+  deployments.
 
-The browser implementation of Verser2 will be the second phase of development. This will include a client-side library for connecting to the broker and making requests to connected servers as exposing http servers similarily to node.js on the browser side (e.g. in Service Workers, in web apps).
+## Priority 3
 
-- [ ] Implement the core browser functionality of Verser2, including the client-side library and support for HTTP/2 and HTTP/3 transport layers
-- [ ] Implement the server exposure for browser-side requests.
+### Transport work
 
-Status evidence, reviewed 2026-06-07: no browser package or browser runtime implementation was found; documented future browser/Fetch API support remains roadmap work.
+- P3.1: HTTP/3/QUIC transport remains future work. Current remote
+  Host/Guest/Broker transport uses TLS HTTP/2.
+- P3.2: WebSocket/HTTP upgrade forwarding is not implemented. A future transport
+  track should specify upgrade semantics, routing policy, and runtime adapter
+  behavior before implementation.
+- P3.3: Simple generic stream-like connectivity is not implemented. A future
+  transport track should specify stream semantics, routing policy, and runtime
+  adapter behavior before implementation.
+
+## Priority 4
+
+### Runtime expansion
+
+Future Guest runtimes remain later work:
+
+- P4.1: Browser Guest using Fetch API and Service Worker concepts.
+- P4.2: Rust Guest using Hyper-compatible concepts.
+- P4.3: Go Guest compatible with `net/http` concepts.
+- P4.4: Java Guest using `net.httpserver` or similar concepts.
+
+Non-Node Host implementations are not on the current roadmap.
