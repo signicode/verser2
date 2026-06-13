@@ -105,7 +105,7 @@
     - [x] Run relevant docs/link/lint validation if available.
     - [x] Run broader repository lint/build only if needed by Markdown or package README changes.
     - [x] Record commands run, results, skipped validation, and rationale.
-    - [x] Create the scoped Phase 3 commit with a concise summary body: `784131d`; correction commit: `29bfa04`.
+    - [x] Create the scoped Phase 3 commit with a concise summary body: `784131d`; correction commits: `29bfa04`, `a74a7e2`.
     - [x] Push the branch/PR update for review before manual verification.
     - [x] Record the phase checkpoint commit SHA in `plan.md`.
 - [~] Task: Conductor - User Manual Verification 'Phase 3: Task-focused Markdown documentation' (Protocol in workflow.md)
