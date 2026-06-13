@@ -120,6 +120,11 @@ guest = create_verser_guest(
     app=app,
     routed_domains=["python-client-a.local.test"],
     tls_ca_file="/etc/verser/ca.crt",
+    # For mTLS Hosts:
+    # tls_cert_file="/etc/verser/client.crt",
+    # tls_key_file="/etc/verser/client.key",
+    # tls_pfx_file="/etc/verser/client.p12",
+    # tls_pfx_password="...",
 )
 await guest.connect()
 ```

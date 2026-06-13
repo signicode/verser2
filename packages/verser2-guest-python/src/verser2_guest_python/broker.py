@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
-import os
 import ssl
-import tempfile
 from collections.abc import AsyncIterable, Iterable
 from typing import Any
 from urllib.parse import urlsplit
@@ -14,6 +12,8 @@ from urllib.parse import urlsplit
 import h2.connection
 import h2.config
 import h2.events
+
+from ._tls import create_client_ssl_context, load_pfx_client_identity, validate_h2_alpn
 
 
 class VerserBrokerResponse:
@@ -302,74 +302,22 @@ class VerserBroker:
         await self._open_control_stream()
 
     def _create_ssl_context(self) -> ssl.SSLContext:
-        context = ssl.create_default_context(cafile=self.tls_ca_file)
-        context.set_alpn_protocols(["h2"])
-        if self.tls_cert_file is not None:
-            context.load_cert_chain(
-                certfile=str(self.tls_cert_file),
-                keyfile=None if self.tls_key_file is None else str(self.tls_key_file),
-                password=self.tls_key_password,
-            )
-        if self.tls_pfx_file is not None:
-            self._load_pfx_client_identity(
-                context,
-                str(self.tls_pfx_file),
-                None if self.tls_pfx_password is None else str(self.tls_pfx_password),
-            )
-        return context
+        return create_client_ssl_context(
+            tls_ca_file=self.tls_ca_file,
+            tls_cert_file=self.tls_cert_file,
+            tls_key_file=self.tls_key_file,
+            tls_key_password=self.tls_key_password,
+            tls_pfx_file=self.tls_pfx_file,
+            tls_pfx_password=self.tls_pfx_password,
+        )
 
     def _load_pfx_client_identity(
         self, context: ssl.SSLContext, pfx_file: str, password: str | None = None
     ) -> None:
-        try:
-            from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.primitives.serialization import pkcs12
-        except ImportError as exc:
-            raise RuntimeError(
-                "PFX/PKCS12 client identity support requires the cryptography package"
-            ) from exc
-
-        with open(pfx_file, "rb") as handle:
-            key, certificate, additional_certificates = pkcs12.load_key_and_certificates(
-                handle.read(), None if password is None else password.encode("utf-8")
-            )
-        if key is None or certificate is None:
-            raise RuntimeError("PFX/PKCS12 client identity must contain a private key and certificate")
-        pem = key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-        pem += certificate.public_bytes(serialization.Encoding.PEM)
-        for extra_certificate in additional_certificates or []:
-            pem += extra_certificate.public_bytes(serialization.Encoding.PEM)
-        identity_path: str | None = None
-        with tempfile.NamedTemporaryFile("wb", delete=False) as identity_file:
-            identity_path = identity_file.name
-            identity_file.write(pem)
-            identity_file.flush()
-        try:
-            context.load_cert_chain(identity_path)
-        finally:
-            if identity_path is not None:
-                try:
-                    os.unlink(identity_path)
-                except FileNotFoundError:
-                    pass
+        load_pfx_client_identity(context, pfx_file, password)
 
     def _validate_h2_alpn(self, writer: asyncio.StreamWriter) -> None:
-        get_extra_info = getattr(writer, "get_extra_info", None)
-        if not callable(get_extra_info):
-            return
-        ssl_object = get_extra_info("ssl_object")
-        selected = getattr(ssl_object, "selected_alpn_protocol", None)
-        if not callable(selected):
-            return
-        protocol = selected()
-        if protocol != "h2":
-            raise RuntimeError(
-                f"TLS ALPN negotiation for broker {self.broker_id} selected {protocol!r}; HTTP/2 'h2' is required"
-            )
+        validate_h2_alpn(writer, peer_kind="broker", peer_id=self.broker_id)
 
     async def close(self, reason: str = "broker-close") -> None:
         """Tear down the Broker connection.
