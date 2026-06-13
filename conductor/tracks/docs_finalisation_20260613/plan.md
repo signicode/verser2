@@ -132,8 +132,8 @@
     - [x] Record commands run, results, skipped validation, and rationale.
     - [x] Confirm coverage requirement is not applicable to behavior-neutral documentation/docstring changes, or record coverage evidence if behavior changed unexpectedly.
     - [x] Confirm the phase-end deduplication check for documentation content and common terminology.
-- [~] Task: Commit and push Phase 4 for review before manual verification
+- [x] Task: Commit and push Phase 4 for review before manual verification
     - [x] Create the scoped Phase 4 commit with a concise summary body: `e3c4234`.
     - [x] Push the branch/PR update for review.
     - [x] Record the phase checkpoint commit SHA in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Codemaps, final review, and completion validation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Codemaps, final review, and completion validation' (Protocol in workflow.md)
