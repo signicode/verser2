@@ -1,7 +1,5 @@
 import { EventEmitter } from 'node:events';
-import * as http from 'node:http';
 import * as http2 from 'node:http2';
-import { PassThrough, Readable } from 'node:stream';
 import { text as readStreamText } from 'node:stream/consumers';
 import type { TLSSocket } from 'node:tls';
 
@@ -32,6 +30,17 @@ import {
   validateVerserHeaders,
 } from '@signicode/verser-common';
 import { sendError, writeJsonLine } from './http2-io';
+import {
+  type LocalBrokerState,
+  type LocalDispatchRequest,
+  type LocalGuestState,
+  createLocalBrokerState,
+  dispatchLocalGuestRequest,
+  extractLocalGuestListener,
+  toReadableBody,
+  updateLocalBrokerRoutes,
+  waitForLocalBrokerRoute,
+} from './local-peers';
 import type {
   VerserHost,
   VerserHostLifecycleEvent,
@@ -43,7 +52,6 @@ import type {
   VerserLocalBrokerResponse,
   VerserLocalGuestHandle,
   VerserLocalGuestOptions,
-  VerserLocalGuestRequestListener,
 } from './types';
 import { toVerserError } from './utils';
 
@@ -55,123 +63,6 @@ interface RegisteredPeer {
   readonly controlStream?: http2.ServerHttp2Stream;
   readonly localGuest?: LocalGuestState;
   readonly localBroker?: LocalBrokerState;
-}
-
-interface LocalGuestState {
-  readonly listener: VerserLocalGuestRequestListener;
-}
-
-interface LocalBrokerState {
-  routes: RoutedDomainRegistration[];
-  routeWaiters: Map<string, (() => void)[]>;
-  requestCounter: number;
-  closed: boolean;
-}
-
-type LocalRequest = Readable & {
-  readonly method: string;
-  readonly url: string;
-  readonly headers: Record<string, string>;
-};
-
-class LocalIncomingMessage extends PassThrough implements LocalRequest {
-  public readonly method: string;
-
-  public readonly url: string;
-
-  public readonly headers: Record<string, string>;
-
-  public constructor(request: LocalDispatchRequest) {
-    super();
-    this.method = request.method;
-    this.url = request.path;
-    this.headers = request.headers;
-    request.body.once('error', (error) => this.destroy(error));
-    request.body.pipe(this);
-  }
-}
-
-interface LocalDispatchRequest {
-  readonly requestId: string;
-  readonly sourceId: string;
-  readonly targetId: string;
-  readonly method: string;
-  readonly path: string;
-  readonly headers: Record<string, string>;
-  readonly body: Readable;
-}
-
-class LocalServerResponse extends EventEmitter {
-  public statusCode = 200;
-
-  private readonly headers = new Map<string, string>();
-
-  private readonly bodyStream = new PassThrough();
-
-  private started = false;
-
-  public get headersStarted(): boolean {
-    return this.started;
-  }
-
-  public setHeader(name: string, value: string | number | boolean): this {
-    this.headers.set(name.toLowerCase(), String(value));
-    return this;
-  }
-
-  public getHeader(name: string): string | undefined {
-    return this.headers.get(name.toLowerCase());
-  }
-
-  public writeHead(
-    statusCode: number,
-    headers: Record<string, string | number | boolean> = {},
-  ): this {
-    this.statusCode = statusCode;
-    for (const [name, value] of Object.entries(headers)) {
-      this.setHeader(name, value);
-    }
-    return this;
-  }
-
-  public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
-    this.start();
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
-    return this.bodyStream.write(buffer);
-  }
-
-  public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
-    if (chunk !== undefined) {
-      this.write(chunk, encoding);
-    } else {
-      this.start();
-    }
-    this.bodyStream.end();
-    this.emit('finish');
-    return this;
-  }
-
-  public toBrokerResponse(requestId: string): VerserLocalBrokerResponse {
-    return {
-      requestId,
-      statusCode: this.statusCode,
-      headers: flattenVerserHeaders(validateVerserHeaders(Object.fromEntries(this.headers))),
-      body: this.bodyStream,
-    };
-  }
-
-  public fail(error: Error): void {
-    this.bodyStream.destroy(error);
-    this.emit('error', error);
-  }
-
-  private start(): void {
-    if (this.started) {
-      return;
-    }
-    this.started = true;
-    this.emit('response');
-  }
 }
 
 interface GuestLeaseStream {
@@ -365,7 +256,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       peerId,
       role: 'guest',
       transport: 'local',
-      localGuest: { listener: this.extractLocalGuestListener(peerId, options.listener) },
+      localGuest: { listener: extractLocalGuestListener(peerId, options.listener) },
     });
     this.guestRegistrations.set(
       peerId,
@@ -402,12 +293,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       routedDomains: [],
     });
 
-    const localBroker: LocalBrokerState = {
-      routes: this.getRoutedDomains(),
-      routeWaiters: new Map(),
-      requestCounter: 0,
-      closed: false,
-    };
+    const localBroker = createLocalBrokerState(this.getRoutedDomains());
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'broker' });
     this.peers.set(peerId, { peerId, role: 'broker', transport: 'local', localBroker });
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'broker' });
@@ -417,7 +303,7 @@ export class NodeHttp2VerserHost implements VerserHost {
         return localBroker.requestCounter;
       },
       getRoutes: () => [...localBroker.routes],
-      waitForRoute: (domain: string) => this.waitForLocalBrokerRoute(localBroker, domain),
+      waitForRoute: (domain: string) => waitForLocalBrokerRoute(localBroker, domain),
       request: (request: VerserLocalBrokerRequest) =>
         this.routeLocalBrokerRequest(peerId, localBroker, request),
       close: async (reason = 'local-broker-close') => {
@@ -589,27 +475,6 @@ export class NodeHttp2VerserHost implements VerserHost {
     return false;
   }
 
-  private extractLocalGuestListener(
-    peerId: VerserPeerId,
-    serverOrListener: VerserLocalGuestOptions['listener'],
-  ): VerserLocalGuestRequestListener {
-    if (serverOrListener instanceof http.Server) {
-      const listener = serverOrListener.listeners('request')[0];
-      if (listener === undefined) {
-        throw createVerserError(
-          'local-handler-failure',
-          'Attached HTTP server has no request listener',
-          {
-            guestId: peerId,
-          },
-        );
-      }
-      return listener as unknown as VerserLocalGuestRequestListener;
-    }
-
-    return serverOrListener;
-  }
-
   private getCertificateIdentity(tlsSocket: TLSSocket): VerserCertificateIdentity | undefined {
     return extractCertificateIdentity(
       tlsSocket.getPeerCertificate(true),
@@ -676,15 +541,6 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
-  private waitForLocalBrokerRoute(broker: LocalBrokerState, domain: string): Promise<void> {
-    if (broker.routes.some((route) => route.domain === domain)) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      broker.routeWaiters.set(domain, [...(broker.routeWaiters.get(domain) ?? []), resolve]);
-    });
-  }
-
   private routeLocalBrokerRequest(
     sourceId: VerserPeerId,
     broker: LocalBrokerState,
@@ -696,7 +552,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     const requestId = `${sourceId}-${++broker.requestCounter}`;
     const targetId = createPeerId(request.targetId);
-    const body = this.toReadableBody(request.body);
+    const body = toReadableBody(request.body);
     return this.routeLocalRequest({
       requestId,
       sourceId,
@@ -726,7 +582,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     try {
       const response =
         target.transport === 'local'
-          ? await this.routeLocalRequestToLocalGuest(request, target)
+          ? await this.routeLocalRequestToAttachedGuest(request, target)
           : await this.routeLocalRequestToH2Guest(request);
       this.emitLifecycle({
         name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
@@ -746,12 +602,11 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
-  private routeLocalRequestToLocalGuest(
+  private routeLocalRequestToAttachedGuest(
     request: LocalDispatchRequest,
     target: RegisteredPeer,
   ): Promise<VerserLocalBrokerResponse> {
-    const localGuest = target.localGuest;
-    if (localGuest === undefined) {
+    if (target.localGuest === undefined) {
       return Promise.reject(
         createVerserError('disconnected-target', 'Target local Guest is not attached', {
           targetId: request.targetId,
@@ -759,48 +614,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
     }
 
-    const localRequest = new LocalIncomingMessage(request);
-    const localResponse = new LocalServerResponse();
-    return new Promise((resolve, reject) => {
-      const rejectBeforeResponse = (error: unknown): void => {
-        reject(
-          createVerserError('local-handler-failure', this.getErrorMessage(error), {
-            targetId: request.targetId,
-            requestId: request.requestId,
-            path: request.path,
-          }),
-        );
-      };
-      localResponse.once('response', () =>
-        resolve(localResponse.toBrokerResponse(request.requestId)),
-      );
-      localResponse.once('error', (error) => {
-        if (localResponse.headersStarted) {
-          return;
-        }
-        rejectBeforeResponse(error);
-      });
-
-      try {
-        localGuest.listener(localRequest, localResponse);
-      } catch (error) {
-        const verserError = createVerserError(
-          'local-handler-failure',
-          this.getErrorMessage(error),
-          {
-            targetId: request.targetId,
-            requestId: request.requestId,
-            path: request.path,
-          },
-        );
-        if (localResponse.headersStarted) {
-          localResponse.fail(verserError);
-          resolve(localResponse.toBrokerResponse(request.requestId));
-          return;
-        }
-        reject(verserError);
-      }
-    });
+    return dispatchLocalGuestRequest(request, target.localGuest.listener);
   }
 
   private async routeLocalRequestToH2Guest(
@@ -835,31 +649,11 @@ export class NodeHttp2VerserHost implements VerserHost {
     };
   }
 
-  private toReadableBody(body: VerserLocalBrokerRequest['body']): Readable {
-    if (body === undefined) {
-      return Readable.from([]);
-    }
-    if (body instanceof Readable) {
-      return body;
-    }
-    return Readable.from(body);
-  }
-
-  private getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
-
   private advertiseRoutes(): void {
     const routes = this.getRoutedDomains();
     for (const peer of this.peers.values()) {
       if (peer.role === 'broker' && peer.transport === 'local' && peer.localBroker !== undefined) {
-        peer.localBroker.routes = [...routes];
-        for (const route of routes) {
-          for (const resolve of peer.localBroker.routeWaiters.get(route.domain) ?? []) {
-            resolve();
-          }
-          peer.localBroker.routeWaiters.delete(route.domain);
-        }
+        updateLocalBrokerRoutes(peer.localBroker, routes);
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
           peerId: peer.peerId,
