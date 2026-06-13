@@ -52,6 +52,13 @@ import type { VerserHost, VerserHostOptions } from './lib/types';
 export type {
   VerserHost,
   VerserHostLifecycleEvent,
+  VerserLocalBrokerHandle,
+  VerserLocalBrokerOptions,
+  VerserLocalBrokerRequest,
+  VerserLocalBrokerResponse,
+  VerserLocalGuestHandle,
+  VerserLocalGuestOptions,
+  VerserLocalGuestRequestListener,
   VerserHostOptions,
   VerserHostRegistrationRequest,
 } from './lib/types';
