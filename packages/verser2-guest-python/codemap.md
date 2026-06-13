@@ -18,7 +18,7 @@ Key differences from Node/Bun Guests:
 - **Lease stream model** (Guest) — One-use HTTP/2 streams over `/verser/guest/lease`. The Guest maintains `min_waiting_streams` lease streams; after a lease is consumed (one request dispatched), a replacement lease stream is started. Completed lease tasks are pruned automatically.
 - **Route control frames** (Broker) — The Host pushes JSON route tables over the control stream. `_handle_control_frame()` replaces the Broker's route state entirely on each `"routes"` frame. `wait_for_route()` uses `asyncio.Future` to await a specific domain.
 - **Broker request helpers** — `request()` maps to POST to `/verser/request` with Verser metadata in `x-verser-*` HPACK headers. Convenience methods: `get()`, `post()`, `put()`, `patch()`, `delete()`. Body forms: raw bytes/chunks, `json`, `text`.
-- **TLS client identity** — Broker supports PEM (`tls_cert_file`/`tls_key_file`/`tls_key_password`) and PFX/PKCS12 (`tls_pfx_file`/`tls_pfx_password`) client certificates. PFX is converted to a temporary PEM file before loading into `SSLContext.load_cert_chain()`.
+- **TLS client identity** — Guest and Broker support PEM (`tls_cert_file`/`tls_key_file`/`tls_key_password`) and PFX/PKCS12 (`tls_pfx_file`/`tls_pfx_password`) client certificates via a shared private Python TLS helper. PFX is converted to a temporary PEM file before loading into `SSLContext.load_cert_chain()`.
 - **Response body one-shot** — `VerserBrokerResponse` enforces single-use body access. `read()`, `text()`, `json()` buffer the full body; `aiter_bytes(chunk_size)` yields streaming chunks. Calling more than once raises `RuntimeError`.
 - **Async context manager** — `VerserBroker` supports `async with broker:` to auto-connect and auto-close.
 - **npm workspace bridge** — `package.json` declares `"main": "dist/index.js"` for npm workspace tooling. The `scripts/build.mjs` writes a minimal JS entrypoint that exports package name constants. Actual Python logic lives under `src/verser2_guest_python/`.
@@ -30,7 +30,7 @@ Key differences from Node/Bun Guests:
 VerserGuest(**options)
   └─ .attach(app, domain?)  → sets self.app, updates self.routed_domains
   └─ await .connect()
-       ├─ asyncio.open_connection(host, port, ssl=SSLContext(ALPN h2))
+       ├─ asyncio.open_connection(host, port, ssl=SSLContext(ALPN h2, PEM|PFX identity))
        ├─ H2Connection.initiate_connection() + flush
        ├─ _register()  → POST /verser/register {peerId, role:"guest", routedDomains}
        ├─ _open_control_stream()  → POST /verser/guest/control
