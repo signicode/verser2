@@ -93,7 +93,7 @@
     - [x] Keep `undici`-dependent wrappers in `@signicode/verser2-guest-node`, not in `@signicode/verser2-host`.
     - [x] Ensure declaration generation succeeds for new public types.
 
-    API note: Phase 2 exposes stable local peer primitives from `@signicode/verser2-host`. Runtime-specific Agent/Dispatcher/fetch helpers remain in `@signicode/verser2-guest-node`; the Host local Broker handle keeps the same `request()`/`getRoutes()` router shape those helpers use without importing `undici` into the Host package.
+    API note: Phase 2 exposes stable local peer primitives from `@signicode/verser2-host`. Runtime-specific Agent/Dispatcher/fetch helpers remain in `@signicode/verser2-guest-node`; the Host local Broker handle keeps the same `request()`/`getRoutes()` router shape those helpers use without importing `undici` into the Host package. Local peer stream/request helpers live in `packages/verser2-host/src/lib/local-peers.ts` to keep the HTTP/2 Host orchestration file readable.
 - [x] Task: Validate Phase 2 narrowly
     - [x] Run focused Host tests for local registration, route advertisement, duplicate ID handling, lifecycle, authorization, routing, streaming, and error behavior.
     - [x] Run focused package API tests for Host and guest-node surfaces.
@@ -102,12 +102,12 @@
     - [x] Run lint for affected packages.
     - [x] Record coverage status for changed registration, routing, streaming, authorization, and API behavior.
 
-    Validation note: `npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run lint && node --test --test-timeout=10000 test/host.test.js test/broker-routing.test.js test/agent.test.js test/dispatcher.test.js` passed. Exact percentage coverage is not emitted by the current focused runner; changed behavior is covered by focused success, failure, streaming, authorization, duplicate ID, local/H2 interop, Agent, and Dispatcher suites.
+    Validation note: `npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run lint && node --test --test-timeout=10000 test/host.test.js test/broker-routing.test.js test/local-peers.test.js test/agent.test.js test/dispatcher.test.js` passed. Exact percentage coverage is not emitted by the current focused runner; changed behavior is covered by focused success, failure, streaming, authorization, duplicate ID, local/H2 interop, Agent, and Dispatcher suites.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Local Host peer implementation, streaming routing, and public API integration' (Protocol in workflow.md)
     - [x] Commit and push the Phase 2 checkpoint branch before requesting manual validation so the PR is current.
     - [ ] Request user manual validation after the pushed checkpoint is available.
 
-    Phase 2 checkpoint commit: `ae4045d`
+    Phase 2 checkpoint commit: `ae4045d`; readability refactor commit pending after manual feedback.
 
 ## Phase 3: Documentation, compatibility hardening, and final validation
 
