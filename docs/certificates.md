@@ -151,12 +151,22 @@ const broker = createVerserBroker({
 });
 ```
 
-### Python Broker TLS
+### Python Guest and Broker TLS
 
-The Python Broker supports the same trust and client identity options via file
-paths:
+The Python Guest and Broker support the same trust and client identity options
+via file paths:
 
 ```py
+guest = create_verser_guest(
+    host_url="https://localhost:8443",
+    guest_id="guest-a",
+    app=app,
+    routed_domains=["guest-a.local.test"],
+    tls_ca_file="/etc/verser/ca.crt",
+    tls_cert_file="/etc/verser/client.crt",
+    tls_key_file="/etc/verser/client.key",
+)
+
 broker = create_verser_broker(
     host_url="https://localhost:8443",
     broker_id="broker-a",
@@ -166,10 +176,7 @@ broker = create_verser_broker(
 )
 ```
 
-Python Guest currently supports Host CA trust via `tls_ca_file`, but does not
-support presenting a PEM or PFX/PKCS12 client certificate. If the Host requires
-mTLS client certificates for all Guests, use Node/Bun Guests for those routes or
-add Python Guest client identity support in a future implementation track.
+PFX/PKCS12 is also supported with `tls_pfx_file` and `tls_pfx_password`.
 
 ## Self-signed certificates
 

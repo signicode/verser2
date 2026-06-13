@@ -70,12 +70,25 @@ async def app(scope, receive, send):
 
 
 async def main():
+    optional_tls_options = {
+        "tls_cert_file": "VERSER_TLS_CERT_FILE",
+        "tls_key_file": "VERSER_TLS_KEY_FILE",
+        "tls_key_password": "VERSER_TLS_KEY_PASSWORD",
+        "tls_pfx_file": "VERSER_TLS_PFX_FILE",
+        "tls_pfx_password": "VERSER_TLS_PFX_PASSWORD",
+    }
+    tls_options = {
+        option_name: os.environ[env_name]
+        for option_name, env_name in optional_tls_options.items()
+        if os.environ.get(env_name)
+    }
     guest = create_verser_guest(
         host_url=os.environ["VERSER_HOST_URL"],
         guest_id=os.environ.get("VERSER_GUEST_ID", "python-guest-basic"),
         app=app,
         routed_domains=[os.environ.get("VERSER_GUEST_DOMAIN", "python-basic.local.test")],
         tls_ca_file=os.environ.get("VERSER_TLS_CA_FILE"),
+        **tls_options,
     )
     await guest.connect()
     print("python guest ready", flush=True)

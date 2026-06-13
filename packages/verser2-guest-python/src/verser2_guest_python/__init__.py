@@ -31,7 +31,7 @@ TLS
 ---
 -   All connections use TLS with ALPN ``h2``.
 -   CA trust is configured via ``tls_ca_file``.
--   Broker client identity supports PEM (``tls_cert_file`` / ``tls_key_file``
+-   Guest and Broker client identity supports PEM (``tls_cert_file`` / ``tls_key_file``
     / ``tls_key_password``) and PFX/PKCS12 files (``tls_pfx_file`` /
     ``tls_pfx_password``, requires the ``cryptography`` package).
 
