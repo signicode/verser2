@@ -2,6 +2,19 @@
 
 A Broker sends requests to advertised Guest routes through the Host.
 
+## Broker versus public gateway
+
+A Broker is a routing client; it does not listen for public HTTP traffic by
+itself. If you want to expose a public API gateway, build an application-owned
+HTTP server and call the Broker from that server.
+
+The gateway application owns public TLS, authentication, authorization, rate
+limits, observability, and fallback behavior. `verser2` provides the reverse
+connectivity and routed request path from that gateway into connected Guests.
+
+See [the tiny Bun gateway example](./examples/gateway.md) for a minimal public
+listener that forwards to Node and Python Guests through a Broker.
+
 ## Broker.request()
 
 The Node and Bun Broker's `request()` method sends a single request:
