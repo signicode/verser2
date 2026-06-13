@@ -123,3 +123,17 @@
 - Automated review: source-level API docs were reviewed for accuracy and Node/Bun/Python wording consistency. Required fixes were applied for Guest attach/connect route advertisement, direct-dispatch wording, common package helper scope, body/header normalization wording, common Broker response body wording, and TLS trust wording.
 - Deferred to Phase 3: stale Markdown README/package README claims that describe Python Broker support as deferred or unimplemented. These are in the existing-doc consolidation task scope.
 - Coverage: not applicable because Phase 2 changed source documentation/docstrings only and did not add runtime behavior.
+
+## Phase 3 validation
+
+- Task-focused docs were created under `docs/` for connecting, exposing handlers, making requests, routes, certificates, authorization, lifecycle, and errors.
+- Root and package READMEs were trimmed or added. Stale Python Broker deferred/unimplemented claims were removed; Python Broker is documented as implemented while Python Host remains unsupported.
+- `docs/ssl-certificate-generation.md` now redirects to `docs/certificates.md`, where certificate-generation and TLS setup content is consolidated.
+- Automated review checked source accuracy, Node/Bun/Python wording consistency, unsupported-feature boundaries, Python Broker URL-hostname examples, lifecycle API names, and Bun Broker wrapper wording. Required fixes were applied.
+- Command: `npm run lint`
+  - Result: passed; Biome checked 118 files with no fixes applied.
+- Command: stale-claim/API-shape search across `docs/` and package READMEs for `full Python Broker`, `Python Broker.*deferred`, `not implemented in this phase`, nonexistent `.on(...)` lifecycle examples, `host.stop()`, `host.address()`, and `target_id=`.
+  - Result: no matching files in active docs/package README scope.
+- Command: custom Python relative-link check across root README, `docs/*.md`, and `packages/*/README.md`.
+  - Result: passed; checked 18 Markdown files.
+- Coverage: not applicable because Phase 3 changed Markdown documentation only.

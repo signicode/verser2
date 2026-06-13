@@ -70,41 +70,41 @@
 
 ## Phase 3: Task-focused Markdown documentation
 
-- [ ] Task: Create task-focused docs and navigation
-    - [ ] Create `docs/index.md` with overview, role model, quickstart, and navigation.
-    - [ ] Create `docs/connecting.md`.
-    - [ ] Create `docs/exposing-http.md`.
-    - [ ] Create `docs/making-requests.md`.
-    - [ ] Create `docs/routes.md`.
-    - [ ] Create `docs/certificates.md`.
-    - [ ] Create `docs/authorization.md`.
-    - [ ] Create `docs/lifecycle-and-errors.md`.
-- [ ] Task: Consolidate and trim existing user-facing docs
-    - [ ] Trim `README.md` to overview, minimal quickstart, package entrypoints, and links.
-    - [ ] Absorb verified certificate-generation content from `docs/ssl-certificate-generation.md` into `docs/certificates.md`.
-    - [ ] Remove or redirect `docs/ssl-certificate-generation.md` according to repository convention.
-    - [ ] Trim `packages/verser2-guest-bun/README.md` to package identity, minimal example, caveats, and links.
-    - [ ] Trim `packages/verser2-guest-python/README.md` to package identity, minimal example, caveats, and links.
-- [ ] Task: Automated review after existing-doc consolidation
-    - [ ] Verify README and package READMEs no longer duplicate long stale task content.
-    - [ ] Verify package READMEs point to the relevant task docs.
-    - [ ] Verify certificate content was consolidated without preserving source-conflicting claims.
-- [ ] Task: Add minimal missing package README files
-    - [ ] Add `packages/verser-common/README.md`.
-    - [ ] Add `packages/verser2-host/README.md`.
-    - [ ] Add `packages/verser2-guest-node/README.md`.
-    - [ ] Add `packages/verser2-guest-js-common/README.md`.
-- [ ] Task: Documentation-wide consistency review
-    - [ ] Check relative links between root README, task docs, and package READMEs.
-    - [ ] Verify package README links are correct relative to their package directories.
-    - [ ] Verify package README descriptions match package entrypoints and implemented behavior.
-    - [ ] Confirm task docs agree with source inventory and source-level API docs.
-    - [ ] Confirm unsupported features are described only as unsupported/future work.
-    - [ ] Confirm duplicated long explanations were removed from README/package READMEs.
-- [ ] Task: Phase 3 validation and checkpoint preparation
-    - [ ] Run relevant docs/link/lint validation if available.
-    - [ ] Run broader repository lint/build only if needed by Markdown or package README changes.
-    - [ ] Record commands run, results, skipped validation, and rationale.
+- [x] Task: Create task-focused docs and navigation
+    - [x] Create `docs/index.md` with overview, role model, quickstart, and navigation.
+    - [x] Create `docs/connecting.md`.
+    - [x] Create `docs/exposing-http.md`.
+    - [x] Create `docs/making-requests.md`.
+    - [x] Create `docs/routes.md`.
+    - [x] Create `docs/certificates.md`.
+    - [x] Create `docs/authorization.md`.
+    - [x] Create `docs/lifecycle-and-errors.md`.
+- [x] Task: Consolidate and trim existing user-facing docs
+    - [x] Trim `README.md` to overview, minimal quickstart, package entrypoints, and links.
+    - [x] Absorb verified certificate-generation content from `docs/ssl-certificate-generation.md` into `docs/certificates.md`.
+    - [x] Remove or redirect `docs/ssl-certificate-generation.md` according to repository convention.
+    - [x] Trim `packages/verser2-guest-bun/README.md` to package identity, minimal example, caveats, and links.
+    - [x] Trim `packages/verser2-guest-python/README.md` to package identity, minimal example, caveats, and links.
+- [x] Task: Automated review after existing-doc consolidation
+    - [x] Verify README and package READMEs no longer duplicate long stale task content.
+    - [x] Verify package READMEs point to the relevant task docs.
+    - [x] Verify certificate content was consolidated without preserving source-conflicting claims.
+- [x] Task: Add minimal missing package README files
+    - [x] Add `packages/verser-common/README.md`.
+    - [x] Add `packages/verser2-host/README.md`.
+    - [x] Add `packages/verser2-guest-node/README.md`.
+    - [x] Add `packages/verser2-guest-js-common/README.md`.
+- [x] Task: Documentation-wide consistency review
+    - [x] Check relative links between root README, task docs, and package READMEs.
+    - [x] Verify package README links are correct relative to their package directories.
+    - [x] Verify package README descriptions match package entrypoints and implemented behavior.
+    - [x] Confirm task docs agree with source inventory and source-level API docs.
+    - [x] Confirm unsupported features are described only as unsupported/future work.
+    - [x] Confirm duplicated long explanations were removed from README/package READMEs.
+- [~] Task: Phase 3 validation and checkpoint preparation
+    - [x] Run relevant docs/link/lint validation if available.
+    - [x] Run broader repository lint/build only if needed by Markdown or package README changes.
+    - [x] Record commands run, results, skipped validation, and rationale.
     - [ ] Create the scoped Phase 3 commit with a concise summary body.
     - [ ] Push the branch/PR update for review before manual verification.
     - [ ] Record the phase checkpoint commit SHA in `plan.md`.
