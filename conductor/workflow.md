@@ -2,15 +2,15 @@
 
 ## Development Method
 
-Use a test-driven, incremental workflow for every track. Prefer small, reviewable changes that preserve normal HTTP semantics, runtime portability, and the Verser2 Host/Guest/Broker/Peer nomenclature.
+Use a test-driven, incremental workflow for every behavior-changing track. For behavior-neutral documentation, JSDoc, and docstring tracks, use source inventory, docs review, lint/build checks, and link validation as the equivalent source-of-truth workflow. Prefer small, reviewable changes that preserve normal HTTP semantics, runtime portability, and the Verser2 Host/Guest/Broker/Peer nomenclature.
 
 ## Guiding Principles
 
 1. **The Plan is the Source of Truth:** All work must be tracked in `plan.md`.
 2. **Tracks Start on Reviewable Branches:** Each new track must begin on a dedicated branch with a GitHub pull request created using `gh`; use the PR as the review and checkpoint surface until the track is complete. The PR title and description must describe the track's intended TO-BE state, not only the initial plan, specification, or documentation artifact.
 3. **The Tech Stack is Deliberate:** Changes to the tech stack must be documented in `tech-stack.md` before implementation.
-4. **Test-Driven Development:** Write failing tests before implementing feature behavior.
-5. **High Code Coverage:** Maintain at least 95% meaningful test coverage for changed behavior.
+4. **Test-Driven Development:** Write failing tests before implementing feature behavior; for behavior-neutral documentation/API-doc work, verify claims from source before writing final docs.
+5. **High Code Coverage:** Maintain at least 95% meaningful test coverage for changed behavior; record coverage as not applicable when the phase only changes documentation comments, docstrings, or Markdown.
 6. **Narrow Validation:** Run the smallest reliable build, test, lint, or type-check command that proves the change.
 7. **Protocol Compatibility:** Preserve HTTP method, path, headers, body, status, response, streaming, and lifecycle semantics unless a track explicitly changes them.
 8. **Shared First:** Reuse and adapt existing common libraries before implementing package-local solutions, and move repeated code into common libraries as soon as reuse emerges.
@@ -22,11 +22,11 @@ For each task:
 1. Confirm the affected package, entrypoint, protocol behavior, and expected outcome.
 2. Scan existing common libraries, especially `@signicode/verser-common`, for reusable or adaptable code before writing new package-local code.
 3. Mark the task in `plan.md` as in progress using `[~]`.
-4. Write or update focused tests first and confirm the new tests fail for the expected reason.
+4. Write or update focused tests first and confirm the new tests fail for the expected reason. For behavior-neutral documentation/API-doc tasks, first record the source references that prove the documented behavior.
 5. Implement the smallest change that makes the tests pass, using common libraries where appropriate instead of duplicating solutions.
 6. Refactor only after tests pass, preserving public behavior.
 7. Run the narrowest sufficient validation command.
-8. Verify coverage is at least 95% for changed behavior.
+8. Verify coverage is at least 95% for changed behavior, or record why coverage is not applicable to behavior-neutral documentation/API-doc changes.
 9. Update documentation or Conductor artifacts when behavior changes.
 10. Mark the task complete in `plan.md` using `[x]`.
 11. Defer commits until the phase is complete.
@@ -190,7 +190,7 @@ At the end of each phase:
 3. Perform the end-of-phase deduplication check and move shared code into common libraries when reuse emerged.
 4. Run the validation command or commands appropriate for the phase scope.
 5. Confirm docs, tests, and code are aligned.
-6. Confirm 95% coverage for changed behavior or record why coverage could not be measured.
+6. Confirm 95% coverage for changed behavior, or record why coverage is not applicable to behavior-neutral documentation/API-doc changes.
 7. Record any skipped validation and the reason.
 8. Ask the user to manually verify the phase before moving to the next phase when the plan includes a Conductor manual verification task.
 9. Create one scoped phase commit with a concise message and a summary in the commit body.
@@ -201,7 +201,7 @@ At the end of each phase:
 Before marking any task or phase complete, verify:
 
 - [ ] All relevant tests pass.
-- [ ] Coverage for changed behavior is at least 95%.
+- [ ] Coverage for changed behavior is at least 95%, or the task is explicitly behavior-neutral documentation/API-doc work and records coverage as not applicable.
 - [ ] Code follows the project code style guides in `code_styleguides/`.
 - [ ] Public APIs and behavior are documented when needed.
 - [ ] Existing common libraries were reviewed for reuse before package-local implementation.
@@ -247,8 +247,8 @@ Common types:
 A phase is complete when:
 
 1. All phase tasks are implemented to specification.
-2. Tests are written and passing.
-3. Coverage meets the 95% requirement for changed behavior.
+2. Tests are written and passing when behavior changes; behavior-neutral documentation/API-doc phases may instead validate source references, links, lint, and build output.
+3. Coverage meets the 95% requirement for changed behavior, or is recorded as not applicable for behavior-neutral documentation/API-doc changes.
 4. Documentation is complete when behavior changed.
 5. Common libraries were reviewed at phase start and the phase-end deduplication result is recorded.
 6. Linting and static analysis pass for the changed area.

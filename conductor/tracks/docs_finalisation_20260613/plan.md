@@ -2,35 +2,35 @@
 
 ## Phase 1: Track start, branch/PR, and source-of-truth inventory
 
-- [~] Task: Start the Conductor track on a reviewable branch
+- [x] Task: Start the Conductor track on a reviewable branch
     - [x] Create a dedicated track branch before implementation work.
-    - [ ] Create the initial Conductor track-start status commit after track artifacts are written.
-    - [ ] Create a GitHub PR whose title and description describe the intended final TO-BE state for documentation finalisation, not only the planning artifacts.
-    - [ ] Push the initial branch/PR setup for review.
-- [ ] Task: Automated review after branch/PR setup
-    - [ ] Verify branch name, initial commit, PR title/body, and pushed remote state.
-    - [ ] Record the review result and any correction made.
-- [ ] Task: Review common libraries and public entrypoints before documentation work
-    - [ ] Scan `packages/verser-common/src/**` for exported helpers, types, TLS/auth/routing/error APIs, and reusable documentation terminology.
-    - [ ] Scan Host, Node Guest/Broker, JS common, Bun, and Python source entrypoints for public APIs and public types.
-    - [ ] Record APIs that are public through package entrypoints versus implementation-internal only.
-- [ ] Task: Verify behavior claims from source first and tests second
-    - [ ] Verify Host, Guest, Broker connection behavior from source.
-    - [ ] Verify local handler attachment and unsupported HTTP features from source.
-    - [ ] Verify Broker request paths, Agent, Dispatcher, fetch helper, and Python Broker request helpers from source.
-    - [ ] Verify route advertisement, route matching, and route retraction from source.
-    - [ ] Verify TLS, mTLS, certificate reload, and registration authorization behavior from source.
-    - [ ] Use tests only to confirm or clarify source-derived behavior.
-- [ ] Task: Review Conductor implementation-work documentation
-    - [ ] Review `conductor/index.md`, `conductor/product.md`, `conductor/product-guidelines.md`, `conductor/tech-stack.md`, `conductor/workflow.md`, and `conductor/known-solutions.md`.
-    - [ ] Identify concrete inaccuracies, missing instructions, or conflicts with the documentation/API-doc workflow.
-    - [ ] Record findings and update Conductor docs only if needed.
-- [ ] Task: Produce implementation inventory for later phases
-    - [ ] List task areas, public APIs, key behavior constraints, source/test references, runtime caveats, and stale existing-doc claims.
-    - [ ] Record the common-library scan and deduplication baseline for the phase.
-- [ ] Task: Phase 1 validation and checkpoint preparation
-    - [ ] Run the narrowest relevant validation for planning/inventory/Conductor-doc changes.
-    - [ ] Record commands run, results, skipped validation, and rationale.
+    - [x] Create the initial Conductor track-start status commit after track artifacts are written.
+    - [x] Create a GitHub PR whose title and description describe the intended final TO-BE state for documentation finalisation, not only the planning artifacts.
+    - [x] Push the initial branch/PR setup for review.
+- [x] Task: Automated review after branch/PR setup
+    - [x] Verify branch name, initial commit, PR title/body, and pushed remote state.
+    - [x] Record the review result and any correction made.
+- [x] Task: Review common libraries and public entrypoints before documentation work
+    - [x] Scan `packages/verser-common/src/**` for exported helpers, types, TLS/auth/routing/error APIs, and reusable documentation terminology.
+    - [x] Scan Host, Node Guest/Broker, JS common, Bun, and Python source entrypoints for public APIs and public types.
+    - [x] Record APIs that are public through package entrypoints versus implementation-internal only.
+- [x] Task: Verify behavior claims from source first and tests second
+    - [x] Verify Host, Guest, Broker connection behavior from source.
+    - [x] Verify local handler attachment and unsupported HTTP features from source.
+    - [x] Verify Broker request paths, Agent, Dispatcher, fetch helper, and Python Broker request helpers from source.
+    - [x] Verify route advertisement, route matching, and route retraction from source.
+    - [x] Verify TLS, mTLS, certificate reload, and registration authorization behavior from source.
+    - [x] Use tests only to confirm or clarify source-derived behavior.
+- [x] Task: Review Conductor implementation-work documentation
+    - [x] Review `conductor/index.md`, `conductor/product.md`, `conductor/product-guidelines.md`, `conductor/tech-stack.md`, `conductor/workflow.md`, and `conductor/known-solutions.md`.
+    - [x] Identify concrete inaccuracies, missing instructions, or conflicts with the documentation/API-doc workflow.
+    - [x] Record findings and update Conductor docs only if needed.
+- [x] Task: Produce implementation inventory for later phases
+    - [x] List task areas, public APIs, key behavior constraints, source/test references, runtime caveats, and stale existing-doc claims.
+    - [x] Record the common-library scan and deduplication baseline for the phase.
+- [~] Task: Phase 1 validation and checkpoint preparation
+    - [x] Run the narrowest relevant validation for planning/inventory/Conductor-doc changes.
+    - [x] Record commands run, results, skipped validation, and rationale.
     - [ ] Create the scoped Phase 1 commit with a concise summary body.
     - [ ] Push the branch/PR update for review before manual verification.
     - [ ] Record the phase checkpoint commit SHA in `plan.md`.
