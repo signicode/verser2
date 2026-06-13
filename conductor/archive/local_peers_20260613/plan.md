@@ -146,9 +146,9 @@
     - [x] Confirm 95% meaningful coverage for changed behavior or record why exact measurement is not emitted by the current runner.
 
     Validation note: `npm test` passed (209 tests), `npm run test:package-tarballs` passed (51 tarball-mode tests, including `local-peer-smoke`), and final `npm run lint` passed. Exact percentage coverage is not emitted by the current runner; changed behavior is meaningfully covered by local peer registration, authorization, routing, local/H2 interop, streaming, post-close waiter/request rejection, body stream error mapping, package API, docs, and tarball consumer smoke tests.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Documentation, compatibility hardening, and final validation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Documentation, compatibility hardening, and final validation' (Protocol in workflow.md)
     - [x] Commit the Phase 3 checkpoint before requesting manual validation so the PR can be made current.
     - [x] Push the Phase 3 checkpoint branch before requesting manual validation so the PR is current.
-    - [ ] Request user manual validation after the pushed checkpoint is available.
+    - [x] Request user manual validation after the pushed checkpoint is available.
 
     Phase 3 checkpoint commit: `0f5a66c`.
