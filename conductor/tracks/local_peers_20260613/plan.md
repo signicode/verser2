@@ -104,8 +104,10 @@
 
     Validation note: `npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run lint && node --test --test-timeout=10000 test/host.test.js test/broker-routing.test.js test/agent.test.js test/dispatcher.test.js` passed. Exact percentage coverage is not emitted by the current focused runner; changed behavior is covered by focused success, failure, streaming, authorization, duplicate ID, local/H2 interop, Agent, and Dispatcher suites.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Local Host peer implementation, streaming routing, and public API integration' (Protocol in workflow.md)
-    - [ ] Commit and push the Phase 2 checkpoint branch before requesting manual validation so the PR is current.
+    - [x] Commit and push the Phase 2 checkpoint branch before requesting manual validation so the PR is current.
     - [ ] Request user manual validation after the pushed checkpoint is available.
+
+    Phase 2 checkpoint commit: `ae4045d`
 
 ## Phase 3: Documentation, compatibility hardening, and final validation
 
