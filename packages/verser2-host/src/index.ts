@@ -27,6 +27,10 @@
  * - An `authorizeRegistration` callback provides registration-time admission
  *   control based on the peer's certificate and metadata.
  * - TLS certificates can be reloaded at runtime while the server is running.
+ * - In-process local Guests and Brokers can be attached directly with
+ *   `host.attachLocalGuest()` and `host.attachLocalBroker()` when they run in
+ *   the Host process. Local peers bypass TLS but still use the registration
+ *   authorization hook with Host-owned local metadata.
  *
  * ## Lifecycle
  *
@@ -52,6 +56,14 @@ import type { VerserHost, VerserHostOptions } from './lib/types';
 export type {
   VerserHost,
   VerserHostLifecycleEvent,
+  VerserLocalBrokerHandle,
+  VerserLocalBrokerOptions,
+  VerserLocalBrokerRequest,
+  VerserLocalBrokerResponse,
+  VerserLocalGuestHandle,
+  VerserLocalGuestOptions,
+  VerserLocalGuestResponse,
+  VerserLocalGuestRequestListener,
   VerserHostOptions,
   VerserHostRegistrationRequest,
 } from './lib/types';
@@ -68,6 +80,10 @@ export type { VerserPeerRole } from '@signicode/verser-common';
  * By default the Host listens on `127.0.0.1` with an OS-assigned port (`0`).
  * Call `await host.start()` to begin listening, then use `host.address` to
  * discover the bound port.
+ *
+ * @remarks
+ * The returned Host also supports `attachLocalGuest()` and
+ * `attachLocalBroker()` for colocated in-process peers without TLS HTTP/2.
  *
  * @example
  * ```ts

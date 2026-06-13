@@ -15,6 +15,40 @@ connectivity and routed request path from that gateway into connected Guests.
 See [the tiny Bun gateway example](./examples/gateway.md) for a minimal public
 listener that forwards to Node and Python Guests through a Broker.
 
+## Local Broker
+
+When the caller runs in the Host process, `host.attachLocalBroker()` returns a
+local Broker handle with the same route-table primitives (`getRoutes()` and
+`waitForRoute()`) and a raw `request()` API. The request and response shapes are
+`VerserLocalBrokerRequest` and `VerserLocalBrokerResponse`.
+
+```ts
+const localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-a' });
+
+await localBroker.waitForRoute('client-a.local.test');
+
+const response = await localBroker.request({
+  targetId: 'client-a',
+  method: 'POST',
+  path: '/jobs',
+  headers: { 'content-type': 'application/json' },
+  body: [Buffer.from('{"ok":true}')],
+  leaseAcquireTimeoutMs: 5000,
+});
+
+console.log(response.statusCode, response.requestId);
+response.body.pipe(process.stdout);
+await localBroker.close();
+```
+
+Local Broker handles do not expose Agent, Dispatcher, or fetch wrappers from the
+Host package. Use the raw `request()` primitive, or keep using the remote Node
+Broker when those wrappers are required.
+
+When a local Broker targets a remote HTTP/2 Guest, `leaseAcquireTimeoutMs`
+controls how long the Host waits for an available Guest lease. It defaults to
+the same 5000 ms used by remote Broker requests.
+
 ## Broker.request()
 
 The Node and Bun Broker's `request()` method sends a single request:

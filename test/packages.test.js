@@ -167,6 +167,25 @@ test('@signicode/verser2-host package exposes Host API', () => {
   ]);
   assert.equal(hostPackage.VERSER2_HOST_PACKAGE_NAME, '@signicode/verser2-host');
   assert.equal(typeof hostPackage.createVerserHost, 'function');
+
+  const host = hostPackage.createVerserHost({ port: 0 });
+  assert.equal(typeof host.attachLocalGuest, 'function');
+  assert.equal(typeof host.attachLocalBroker, 'function');
+
+  const hostDeclarations = readText('packages/verser2-host/dist/index.d.ts');
+  assert.match(hostDeclarations, /VerserLocalGuestRequestListener/);
+  assert.match(hostDeclarations, /VerserLocalGuestOptions/);
+  assert.match(hostDeclarations, /VerserLocalBrokerOptions/);
+  assert.match(hostDeclarations, /VerserLocalBrokerRequest/);
+  assert.match(hostDeclarations, /VerserLocalBrokerResponse/);
+  assert.match(hostDeclarations, /VerserLocalGuestResponse/);
+  assert.match(hostDeclarations, /VerserLocalGuestHandle/);
+  assert.match(hostDeclarations, /VerserLocalBrokerHandle/);
+  assert.match(hostDeclarations, /setHeader\([^)]*\):[^;]*this/);
+  assert.match(hostDeclarations, /writeHead\([^)]*\):[^;]*this/);
+  assert.match(hostDeclarations, /end\([^)]*\):[^;]*this/);
+  assert.match(hostDeclarations, /leaseAcquireTimeoutMs\?: number/);
+
   assertSingleFileDist('packages/verser2-host');
   assertDeclarationOmits('packages/verser2-host', [/NodeHttp2VerserHost/]);
 });

@@ -4,11 +4,39 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - '.github/workflows/package-publish.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'biome.json'
+      - 'biome.jsonc'
+      - 'tsconfig*.json'
+      - 'packages/*/package.json'
+      - 'packages/*/tsconfig*.json'
+      - 'packages/*/pyproject.toml'
+      - 'packages/*/src/**'
+      - 'packages/*/scripts/**'
+      - 'scripts/**'
+      - 'test/**'
   push:
     branches:
       - main
     tags:
       - 'v*'
+    paths:
+      - '.github/workflows/package-publish.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'biome.json'
+      - 'biome.jsonc'
+      - 'tsconfig*.json'
+      - 'packages/*/package.json'
+      - 'packages/*/tsconfig*.json'
+      - 'packages/*/pyproject.toml'
+      - 'packages/*/src/**'
+      - 'packages/*/scripts/**'
+      - 'scripts/**'
+      - 'test/**'
 
 jobs:
   package-validation:
@@ -39,14 +67,6 @@ jobs:
           npm run build
           npm run stage:packages
 
-      - name: Pack staged packages
-        run: |
-          mkdir -p dist/tarballs
-          for packageDirectory in dist/packages/*;
-          do
-            (cd "$packageDirectory" && npm pack --silent --pack-destination "$GITHUB_WORKSPACE/dist/tarballs")
-          done
-
       - name: Validate consumers from staged and tarball sources
         run: |
           npm run test:package-consumers -- --source=staging
@@ -55,7 +75,7 @@ jobs:
 
       - name: Run source tests and lint
         run: |
-          npm test
+          node --test test/*.test.js
           npm run lint
 
       - name: Confirm validation job never publishes packages
@@ -145,14 +165,6 @@ jobs:
           npm run test:package-consumers -- --source=staging
           npm run test:package-consumers -- --source=tarball
           npm run test:package-tarballs
-
-      - name: Pack staged packages
-        run: |
-          mkdir -p dist/tarballs
-          for packageDirectory in dist/packages/*;
-          do
-            (cd "$packageDirectory" && npm pack --silent --pack-destination "$GITHUB_WORKSPACE/dist/tarballs")
-          done
 
       - name: Publish staged packages to GitHub Packages
         env:

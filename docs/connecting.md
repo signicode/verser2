@@ -33,6 +33,34 @@ await host.start();
   Route state is per Host instance and per connected peer set. Multi-Host
   topologies and shared route state are deployment architecture and future work.
 
+### Local Host peers
+
+When a Guest handler or Broker caller runs in the same Node.js process as the
+Host, attach it directly with the Host local peer APIs instead of opening a TLS
+HTTP/2 Guest or Broker connection:
+
+```ts
+const localGuest = await host.attachLocalGuest({
+  guestId: 'local-client-a',
+  routedDomains: ['local-client-a.local.test'],
+  listener(request, response) {
+    response.writeHead(200, { 'content-type': 'text/plain' });
+    response.end(`Handled ${request.method} ${request.url}`);
+  },
+});
+
+const localBroker = await host.attachLocalBroker({
+  brokerId: 'local-broker-a',
+});
+
+await localBroker.waitForRoute('local-client-a.local.test');
+```
+
+Local Host peers share the Host route table with remote TLS HTTP/2 peers:
+local Brokers can request remote H2 Guests, and remote H2 Brokers can request
+local Guests. Local peers bypass TLS, but still run through registration-time
+authorization with Host-owned local metadata.
+
 ## Guest
 
 A Guest connects outbound to a Host, registers as role `guest`, and attaches a
@@ -155,6 +183,8 @@ All Peers support `close()` to disconnect from the Host:
 ```ts
 await guest.close('guest-shutdown');
 await broker.close();
+await localGuest.close();
+await localBroker.close();
 ```
 
 The optional reason string is local lifecycle context for implementations that

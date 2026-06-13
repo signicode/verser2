@@ -1,8 +1,10 @@
 # Exposing HTTP handlers
 
 A Guest attaches a local HTTP handler to a verser Host. The handler never needs
-to call `listen()` — it receives remote requests dispatched through the Host
-connection.
+to call `listen()` — it receives requests dispatched through the Host route
+path. Remote Guests receive requests over the TLS HTTP/2 connection; local Host
+Guests use `host.attachLocalGuest()` in the same process without a separate
+Guest connection.
 
 ## Node Guest
 
@@ -41,6 +43,32 @@ response objects. The following are outside the supported surface:
 - CONNECT tunneling
 - Trailers and informational (1xx) responses
 - Full `IncomingMessage` / `ServerResponse` socket internals
+
+### Local Host-side Node Guest
+
+The Host package can attach the same listener shape directly through
+`attachLocalGuest()`. The listener type is `VerserLocalGuestRequestListener`, or
+you may pass an `http.Server` without calling `listen()`:
+
+```ts
+import http from 'node:http';
+import { createVerserHost } from '@signicode/verser2-host';
+
+const host = createVerserHost({
+  tls: { certFile: '/etc/verser/host.crt', keyFile: '/etc/verser/host.key' },
+});
+
+const server = http.createServer((request, response) => {
+  response.writeHead(200, { 'content-type': 'text/plain' });
+  response.end(`Handled ${request.method} ${request.url}`);
+});
+
+const localGuest = await host.attachLocalGuest({
+  guestId: 'local-node-guest',
+  routedDomains: ['local-node-guest.local.test'],
+  listener: server,
+});
+```
 
 ## Bun Guest
 
@@ -159,10 +187,12 @@ guest = create_verser_guest(
 ## Streaming
 
 All Guest runtimes support streaming request and response bodies through the
-leased Host routing path:
+Host routing path:
 
-- Node/Bun: request bodies can be `Readable` streams or web `ReadableStream`.
+- Node/Bun/H2: request bodies can be `Readable` streams or web `ReadableStream`.
   Response bodies are available as `Readable` streams.
+- Local Host Guests: request and response bodies stream through the in-process
+  bridge; there is no mandatory full-body buffering.
 - Python: ASGI `http.request` events deliver body chunks with `more_body` flags.
   ASGI `http.response.body` events stream back through the lease.
 
