@@ -48,8 +48,10 @@
     - [x] Add tests proving missing target, disconnected target, duplicate registration, lease timeout, local handler failure, stream error, and cancellation behavior match H2 semantics as closely as possible.
     - [x] Confirm the tests fail for the expected missing local routing, API, and error behavior.
 - [~] Task: Conductor - User Manual Verification 'Phase 1: Track setup, architecture discovery, and failing local-peer coverage' (Protocol in workflow.md)
-    - [ ] Commit and push the Phase 1 checkpoint branch before requesting manual validation so the PR is current.
+    - [x] Commit and push the Phase 1 checkpoint branch before requesting manual validation so the PR is current.
     - [ ] Request user manual validation after the pushed checkpoint is available.
+
+    Phase 1 checkpoint commit: `6a8a01a`
 
 ## Phase 2: Local Host peer implementation, streaming routing, and public API integration
 
@@ -96,6 +98,8 @@
     - [ ] Run lint for affected packages.
     - [ ] Record coverage status for changed registration, routing, streaming, authorization, and API behavior.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Local Host peer implementation, streaming routing, and public API integration' (Protocol in workflow.md)
+    - [ ] Commit and push the Phase 2 checkpoint branch before requesting manual validation so the PR is current.
+    - [ ] Request user manual validation after the pushed checkpoint is available.
 
 ## Phase 3: Documentation, compatibility hardening, and final validation
 
@@ -127,3 +131,5 @@
     - [ ] Run `npm run test` before final phase completion unless a narrower documented command fully covers all changed behavior.
     - [ ] Confirm 95% meaningful coverage for changed behavior or record why exact measurement is not emitted by the current runner.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Documentation, compatibility hardening, and final validation' (Protocol in workflow.md)
+    - [ ] Commit and push the Phase 3 checkpoint branch before requesting manual validation so the PR is current.
+    - [ ] Request user manual validation after the pushed checkpoint is available.
