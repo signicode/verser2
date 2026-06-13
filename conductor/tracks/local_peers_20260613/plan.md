@@ -107,7 +107,7 @@
     - [x] Commit and push the Phase 2 checkpoint branch before requesting manual validation so the PR is current.
     - [ ] Request user manual validation after the pushed checkpoint is available.
 
-    Phase 2 checkpoint commit: `ae4045d`; readability refactor commit pending after manual feedback.
+    Phase 2 checkpoint commit: `ae4045d`; readability refactor commit: `b2d0918`.
 
 ## Phase 3: Documentation, compatibility hardening, and final validation
 
