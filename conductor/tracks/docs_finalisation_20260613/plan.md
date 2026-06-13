@@ -59,14 +59,14 @@
     - [x] Verify unsupported runtime features are marked as unsupported rather than implemented.
     - [x] Run targeted TypeScript declaration/build validation and Python validation if useful for this group.
     - [x] Record any skipped validation with rationale.
-- [~] Task: Phase 2 validation and checkpoint preparation
+- [x] Task: Phase 2 validation and checkpoint preparation
     - [x] Run lint/format validation for changed source files.
     - [x] Run any TypeScript/Python validation not already covered by group reviews.
     - [x] Record commands run, results, skipped validation, and rationale.
     - [x] Create the scoped Phase 2 commit with a concise summary body: `2eb2bb4`.
     - [x] Push the branch/PR update for review before manual verification.
     - [x] Record the phase checkpoint commit SHA in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Public API JSDoc and Python docstrings' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Public API JSDoc and Python docstrings' (Protocol in workflow.md)
 
 ## Phase 3: Task-focused Markdown documentation
 
