@@ -33,6 +33,7 @@ const response = await localBroker.request({
   path: '/jobs',
   headers: { 'content-type': 'application/json' },
   body: [Buffer.from('{"ok":true}')],
+  leaseAcquireTimeoutMs: 5000,
 });
 
 console.log(response.statusCode, response.requestId);
@@ -43,6 +44,10 @@ await localBroker.close();
 Local Broker handles do not expose Agent, Dispatcher, or fetch wrappers from the
 Host package. Use the raw `request()` primitive, or keep using the remote Node
 Broker when those wrappers are required.
+
+When a local Broker targets a remote HTTP/2 Guest, `leaseAcquireTimeoutMs`
+controls how long the Host waits for an available Guest lease. It defaults to
+the same 5000 ms used by remote Broker requests.
 
 ## Broker.request()
 
