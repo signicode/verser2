@@ -2,8 +2,8 @@
 
 ## Phase 1: Track start, branch/PR, and source-of-truth inventory
 
-- [ ] Task: Start the Conductor track on a reviewable branch
-    - [ ] Create a dedicated track branch before implementation work.
+- [~] Task: Start the Conductor track on a reviewable branch
+    - [x] Create a dedicated track branch before implementation work.
     - [ ] Create the initial Conductor track-start status commit after track artifacts are written.
     - [ ] Create a GitHub PR whose title and description describe the intended final TO-BE state for documentation finalisation, not only the planning artifacts.
     - [ ] Push the initial branch/PR setup for review.
