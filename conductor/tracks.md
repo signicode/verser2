@@ -9,5 +9,5 @@ This file tracks active major tracks for the project. Completed tracks are moved
 
 ---
 
-- [~] **Track: docs finalisation**
+- [x] **Track: docs finalisation**
 *Link: [./tracks/docs_finalisation_20260613/](./tracks/docs_finalisation_20260613/)*
