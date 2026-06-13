@@ -14,9 +14,6 @@
     - [ ] Scan `packages/verser-common/src/**` for exported helpers, types, TLS/auth/routing/error APIs, and reusable documentation terminology.
     - [ ] Scan Host, Node Guest/Broker, JS common, Bun, and Python source entrypoints for public APIs and public types.
     - [ ] Record APIs that are public through package entrypoints versus implementation-internal only.
-- [ ] Task: Automated review after public API inventory
-    - [ ] Re-check package entrypoints against implementation files for missed exports.
-    - [ ] Verify inventory notes distinguish source-truth facts from test-confirmed behavior and stale existing-doc claims.
 - [ ] Task: Verify behavior claims from source first and tests second
     - [ ] Verify Host, Guest, Broker connection behavior from source.
     - [ ] Verify local handler attachment and unsupported HTTP features from source.
@@ -24,16 +21,10 @@
     - [ ] Verify route advertisement, route matching, and route retraction from source.
     - [ ] Verify TLS, mTLS, certificate reload, and registration authorization behavior from source.
     - [ ] Use tests only to confirm or clarify source-derived behavior.
-- [ ] Task: Automated review after behavior verification
-    - [ ] Cross-check behavior notes against representative tests for edge cases and error codes.
-    - [ ] Flag any existing documentation claims that conflict with source/test findings.
 - [ ] Task: Review Conductor implementation-work documentation
     - [ ] Review `conductor/index.md`, `conductor/product.md`, `conductor/product-guidelines.md`, `conductor/tech-stack.md`, `conductor/workflow.md`, and `conductor/known-solutions.md`.
     - [ ] Identify concrete inaccuracies, missing instructions, or conflicts with the documentation/API-doc workflow.
     - [ ] Record findings and update Conductor docs only if needed.
-- [ ] Task: Automated review after Conductor documentation review
-    - [ ] Verify any Conductor updates are limited to concrete issues found during review.
-    - [ ] Verify no internal Conductor guidance conflicts with the approved track plan.
 - [ ] Task: Produce implementation inventory for later phases
     - [ ] List task areas, public APIs, key behavior constraints, source/test references, runtime caveats, and stale existing-doc claims.
     - [ ] Record the common-library scan and deduplication baseline for the phase.
@@ -43,36 +34,31 @@
     - [ ] Create the scoped Phase 1 commit with a concise summary body.
     - [ ] Push the branch/PR update for review before manual verification.
     - [ ] Record the phase checkpoint commit SHA in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Track start, branch/PR, and source-of-truth inventory' (Protocol in workflow.md)
+- [ ] Task: Conductor - User Manual Verification 'Phase 1: Confirm source-of-truth and Conductor review findings' (Protocol in workflow.md)
+    - [ ] Review the source/API inventory, behavior findings, stale-doc notes, and Conductor documentation findings with the user.
+    - [ ] Confirm the findings are sufficient before starting source-level API documentation.
 
 ## Phase 2: Public API JSDoc and Python docstrings
 
 - [ ] Task: Add JSDoc to common and Host public APIs
     - [ ] Document exported public APIs and types in `packages/verser-common/src/**`.
     - [ ] Document Host public APIs, options, lifecycle types, TLS reload behavior, and registration authorization types.
-- [ ] Task: Automated review after common and Host JSDoc
-    - [ ] Verify documented APIs match actual exports and implementation behavior.
-    - [ ] Run targeted TypeScript declaration/build validation if useful for this group.
-    - [ ] Record any skipped validation with rationale.
 - [ ] Task: Add JSDoc to Node, JS common, and Bun public APIs
     - [ ] Document Node Guest/Broker public APIs, options, request APIs, Agent/Dispatcher/fetch helpers, lifecycle behavior, and exposed request/response types.
     - [ ] Document JS common public APIs and Bun Guest/Broker public APIs, including Bun handler/route types and WebSocket limitation.
-- [ ] Task: Automated review after Node/JS common/Bun JSDoc
-    - [ ] Verify documented APIs match actual exports and implementation behavior.
-    - [ ] Verify unsupported runtime features are marked as unsupported rather than implemented.
-    - [ ] Run targeted TypeScript declaration/build validation if useful for this group.
 - [ ] Task: Add docstrings to Python public APIs
     - [ ] Document `create_verser_guest`, `VerserGuest`, `attach`, `connect`, `close`, `dispatch_routed_request`, and public Guest option/response shapes.
     - [ ] Document `create_verser_broker`, `VerserBroker`, `connect`, `close`, `request`, convenience request methods, route discovery, and response body helpers.
     - [ ] Explain ASGI 3 expectations, URL hostname routing, one-shot response bodies, streaming iteration, TLS CA/client identity behavior, and raised exceptions.
-- [ ] Task: Automated review after Python docstrings
-    - [ ] Verify Python docstrings match public methods, signatures, and implementation behavior.
-    - [ ] Run the narrowest relevant Python validation command available through repository tooling.
-    - [ ] Record any skipped validation with rationale.
 - [ ] Task: Align API docs with implementation inventory
     - [ ] Ensure source-level docs use Host/Guest/Broker terminology precisely.
     - [ ] Ensure TLS, route, target ID, lifecycle, streaming, and failure-mode descriptions match source behavior.
     - [ ] Avoid documenting unsupported roadmap-only behavior as implemented.
+- [ ] Task: Automated review after all source-level API documentation
+    - [ ] Verify JSDoc and Python docstrings match public exports, method signatures, and implementation behavior.
+    - [ ] Verify unsupported runtime features are marked as unsupported rather than implemented.
+    - [ ] Run targeted TypeScript declaration/build validation and Python validation if useful for this group.
+    - [ ] Record any skipped validation with rationale.
 - [ ] Task: Phase 2 validation and checkpoint preparation
     - [ ] Run lint/format validation for changed source files.
     - [ ] Run any TypeScript/Python validation not already covered by group reviews.
@@ -93,10 +79,6 @@
     - [ ] Create `docs/certificates.md`.
     - [ ] Create `docs/authorization.md`.
     - [ ] Create `docs/lifecycle-and-errors.md`.
-- [ ] Task: Automated review after task-doc creation
-    - [ ] Verify each task doc is linked from `docs/index.md` and covers its intended task area.
-    - [ ] Verify examples and claims map back to source inventory and API docs.
-    - [ ] Check relative links introduced in this group.
 - [ ] Task: Consolidate and trim existing user-facing docs
     - [ ] Trim `README.md` to overview, minimal quickstart, package entrypoints, and links.
     - [ ] Absorb verified certificate-generation content from `docs/ssl-certificate-generation.md` into `docs/certificates.md`.
@@ -112,11 +94,10 @@
     - [ ] Add `packages/verser2-host/README.md`.
     - [ ] Add `packages/verser2-guest-node/README.md`.
     - [ ] Add `packages/verser2-guest-js-common/README.md`.
-- [ ] Task: Automated review after package README additions
-    - [ ] Verify package README links are correct relative to their package directories.
-    - [ ] Verify package README descriptions match package entrypoints and implemented behavior.
 - [ ] Task: Documentation-wide consistency review
     - [ ] Check relative links between root README, task docs, and package READMEs.
+    - [ ] Verify package README links are correct relative to their package directories.
+    - [ ] Verify package README descriptions match package entrypoints and implemented behavior.
     - [ ] Confirm task docs agree with source inventory and source-level API docs.
     - [ ] Confirm unsupported features are described only as unsupported/future work.
     - [ ] Confirm duplicated long explanations were removed from README/package READMEs.
@@ -136,24 +117,18 @@
     - [ ] Run the established codemap generation process.
     - [ ] Ensure codemap outputs reflect the final source and documentation state.
     - [ ] Inspect generated diffs for unexpected or unrelated changes.
-- [ ] Task: Automated review after codemap regeneration
-    - [ ] Verify codemap outputs changed only as expected for source/docs updates.
-    - [ ] Run codemap-specific validation if available.
-    - [ ] Record skipped codemap validation if no codemap-specific validation exists.
 - [ ] Task: Final Conductor and documentation consistency review
     - [ ] Confirm Conductor documentation review findings were resolved or intentionally left unchanged.
     - [ ] Verify all task docs are linked from `docs/index.md` and root/package READMEs.
     - [ ] Verify no task doc contradicts source behavior discovered in Phase 1.
     - [ ] Verify public API docs and task docs describe the same behavior.
     - [ ] Verify examples use implemented package entrypoints and precise Host/Guest/Broker terminology.
-- [ ] Task: Automated review after final consistency review
-    - [ ] Re-check cross-document terminology, unsupported-feature claims, and API/task-doc alignment.
-    - [ ] Verify no final review edits invalidated previous link or codemap checks.
 - [ ] Task: Automated final validation
     - [ ] Run `npm run build` or the narrowest sufficient build command.
     - [ ] Run `npm run lint` or the narrowest sufficient lint command.
     - [ ] Run `npm run test` or narrower tests if sufficient for documentation/API-doc changes.
     - [ ] Run Python-specific validation if not already covered.
+    - [ ] Run codemap-specific validation if available, or record why no codemap-specific validation was run.
     - [ ] Record commands run, results, skipped validation, and rationale.
     - [ ] Confirm coverage requirement is not applicable to behavior-neutral documentation/docstring changes, or record coverage evidence if behavior changed unexpectedly.
     - [ ] Confirm the phase-end deduplication check for documentation content and common terminology.
