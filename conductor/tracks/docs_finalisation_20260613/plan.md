@@ -31,9 +31,9 @@
 - [~] Task: Phase 1 validation and checkpoint preparation
     - [x] Run the narrowest relevant validation for planning/inventory/Conductor-doc changes.
     - [x] Record commands run, results, skipped validation, and rationale.
-    - [ ] Create the scoped Phase 1 commit with a concise summary body.
-    - [ ] Push the branch/PR update for review before manual verification.
-    - [ ] Record the phase checkpoint commit SHA in `plan.md`.
+    - [x] Create the scoped Phase 1 commit with a concise summary body: `b1ef763`.
+    - [x] Push the branch/PR update for review before manual verification.
+    - [x] Record the phase checkpoint commit SHA in `plan.md`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Confirm source-of-truth and Conductor review findings' (Protocol in workflow.md)
     - [ ] Review the source/API inventory, behavior findings, stale-doc notes, and Conductor documentation findings with the user.
     - [ ] Confirm the findings are sufficient before starting source-level API documentation.
