@@ -2,8 +2,8 @@
 
 ## Phase 1: Track setup, architecture discovery, and failing local-peer coverage
 
-- [ ] Task: Create the review branch, planning commit, and PR for the complete local-peer TO-BE state
-    - [ ] Create a dedicated track branch before implementation changes.
+- [~] Task: Create the review branch, planning commit, and PR for the complete local-peer TO-BE state
+    - [x] Create a dedicated track branch before implementation changes.
     - [ ] Commit the approved Conductor planning artifacts on the track branch so a PR can be created.
     - [ ] Create a GitHub PR with a title and body describing the final in-process local Host peer capability, not only the planning artifacts.
 - [ ] Task: Confirm existing reusable Host, Guest, Broker, and common foundations
