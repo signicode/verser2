@@ -5,6 +5,7 @@ import { PassThrough, Readable } from 'node:stream';
 import {
   type RoutedDomainRegistration,
   type VerserPeerId,
+  createRoutedResponseEnvelope,
   createVerserError,
   flattenVerserHeaders,
   validateVerserHeaders,
@@ -22,9 +23,14 @@ export interface LocalGuestState {
 
 export interface LocalBrokerState {
   routes: RoutedDomainRegistration[];
-  routeWaiters: Map<string, (() => void)[]>;
+  routeWaiters: Map<string, LocalRouteWaiter[]>;
   requestCounter: number;
   closed: boolean;
+}
+
+interface LocalRouteWaiter {
+  readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
 }
 
 export interface LocalDispatchRequest {
@@ -35,6 +41,7 @@ export interface LocalDispatchRequest {
   readonly path: string;
   readonly headers: Record<string, string>;
   readonly body: Readable;
+  readonly signal?: AbortSignal;
 }
 
 type LocalRequest = Readable & {
@@ -55,6 +62,16 @@ class LocalIncomingMessage extends PassThrough implements LocalRequest {
     this.method = request.method;
     this.url = request.path;
     this.headers = request.headers;
+    this.on('error', () => {
+      // The dispatch promise installs its own error listener while the response
+      // is pending. Keep a fallback listener so cancellation after response
+      // headers does not surface as an unhandled stream error.
+    });
+    const onAbort = (): void => {
+      this.destroy(createDisconnectedError(request));
+    };
+    request.signal?.addEventListener('abort', onAbort, { once: true });
+    this.once('close', () => request.signal?.removeEventListener('abort', onAbort));
     request.body.once('error', (error) => this.destroy(error));
     request.body.pipe(this);
   }
@@ -111,10 +128,15 @@ class LocalServerResponse extends EventEmitter {
   }
 
   public toBrokerResponse(requestId: string): VerserLocalBrokerResponse {
-    return {
+    const envelope = createRoutedResponseEnvelope({
       requestId,
       statusCode: this.statusCode,
       headers: flattenVerserHeaders(validateVerserHeaders(Object.fromEntries(this.headers))),
+    });
+    return {
+      requestId: envelope.requestId,
+      statusCode: envelope.statusCode,
+      headers: envelope.headers,
       body: this.bodyStream,
     };
   }
@@ -146,22 +168,46 @@ export function updateLocalBrokerRoutes(
   broker: LocalBrokerState,
   routes: RoutedDomainRegistration[],
 ): void {
+  if (broker.closed) {
+    return;
+  }
   broker.routes = [...routes];
   for (const route of routes) {
-    for (const resolve of broker.routeWaiters.get(route.domain) ?? []) {
-      resolve();
+    for (const waiter of broker.routeWaiters.get(route.domain) ?? []) {
+      waiter.resolve();
     }
     broker.routeWaiters.delete(route.domain);
   }
 }
 
 export function waitForLocalBrokerRoute(broker: LocalBrokerState, domain: string): Promise<void> {
+  if (broker.closed) {
+    return Promise.reject(createVerserError('disconnected-target', 'Local Broker is closed'));
+  }
   if (broker.routes.some((route) => route.domain === domain)) {
     return Promise.resolve();
   }
-  return new Promise((resolve) => {
-    broker.routeWaiters.set(domain, [...(broker.routeWaiters.get(domain) ?? []), resolve]);
+  return new Promise((resolve, reject) => {
+    broker.routeWaiters.set(domain, [
+      ...(broker.routeWaiters.get(domain) ?? []),
+      { resolve, reject },
+    ]);
   });
+}
+
+export function closeLocalBrokerState(broker: LocalBrokerState, reason: string): void {
+  if (broker.closed) {
+    return;
+  }
+  broker.closed = true;
+  broker.routes = [];
+  const error = createVerserError('disconnected-target', 'Local Broker is closed', { reason });
+  for (const waiters of broker.routeWaiters.values()) {
+    for (const waiter of waiters) {
+      waiter.reject(error);
+    }
+  }
+  broker.routeWaiters.clear();
 }
 
 export function toReadableBody(body: VerserLocalBrokerRequest['body']): Readable {
@@ -202,13 +248,58 @@ export function dispatchLocalGuestRequest(
   const localRequest = new LocalIncomingMessage(request);
   const localResponse = new LocalServerResponse();
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const rejectBeforeResponse = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const resolveResponse = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(localResponse.toBrokerResponse(request.requestId));
+    };
     const failBeforeResponse = (error: unknown): void => {
-      reject(createLocalHandlerError(request, error));
+      rejectBeforeResponse(createLocalHandlerError(request, error));
+    };
+    const failRequestStream = (error: unknown): void => {
+      const streamError = createVerserError('stream-failure', getErrorMessage(error), {
+        requestId: request.requestId,
+        targetId: request.targetId,
+      });
+      if (localResponse.headersStarted) {
+        localResponse.fail(streamError);
+        return;
+      }
+      rejectBeforeResponse(streamError);
+    };
+    const abort = (): void => {
+      const error = createDisconnectedError(request);
+      localRequest.destroy(error);
+      if (localResponse.headersStarted) {
+        localResponse.fail(error);
+        return;
+      }
+      rejectBeforeResponse(error);
+    };
+    const cleanup = (): void => {
+      localRequest.off('error', failRequestStream);
+      request.signal?.removeEventListener('abort', abort);
     };
 
-    localResponse.once('response', () =>
-      resolve(localResponse.toBrokerResponse(request.requestId)),
-    );
+    localRequest.once('error', failRequestStream);
+    if (request.signal?.aborted) {
+      abort();
+      return;
+    }
+    request.signal?.addEventListener('abort', abort, { once: true });
+    localResponse.once('response', resolveResponse);
     localResponse.once('error', (error) => {
       if (!localResponse.headersStarted) {
         failBeforeResponse(error);
@@ -221,11 +312,19 @@ export function dispatchLocalGuestRequest(
       const verserError = createLocalHandlerError(request, error);
       if (localResponse.headersStarted) {
         localResponse.fail(verserError);
-        resolve(localResponse.toBrokerResponse(request.requestId));
+        resolveResponse();
         return;
       }
-      reject(verserError);
+      rejectBeforeResponse(verserError);
     }
+  });
+}
+
+function createDisconnectedError(request: LocalDispatchRequest): Error {
+  return createVerserError('disconnected-target', 'Local peer disconnected during request', {
+    requestId: request.requestId,
+    targetId: request.targetId,
+    sourceId: request.sourceId,
   });
 }
 

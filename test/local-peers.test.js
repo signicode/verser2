@@ -465,6 +465,12 @@ test('Local routing streams request and response bodies without mandatory buffer
       ]),
       Buffer.from('first-response'),
     );
+    const cancelledRead = readNextChunk(response.body);
+    await localBroker.close('stream-close-test');
+    await assert.rejects(cancelledRead, (error) => {
+      assert.equal(error.code, 'disconnected-target');
+      return true;
+    });
     body.end(Buffer.from('second-upload'));
   } finally {
     if (localBroker !== undefined) await localBroker.close('test-complete');
@@ -527,6 +533,86 @@ test('Local Broker maps missing targets, detached targets, and local handler fai
   } finally {
     if (localGuest !== undefined) await localGuest.close('test-complete');
     if (localBroker !== undefined) await localBroker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Broker rejects route waiters and requests after close paths', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-close-1' });
+
+  try {
+    const closedBrokerWait = localBroker.waitForRoute('never-closes.local.test');
+    await localBroker.close('broker-close-test');
+    await assert.rejects(closedBrokerWait, (error) => {
+      assert.equal(error.code, 'disconnected-target');
+      return true;
+    });
+    await assert.rejects(
+      () => localBroker.request({ targetId: 'missing-after-close', method: 'GET', path: '/' }),
+      (error) => {
+        assert.equal(error.code, 'disconnected-target');
+        return true;
+      },
+    );
+
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-host-close-1' });
+    const hostCloseWait = localBroker.waitForRoute('never-host-closes.local.test');
+    await host.close('host-close-test');
+    await assert.rejects(hostCloseWait, (error) => {
+      assert.equal(error.code, 'disconnected-target');
+      return true;
+    });
+    await assert.rejects(
+      () => localBroker.request({ targetId: 'missing-after-host-close', method: 'GET', path: '/' }),
+      (error) => {
+        assert.equal(error.code, 'disconnected-target');
+        return true;
+      },
+    );
+  } finally {
+    await localBroker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Broker maps local request body stream errors to stream failures', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-body-error-guest-1',
+      routedDomains: ['local-body-error.local.test'],
+      listener: (request, response) => {
+        request.resume();
+        request.on('end', () => response.end('unexpected'));
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-body-error-broker-1' });
+    await localBroker.waitForRoute('local-body-error.local.test');
+
+    const body = new PassThrough();
+    const responsePromise = localBroker.request({
+      targetId: 'local-body-error-guest-1',
+      method: 'POST',
+      path: '/body-error',
+      body,
+    });
+    body.destroy(new Error('upload failed'));
+
+    await assert.rejects(responsePromise, (error) => {
+      assert.equal(error.code, 'stream-failure');
+      assert.match(error.message, /upload failed/);
+      assert.equal(error.context.targetId, 'local-body-error-guest-1');
+      return true;
+    });
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
     await host.close('test-complete');
   }
 });

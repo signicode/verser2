@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Implementation modules for the `@signicode/verser2-host` package. Contains the Host TLS HTTP/2 server implementation, HTTP/2 stream I/O helpers, type definitions, packaging constants, and error-wrapping utilities.
+Implementation modules for the `@signicode/verser2-host` package. Contains the Host TLS HTTP/2 server implementation, local Host peer helpers, HTTP/2 stream I/O helpers, type definitions, packaging constants, and error-wrapping utilities.
 
 ## Design / Patterns
 
@@ -11,8 +11,9 @@ Implementation modules for the `@signicode/verser2-host` package. Contains the H
 | File | Responsibility | Key exports |
 |---|---|---|
 | `node-http2-verser-host.ts` | Core Host server logic. Implements `VerserHost`. | `NodeHttp2VerserHost` class (`@internal`). Handles: session tracking, path routing (`/verser/register`, `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`), peer registration with optional mTLS auth, Guest lease pool management (idle pool + queued acquisitions with timeout), Broker request→lease routing with pipe-through, route advertisement on change, lifecycle event emission, graceful shutdown. |
+| `local-peers.ts` | Local Host-side Guest/Broker helpers. | `createLocalBrokerState()`, `updateLocalBrokerRoutes()`, `waitForLocalBrokerRoute()`, `closeLocalBrokerState()`, `extractLocalGuestListener()`, `dispatchLocalGuestRequest()`, `toReadableBody()`. Provides minimal Node HTTP request/response shims, local route waiters, local response validation, and close/error propagation helpers. |
 | `http2-io.ts` | HTTP/2 stream write helpers. | `writeJsonLine()` — writes NDJSON to stream (responds 200 + `application/json` if headers not yet sent). `sendError()` — writes 502 + JSON error body. |
-| `types.ts` | Host-specific type definitions. | `VerserHostOptions` (port, host, tls), `VerserHostRegistrationRequest` (re-export alias), `VerserHostLifecycleEvent` (name, peerId, role, reason, error), `VerserHost` interface (running, address, start, close, reloadTlsCertificate, getRoutedDomains, onLifecycle). |
+| `types.ts` | Host-specific type definitions. | `VerserHostOptions` (port, host, tls), `VerserHostRegistrationRequest` (re-export alias), `VerserHostLifecycleEvent` (name, peerId, role, reason, error), local peer option/request/response/handle types, `VerserHost` interface (running, address, start, close, reloadTlsCertificate, getRoutedDomains, attachLocalGuest, attachLocalBroker, onLifecycle). |
 | `utils.ts` | Host error wrapping. | `toVerserError()` — wraps unknown errors into `VerserError` (preserves already-VerserError instances by duck-typing on `code` + `name`). |
 | `constants.ts` | Packaging constant. | `VERSER2_HOST_PACKAGE_NAME` (`'@signicode/verser2-host'`). |
 
@@ -20,6 +21,7 @@ Implementation modules for the `@signicode/verser2-host` package. Contains the H
 
 - **Event-driven architecture** — the server uses Node `EventEmitter` for lifecycle events (`onLifecycle`/`emitLifecycle`). Internal state is managed with `Map`s and `Set`s.
 - **Stateful peer/lease maps** — `peers` (peerId → RegisteredPeer), `sessions` (Set of sessions), `idleLeases` (guestId → lease[]), `activeLeases` (guestId:leaseId → lease), `queuedLeaseAcquisitions` (guestId → acquisition[]), `guestRegistrations` (guestId → RoutedDomainRegistration[]).
+- **Local peer state** — local Guest/Broker state shares the `peers` map. Local Brokers keep a full route snapshot and waiter map; Host close and local handle close reject pending waiters and abort active local requests.
 - **Lease pool with priority** — `addIdleLease()` checks `queuedLeaseAcquisitions` first; if a request is waiting, the new lease is immediately assigned. Otherwise it joins the idle pool.
 - **Lease acquisition with timeout** — `acquireLease()` returns a `Promise` that either resolves with an idle lease or rejects after `timeoutMs` via `setTimeout`. Timeouts are cleared when leases become available.
 - **Stream piping for body forwarding** — Broker request stream is piped into the Guest lease stream (`stream.pipe(lease.stream)`). Guest response is piped back to the Broker (`lease.stream.pipe(stream)`). No buffering of large payloads.
@@ -44,6 +46,12 @@ Implementation modules for the `@signicode/verser2-host` package. Contains the H
    d. Responds to Broker with status code + headers from response envelope.
    e. Pipes lease stream (response body) back to Broker stream.
 4. Completion/failure: `finish` event marks the lease `completed`. Lease is not returned to pool (single-use per request).
+
+### Local peer routing
+1. `attachLocalGuest()` stores a local listener and routes in Host state; `attachLocalBroker()` stores a local route snapshot and waiter state.
+2. Local Brokers call `request()` → Host validates target and headers → local targets dispatch through `dispatchLocalGuestRequest()`; H2 targets acquire a lease.
+3. H2 Brokers targeting local Guests route through the same local dispatch path, with response bodies piped back to the HTTP/2 stream.
+4. Local close/detach and Host close reject route waiters and abort active local dispatches with `disconnected-target`.
 
 ### Session disconnect
 1. Session `close` → `removeSessionPeers()` iterates all peers, deletes matching entries, removes Guest routes, closes leases, fails queued acquisitions.
