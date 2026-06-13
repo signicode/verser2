@@ -23,6 +23,21 @@ import type {
 } from './types';
 import { envelopeTypeNameFromCode, isRecord } from './utils';
 
+/**
+ * Encodes a Verser envelope into its binary wire format.
+ *
+ * The format is:
+ * ```
+ * [version:1] [type:1] [metadataLength:4] [metadata JSON...] [body...]
+ * ```
+ * The returned buffer contains the prefix and metadata only; the body (if any)
+ * is written separately by the caller.
+ *
+ * @param envelope - The envelope type and metadata to encode.
+ * @returns A buffer containing the prefix and serialized metadata JSON.
+ * @throws {VerserError} If the metadata type is unknown.
+ * @public
+ */
 export function encodeVerserEnvelope(envelope: VerserEnvelopeToEncode): Buffer {
   const envelopeType = VERSER_ENVELOPE_TYPES[envelope.type];
   const metadata = Buffer.from(JSON.stringify(envelope.metadata), 'utf8');
@@ -33,6 +48,21 @@ export function encodeVerserEnvelope(envelope: VerserEnvelopeToEncode): Buffer {
   return Buffer.concat([prefix, metadata]);
 }
 
+/**
+ * Creates a streaming envelope parser that processes binary data chunk by chunk.
+ *
+ * The parser buffers incoming data until a complete envelope prefix + metadata
+ * is available, then returns the parsed result. Any remaining bytes are returned
+ * as `bodyRemainder` for the caller to handle.
+ *
+ * @param options - Parser options (e.g. `maxMetadataBytes`).
+ * @returns An object with a `push(chunk)` method.
+ *   Returns `ParsedVerserEnvelope` when a complete envelope is parsed,
+ *   or `undefined` if more data is needed.
+ * @throws {VerserError} If the envelope version is unknown, metadata exceeds
+ *   the size limit, or metadata JSON is malformed.
+ * @public
+ */
 export function createVerserEnvelopeParser(options: VerserEnvelopeParserOptions = {}): {
   push(chunk: Buffer): ParsedVerserEnvelope | undefined;
 } {
@@ -88,6 +118,20 @@ export function createVerserEnvelopeParser(options: VerserEnvelopeParserOptions 
   };
 }
 
+/**
+ * Reads a complete Verser envelope from a Node.js `Readable` stream.
+ *
+ * Reads the 6-byte prefix, then the metadata payload, and returns the parsed
+ * envelope. Any excess bytes after the metadata are unshifted back onto the
+ * stream.
+ *
+ * @param stream - The readable stream to read from.
+ * @param options - Read options including max metadata bytes and diagnostic context.
+ * @returns The parsed envelope.
+ * @throws {VerserError} If the stream ends before the envelope is complete,
+ *   the metadata is too large, or the metadata JSON is invalid.
+ * @public
+ */
 export async function readVerserEnvelopeFromStream(
   stream: Readable,
   options: VerserEnvelopeStreamReadOptions = {},
@@ -121,6 +165,20 @@ export async function readVerserEnvelopeFromStream(
   return parsed;
 }
 
+/**
+ * Reads a **response** or **error** envelope from a Guest lease stream.
+ *
+ * Used by the Host after forwarding a request to a Guest. If the Guest returns
+ * a response envelope the metadata is returned directly. If it returns an error
+ * envelope the error is re-thrown as a `VerserError` with the appropriate code.
+ *
+ * @param stream - The lease stream to read from.
+ * @param options - Read options including the expected `requestId` and `targetId`.
+ * @returns The response envelope metadata.
+ * @throws {VerserError} With code `local-handler-failure` if the Guest returned
+ *   an error envelope with that code, or `protocol-error` otherwise.
+ * @public
+ */
 export async function readLeaseResponseMetadataFromStream(
   stream: Readable,
   options: LeaseResponseMetadataReadOptions,
@@ -153,6 +211,17 @@ export async function readLeaseResponseMetadataFromStream(
   });
 }
 
+/**
+ * Reads a **request** envelope from a Guest lease stream.
+ *
+ * Used by Guest implementations to receive an incoming routed request from the Host.
+ *
+ * @param stream - The lease stream to read from.
+ * @param options - Read options including the `guestId` and `leaseId` for diagnostics.
+ * @returns The request envelope metadata.
+ * @throws {VerserError} If the stream ends unexpectedly or the envelope is not a request type.
+ * @public
+ */
 export async function readLeaseRequestMetadataFromStream(
   stream: Readable,
   options: LeaseRequestMetadataReadOptions,

@@ -1,4 +1,32 @@
-"""ASGI dispatch helpers for the Python Guest."""
+"""ASGI 3 dispatch helpers for the Python Guest.
+
+This module is not a public top-level export of the package.  It is used
+internally by :class:`verser2_guest_python.guest.VerserGuest` to convert
+Verser envelope metadata into ASGI 3 scope dictionaries and to drive the ASGI
+application lifecycle.
+
+ASGI 3 scope
+    The scope dict follows the ASGI 3.0 specification
+    (``asgi.version == "3.0"``, ``asgi.spec_version == "2.5"``)::
+
+        {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.5"},
+            "http_version": "1.1",
+            "method": "<uppercased HTTP method>",
+            "scheme": "http",
+            "path": "<URL-decoded path>",
+            "raw_path": "<URL-encoded path as bytes>",
+            "query_string": "<query string as bytes>",
+            "headers": [(b"name", b"value"), ...],
+            "client": None,
+            "server": None,
+            "root_path": "",
+        }
+
+    The ``receive`` callable yields ``http.request`` events, and the ``send``
+    callable accepts ``http.response.start`` and ``http.response.body`` events.
+"""
 
 from __future__ import annotations
 
@@ -10,15 +38,51 @@ from .protocol import normalize_headers
 
 
 ASGIApp = Callable[[dict[str, Any], Callable[[], Awaitable[dict[str, Any]]], Callable[[dict[str, Any]], Awaitable[None]]], Awaitable[None]]
+"""Type alias for an ASGI 3 application callable.
+
+Signature: ``async def app(scope, receive, send)``.
+"""
 DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+"""Default maximum response body buffer (10 MiB)."""
 
 
 class ResponseBodyTooLargeError(RuntimeError):
-    """Raised when direct ASGI dispatch exceeds the buffered response limit."""
+    """Raised by :func:`dispatch_asgi_request` when the buffered response body
+    exceeds ``max_response_bytes``.
+
+    This is a buffered/direct-dispatch limit. The buffered dispatcher catches
+    this exception and returns an error response with code
+    ``"local-handler-failure"``. The streaming lease path does not enforce
+    ``max_response_bytes``; after response headers have been sent it can only
+    end the stream, not replace the already-started response with an error
+    envelope.
+    """
 
 
 @dataclass(frozen=True)
 class DispatchResponse:
+    """Result of dispatching a single request through an ASGI app.
+
+    Contains the buffered response on success, or an error envelope when the
+    app raised an exception before sending response headers.
+
+    Attributes
+    ----------
+    request_id : str
+        Original request identifier from the envelope metadata.
+    status_code : int or None
+        HTTP status code set by the app (``None`` if an error occurred before
+        ``http.response.start``).
+    headers : dict[str, str] or None
+        Response headers (``None`` if an error occurred before
+        ``http.response.start``).
+    body : bytes
+        Concatenated response body chunks.
+    error : dict or None
+        Error envelope dict with ``code``, ``message``, and ``context`` keys
+        when the app raised an exception before response start.
+    """
+
     request_id: str
     status_code: int | None = None
     headers: dict[str, str] | None = None
@@ -27,6 +91,19 @@ class DispatchResponse:
 
 
 def build_http_scope(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Build an ASGI 3 ``http`` scope dict from Verser envelope metadata.
+
+    Parameters
+    ----------
+    metadata : dict
+        Envelope metadata containing at least ``method``, ``path``, and
+        optionally ``headers``.
+
+    Returns
+    -------
+    dict
+        ASGI 3 scope dictionary (see module docstring for the full schema).
+    """
     split = urlsplit(str(metadata.get("path") or "/"))
     path = unquote(split.path or "/")
     headers = [
@@ -56,6 +133,43 @@ async def dispatch_asgi_request(
     body: bytes | list[bytes],
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
 ) -> DispatchResponse:
+    """Dispatch a single request through an ASGI app and collect the response.
+
+    This function drives the ASGI 3 protocol by:
+
+    1.  Building an ``http`` scope via :func:`build_http_scope`.
+    2.  Providing ``receive`` that yields ``http.request`` events from the
+        body chunks.
+    3.  Providing ``send`` that collects ``http.response.start`` and
+        ``http.response.body`` events into a buffered response.
+
+    If the app raises an exception **before** sending ``http.response.start``,
+    the exception is caught and returned as an error ``DispatchResponse`` with
+    code ``"local-handler-failure"``.
+
+    If the app raises an exception **after** sending ``http.response.start``,
+    the exception propagates. ``ResponseBodyTooLargeError`` is a buffered body
+    limit failure and is caught and returned as an error ``DispatchResponse``.
+
+    Parameters
+    ----------
+    app : ASGIApp
+        The ASGI 3 application callable.
+    guest_id : str
+        Identifier used in error context.
+    metadata : dict
+        Request envelope metadata.
+    body : bytes or list[bytes]
+        Request body chunks.
+    max_response_bytes : int
+        Maximum cumulative body size before raising
+        :exc:`ResponseBodyTooLargeError`.
+
+    Returns
+    -------
+    DispatchResponse
+        Frozen dataclass with the collected response or error.
+    """
     request_id = str(metadata.get("requestId") or "")
     started = False
     status_code = 200

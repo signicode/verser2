@@ -17,7 +17,24 @@ import h2.events
 
 
 class VerserBrokerResponse:
-    """Represent a broker routed response body with one-shot readers."""
+    """A routed response from a Verser Host with one-shot body readers.
+
+    The response body is consumed at most once.  Calling a reader method
+    a second time raises ``RuntimeError``.
+
+    Three reading strategies are available:
+
+    *   ``await .read()`` — returns the full body as ``bytes``.
+    *   ``await .text()`` — decodes the full body as UTF-8 ``str``.
+    *   ``await .json()`` — parses the full body as JSON.
+    *   ``async for chunk in .aiter_bytes(chunk_size)`` — yields streaming
+        chunks without buffering the entire body in memory.
+
+    The body may be pre-buffered ``bytes`` or an async iterable of ``bytes``
+    chunks (streamed from the Host).  ``read()``/``text()``/``json()`` always
+    collect and buffer the complete body first; ``aiter_bytes()`` yields
+    chunks incrementally.
+    """
 
     def __init__(
         self,
@@ -37,6 +54,7 @@ class VerserBrokerResponse:
         self._state = "unused"
 
     def _ensure_full_unused(self) -> None:
+        """Raise if the body was already read (fully) or is being streamed."""
         if self._state == "streamed":
             raise RuntimeError("Response body stream has already been consumed")
         if self._state == "consumed":
@@ -50,6 +68,15 @@ class VerserBrokerResponse:
         self._state = "streamed"
 
     async def read(self) -> bytes:
+        """Read the entire response body, buffering it in memory.
+
+        One-shot: raises ``RuntimeError`` if the body has already been
+        consumed or is being streamed.
+
+        Returns
+        -------
+        bytes
+        """
         self._ensure_full_unused()
         self._state = "consumed"
         if isinstance(self._body, bytes):
@@ -61,13 +88,49 @@ class VerserBrokerResponse:
         return self._body
 
     async def text(self) -> str:
+        """Read the response body and decode it as UTF-8.
+
+        One-shot (delegates to :meth:`read`).
+
+        Returns
+        -------
+        str
+        """
         return (await self.read()).decode("utf-8")
 
     async def json(self) -> Any:
+        """Read the response body and parse it as JSON.
+
+        One-shot (delegates to :meth:`read` then :func:`json.loads`).
+
+        Returns
+        -------
+        any
+        """
         payload = await self.text()
         return _json.loads(payload)
 
     async def aiter_bytes(self, chunk_size: int = 8192):
+        """Yield response body chunks as an async iterator.
+
+        If the body is already buffered as ``bytes``, chunks are produced
+        by slicing at *chunk_size* boundaries.  If the body is an async
+        iterable, chunks are forwarded as received from the stream.
+
+        One-shot: raises ``RuntimeError`` if called more than once or if
+        the body was already consumed via :meth:`read` / :meth:`text` /
+        :meth:`json`.
+
+        Parameters
+        ----------
+        chunk_size : int
+            Maximum chunk size in bytes (default 8192).  Only used when the
+            body is pre-buffered ; ignored for async-iterable bodies.
+
+        Yields
+        ------
+        bytes
+        """
         self._set_streaming()
         try:
             if not isinstance(self._body, bytes):
@@ -81,7 +144,40 @@ class VerserBrokerResponse:
 
 
 class VerserBroker:
-    """Track state needed by the broker control channel."""
+    """An outbound Verser Broker peer that issues routed HTTP requests.
+
+    The Broker connects to a Verser Host (TLS + HTTP/2), registers as role
+    ``"broker"``, opens a control stream to receive route advertisements, and
+    sends HTTP requests to target Guests via the Host's ``/verser/request``
+    endpoint.
+
+    URL hostname matching
+        The ``request()`` method extracts the hostname from the given URL and
+        matches it exactly against the Host-advertised route table.  No
+        wildcard or suffix matching is supported.  Raises ``RuntimeError`` if
+        no route matches the hostname.
+
+    Lifecycle
+        1. Instantiate with connection parameters and TLS options.
+        2. ``await broker.connect()`` — establishes TLS with ALPN ``h2``,
+           performs HTTP/2 handshake, registers with the Host, opens the
+           control stream, and begins consuming route frames.
+        3. ``await broker.request(...)`` — sends a routed request.
+        4. ``await broker.close()`` — tears down the connection gracefully.
+
+    The Broker can be used as an async context manager::
+
+        async with VerserBroker(host_url="...", broker_id="...") as broker:
+            resp = await broker.get("http://my-guest.example.com/path")
+            print(await resp.text())
+
+    TLS client identity
+        In addition to CA trust (``tls_ca_file``), the Broker supports PEM
+        client certificates (``tls_cert_file`` / ``tls_key_file`` /
+        ``tls_key_password``) and PFX/PKCS12 identity files
+        (``tls_pfx_file`` / ``tls_pfx_password``).  PFX support requires the
+        ``cryptography`` package.
+    """
 
     def __init__(
         self,
@@ -91,6 +187,32 @@ class VerserBroker:
         tls_ca_file: str | None = None,
         **options: Any,
     ) -> None:
+        """Initialise the Broker peer.
+
+        Parameters
+        ----------
+        host_url : str
+            The Host URL (e.g. ``"https://host.example.com:8443"``).
+        broker_id : str
+            A unique peer identifier for Host registration.  Must not collide
+            with any other peer ID on the same Host.
+        tls_ca_file : str or None
+            Path to a PEM CA bundle for verifying the Host's TLS certificate.
+        **options : any
+            Additional keyword arguments forwarded as attributes:
+
+            ``tls_cert_file``
+                Path to a PEM client certificate for mTLS client identity.
+            ``tls_key_file``
+                Path to the corresponding PEM private key.
+            ``tls_key_password``
+                Password for the private key (if encrypted).
+            ``tls_pfx_file``
+                Path to a PFX/PKCS12 file containing client identity (requires
+                ``cryptography``).
+            ``tls_pfx_password``
+                Password for the PFX/PKCS12 file.
+        """
         self.host_url = host_url
         self.broker_id = broker_id
         self.tls_ca_file = tls_ca_file
@@ -115,13 +237,42 @@ class VerserBroker:
         self._window_waiters: list[asyncio.Future[None]] = []
 
     async def __aenter__(self) -> "VerserBroker":
+        """Enter async context: calls :meth:`connect`."""
         await self.connect()
         return self
 
     async def __aexit__(self, _exc_type: Any, _exc: Any, _tb: Any) -> None:
+        """Exit async context: calls :meth:`close`."""
         await self.close()
 
     async def connect(self) -> None:
+        """Establish the outbound TLS+HTTP/2 connection and register with the Host.
+
+        The connection sequence is:
+
+        1.  Create an :class:`ssl.SSLContext` configured with ALPN ``h2``,
+            CA trust (``tls_ca_file``), and optional client identity (PEM or
+            PFX/PKCS12).
+        2.  Open a TCP+TLS connection to ``host_url``.
+        3.  Validate that TLS ALPN negotiated ``h2``; raises ``RuntimeError``
+            otherwise.
+        4.  Perform the HTTP/2 client preface.
+        5.  POST a JSON registration to ``/verser/register`` with ``peerId``
+            and ``role`` set to ``"broker"``.
+        6.  Open a control stream at ``/verser/register`` (registration
+            response contains initial route state).  Start consuming control
+            frames.
+
+        Calling ``connect()`` on an already-connected Broker is a no-op.
+
+        Raises
+        ------
+        RuntimeError
+            If TLS handshake fails, ALPN is not ``h2``, or the Host rejects
+            registration.
+        OSError
+            If the TCP or TLS connection fails.
+        """
         if self._conn is not None:
             return
 
@@ -221,6 +372,17 @@ class VerserBroker:
             )
 
     async def close(self, reason: str = "broker-close") -> None:
+        """Tear down the Broker connection.
+
+        Cancels reader and control tasks, fails any pending stream/flow-control
+        waiters, then closes the TCP/TLS writer and awaits graceful shutdown.
+
+        Parameters
+        ----------
+        reason : str
+            Reason string (not currently sent over the wire; reserved for
+            future use).
+        """
         del reason
         self._closed = True
         task = self._reader_task
@@ -361,6 +523,21 @@ class VerserBroker:
     ) -> VerserBrokerResponse:
         """Send a routed HTTP request to a target Guest via the Host.
 
+        The URL's hostname is matched exactly against the Host-advertised
+        route table.  If no route matches, ``RuntimeError`` is raised.
+
+        Body can be provided in several forms:
+
+        *   ``body`` — raw ``bytes``, a ``list``/``tuple`` of chunks, or an
+            async iterable of ``bytes``.
+        *   ``json`` — serialised as UTF-8 JSON; sets ``content-type`` to
+            ``application/json``.
+        *   ``text`` — encoded as UTF-8; sets ``content-type`` to
+            ``text/plain``.
+
+        Only one body form should be supplied; if more than one is given,
+        the priority is ``json`` > ``text`` > ``body``.
+
         Parameters
         ----------
         method : str
@@ -375,6 +552,21 @@ class VerserBroker:
             Convenience — serialised as JSON body with content-type hint.
         text : str
             Convenience — encoded as UTF-8 body with content-type hint.
+
+        Returns
+        -------
+        VerserBrokerResponse
+            A one-shot response object.  Read the body via ``.read()``,
+            ``.text()``, ``.json()``, or ``.aiter_bytes()``.
+
+        Raises
+        ------
+        RuntimeError
+            If the target domain has no advertised route, the response stream
+            is reset, or an error (HTTP 400+) response is received from the
+            Host (details are extracted from the error envelope).
+        ValueError
+            If the response stream ends before response headers are received.
         """
         parsed = urlsplit(url)
         hostname = parsed.hostname or ""
@@ -624,24 +816,73 @@ class VerserBroker:
         )
 
     async def get(self, url: str, **kwargs: Any) -> VerserBrokerResponse:
+        """Convenience: send a ``GET`` routed request.
+
+        See :meth:`request` for parameter and return details.
+        """
         return await self.request("GET", url, **kwargs)
 
     async def post(self, url: str, **kwargs: Any) -> VerserBrokerResponse:
+        """Convenience: send a ``POST`` routed request.
+
+        See :meth:`request` for parameter and return details.
+        """
         return await self.request("POST", url, **kwargs)
 
     async def put(self, url: str, **kwargs: Any) -> VerserBrokerResponse:
+        """Convenience: send a ``PUT`` routed request.
+
+        See :meth:`request` for parameter and return details.
+        """
         return await self.request("PUT", url, **kwargs)
 
     async def patch(self, url: str, **kwargs: Any) -> VerserBrokerResponse:
+        """Convenience: send a ``PATCH`` routed request.
+
+        See :meth:`request` for parameter and return details.
+        """
         return await self.request("PATCH", url, **kwargs)
 
     async def delete(self, url: str, **kwargs: Any) -> VerserBrokerResponse:
+        """Convenience: send a ``DELETE`` routed request.
+
+        See :meth:`request` for parameter and return details.
+        """
         return await self.request("DELETE", url, **kwargs)
 
     def get_routes(self) -> list[dict[str, str]]:
+        """Return a snapshot of the current advertised route table.
+
+        Each entry is a ``dict`` with ``"targetId"`` (str) and ``"domain"``
+        (str) keys.  The Host pushes route updates over the control stream;
+        this method returns the most recently received table.
+
+        Returns
+        -------
+        list[dict[str, str]]
+        """
         return [dict(route) for route in self._routes]
 
     async def wait_for_route(self, domain: str) -> None:
+        """Wait until a route for *domain* is advertised by the Host.
+
+        If the route is already present in the local route table, returns
+        immediately.  Otherwise creates an ``asyncio.Future`` that is resolved
+        when the next route control frame includes the requested domain.
+
+        The future is cancelled if the Broker is closed before the route is
+        advertised.
+
+        Parameters
+        ----------
+        domain : str
+            The exact hostname to wait for (matched via exact equality).
+
+        Raises
+        ------
+        asyncio.CancelledError
+            If the Broker is closed while waiting.
+        """
         if any(route.get("domain") == domain for route in self._routes):
             return
         loop = asyncio.get_running_loop()
@@ -811,7 +1052,7 @@ class VerserBroker:
         return normalized
 
     def _disconnected_error(self) -> VerserBrokerResponse:
-        raise RuntimeError("Broker routed requests are not implemented in this phase")
+        raise RuntimeError("Broker is not connected")
 
     async def _flush(self) -> None:
         async with self._io_lock:
@@ -837,4 +1078,17 @@ class VerserBroker:
 
 
 def create_verser_broker(**options: Any) -> VerserBroker:
+    """Create a :class:`VerserBroker` with the given keyword options.
+
+    This is a factory convenience wrapper around ``VerserBroker(**options)``.
+
+    Parameters
+    ----------
+    **options : Any
+        Forwarded directly to :class:`VerserBroker.__init__`.
+
+    Returns
+    -------
+    VerserBroker
+    """
     return VerserBroker(**options)

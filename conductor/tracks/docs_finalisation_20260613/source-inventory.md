@@ -110,3 +110,16 @@
 - Coverage: not applicable because Phase 1 changed only documentation and Conductor metadata/inventory artifacts.
 - Skipped validation: build/test were not run for Phase 1 because no runtime code, package exports, generated declarations, or behavior changed.
 - Branch/PR review: branch `docs-finalisation-20260613` tracks `origin/docs-finalisation-20260613`; PR #17 is open with title `Finalize task-focused verser2 documentation`, base `main`, and head `docs-finalisation-20260613`.
+
+## Phase 2 validation
+
+- Source-level API documentation changed only comments/docstrings and one stale internal Python Broker error string; no public API signatures changed.
+- Command: `npm run lint`
+  - Result: passed; Biome checked 118 files with no fixes applied.
+- Command: `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-guest-js-common && npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-guest-bun && npm run build --workspace=@signicode/verser2-host`
+  - Result: passed. Existing `dts-bundle-generator` warnings about composite projects and Bun declaration type-node collisions were emitted, but builds completed successfully.
+- Command: `python -m compileall -q packages/verser2-guest-python/src/verser2_guest_python`
+  - Result: passed with no output.
+- Automated review: source-level API docs were reviewed for accuracy and Node/Bun/Python wording consistency. Required fixes were applied for Guest attach/connect route advertisement, direct-dispatch wording, common package helper scope, body/header normalization wording, common Broker response body wording, and TLS trust wording.
+- Deferred to Phase 3: stale Markdown README/package README claims that describe Python Broker support as deferred or unimplemented. These are in the existing-doc consolidation task scope.
+- Coverage: not applicable because Phase 2 changed source documentation/docstrings only and did not add runtime behavior.
