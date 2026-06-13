@@ -63,9 +63,9 @@
     - [x] Run lint/format validation for changed source files.
     - [x] Run any TypeScript/Python validation not already covered by group reviews.
     - [x] Record commands run, results, skipped validation, and rationale.
-    - [ ] Create the scoped Phase 2 commit with a concise summary body.
-    - [ ] Push the branch/PR update for review before manual verification.
-    - [ ] Record the phase checkpoint commit SHA in `plan.md`.
+    - [x] Create the scoped Phase 2 commit with a concise summary body: `2eb2bb4`.
+    - [x] Push the branch/PR update for review before manual verification.
+    - [x] Record the phase checkpoint commit SHA in `plan.md`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Public API JSDoc and Python docstrings' (Protocol in workflow.md)
 
 ## Phase 3: Task-focused Markdown documentation
