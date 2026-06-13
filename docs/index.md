@@ -29,6 +29,8 @@ Three implemented roles work together:
   and client certificates.
 - [Lifecycle and errors](./lifecycle-and-errors.md) — lifecycle events, error
   handling, and reconnection.
+- [Development](./development.md) — repository setup, validation, and package
+  staging.
 
 ## Transport
 

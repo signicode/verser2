@@ -81,6 +81,15 @@ npm run stage:packages
 npm run test:package-tarballs
 ```
 
+Staged package READMEs are copied from each source package and rewritten so
+repository documentation links point at GitHub `blob/<sha-or-tag>/...` URLs.
+By default `npm run stage:packages` uses the current Git commit SHA. Set
+`VERSER_PACKAGE_DOCS_REF` to a release tag when staging tag-based packages:
+
+```sh
+VERSER_PACKAGE_DOCS_REF=v1.2.3 npm run stage:packages
+```
+
 The tarball behavior harness:
 
 - packs all staged packages with `npm pack`;

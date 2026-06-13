@@ -129,6 +129,8 @@
 - Task-focused docs were created under `docs/` for connecting, exposing handlers, making requests, routes, certificates, authorization, lifecycle, and errors.
 - Root and package READMEs were trimmed or added. Stale Python Broker deferred/unimplemented claims were removed; Python Broker is documented as implemented while Python Host remains unsupported.
 - `docs/ssl-certificate-generation.md` was removed after its certificate-generation and TLS setup content was consolidated into `docs/certificates.md`.
+- Development-oriented content removed from the root README was restored in `docs/development.md`, keeping package-consumer docs concise while preserving repository setup, validation, package staging, and packaging guidance.
+- Package staging now copies package READMEs and rewrites repository-relative documentation links to GitHub `blob/<sha-or-tag>/...` URLs. The default reference is the current Git commit SHA; `VERSER_PACKAGE_DOCS_REF` can supply a release tag.
 - Automated review checked source accuracy, Node/Bun/Python wording consistency, unsupported-feature boundaries, Python Broker URL-hostname examples, lifecycle API names, and Bun Broker wrapper wording. Required fixes were applied.
 - Command: `npm run lint`
   - Result: passed; Biome checked 118 files with no fixes applied.
@@ -136,4 +138,6 @@
   - Result: no matching files in active docs/package README scope.
 - Command: custom Python relative-link check across root README, `docs/*.md`, and `packages/*/README.md`.
   - Result: passed; checked 18 Markdown files.
+- Command: `CI=true node --test test/docs.test.js test/python-guest-documentation.test.js test/package-publish-readiness.test.js`
+  - Result: passed; 11 documentation/package-readiness tests passed, including staged package README GitHub documentation link checks.
 - Coverage: not applicable because Phase 3 changed Markdown documentation only.
