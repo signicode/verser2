@@ -101,14 +101,14 @@
     - [x] Confirm task docs agree with source inventory and source-level API docs.
     - [x] Confirm unsupported features are described only as unsupported/future work.
     - [x] Confirm duplicated long explanations were removed from README/package READMEs.
-- [~] Task: Phase 3 validation and checkpoint preparation
+- [x] Task: Phase 3 validation and checkpoint preparation
     - [x] Run relevant docs/link/lint validation if available.
     - [x] Run broader repository lint/build only if needed by Markdown or package README changes.
     - [x] Record commands run, results, skipped validation, and rationale.
-    - [x] Create the scoped Phase 3 commit with a concise summary body: `784131d`.
+    - [x] Create the scoped Phase 3 commit with a concise summary body: `784131d`; correction commit: `29bfa04`.
     - [x] Push the branch/PR update for review before manual verification.
     - [x] Record the phase checkpoint commit SHA in `plan.md`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Task-focused Markdown documentation' (Protocol in workflow.md)
+- [~] Task: Conductor - User Manual Verification 'Phase 3: Task-focused Markdown documentation' (Protocol in workflow.md)
 
 ## Phase 4: Codemaps, final review, and completion validation
 
