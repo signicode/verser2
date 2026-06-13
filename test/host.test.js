@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const http = require('node:http');
 const http2 = require('node:http2');
 const test = require('node:test');
 
@@ -323,6 +324,42 @@ test('Host authorizes local peer registration with Host-owned local metadata', a
     assert.deepEqual(contexts[1].routedDomains, []);
     assert.equal(contexts[1].certificate, undefined);
     assert.deepEqual(contexts[1].metadata, { local: true, authorized: true });
+  } finally {
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Host attaches local Guests from an http.Server request listener without listening', async () => {
+  const host = createHost({ port: 0 });
+  const server = http.createServer((request, response) => {
+    response.writeHead(204, { 'x-local-server': request.url });
+    response.end();
+  });
+
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-http-server-guest',
+      routedDomains: ['local-http-server.local.test'],
+      listener: server,
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-http-server-broker' });
+    await localBroker.waitForRoute('local-http-server.local.test');
+
+    const response = await localBroker.request({
+      targetId: 'local-http-server-guest',
+      method: 'GET',
+      path: '/server-listener',
+    });
+
+    assert.equal(server.listening, false);
+    assert.equal(response.statusCode, 204);
+    assert.equal(response.headers['x-local-server'], '/server-listener');
   } finally {
     if (localGuest !== undefined) await localGuest.close('test-complete');
     if (localBroker !== undefined) await localBroker.close('test-complete');

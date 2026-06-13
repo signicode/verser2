@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
+import * as http from 'node:http';
 import * as http2 from 'node:http2';
+import { PassThrough, Readable } from 'node:stream';
 import { text as readStreamText } from 'node:stream/consumers';
 import type { TLSSocket } from 'node:tls';
 
@@ -35,14 +37,141 @@ import type {
   VerserHostLifecycleEvent,
   VerserHostOptions,
   VerserHostRegistrationRequest,
+  VerserLocalBrokerHandle,
+  VerserLocalBrokerOptions,
+  VerserLocalBrokerRequest,
+  VerserLocalBrokerResponse,
+  VerserLocalGuestHandle,
+  VerserLocalGuestOptions,
+  VerserLocalGuestRequestListener,
 } from './types';
 import { toVerserError } from './utils';
 
 interface RegisteredPeer {
   readonly peerId: VerserPeerId;
   readonly role: VerserPeerRole;
-  readonly session: http2.Http2Session;
+  readonly transport: 'h2' | 'local';
+  readonly session?: http2.Http2Session;
   readonly controlStream?: http2.ServerHttp2Stream;
+  readonly localGuest?: LocalGuestState;
+  readonly localBroker?: LocalBrokerState;
+}
+
+interface LocalGuestState {
+  readonly listener: VerserLocalGuestRequestListener;
+}
+
+interface LocalBrokerState {
+  routes: RoutedDomainRegistration[];
+  routeWaiters: Map<string, (() => void)[]>;
+  requestCounter: number;
+  closed: boolean;
+}
+
+type LocalRequest = Readable & {
+  readonly method: string;
+  readonly url: string;
+  readonly headers: Record<string, string>;
+};
+
+class LocalIncomingMessage extends PassThrough implements LocalRequest {
+  public readonly method: string;
+
+  public readonly url: string;
+
+  public readonly headers: Record<string, string>;
+
+  public constructor(request: LocalDispatchRequest) {
+    super();
+    this.method = request.method;
+    this.url = request.path;
+    this.headers = request.headers;
+    request.body.once('error', (error) => this.destroy(error));
+    request.body.pipe(this);
+  }
+}
+
+interface LocalDispatchRequest {
+  readonly requestId: string;
+  readonly sourceId: string;
+  readonly targetId: string;
+  readonly method: string;
+  readonly path: string;
+  readonly headers: Record<string, string>;
+  readonly body: Readable;
+}
+
+class LocalServerResponse extends EventEmitter {
+  public statusCode = 200;
+
+  private readonly headers = new Map<string, string>();
+
+  private readonly bodyStream = new PassThrough();
+
+  private started = false;
+
+  public get headersStarted(): boolean {
+    return this.started;
+  }
+
+  public setHeader(name: string, value: string | number | boolean): this {
+    this.headers.set(name.toLowerCase(), String(value));
+    return this;
+  }
+
+  public getHeader(name: string): string | undefined {
+    return this.headers.get(name.toLowerCase());
+  }
+
+  public writeHead(
+    statusCode: number,
+    headers: Record<string, string | number | boolean> = {},
+  ): this {
+    this.statusCode = statusCode;
+    for (const [name, value] of Object.entries(headers)) {
+      this.setHeader(name, value);
+    }
+    return this;
+  }
+
+  public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
+    this.start();
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+    return this.bodyStream.write(buffer);
+  }
+
+  public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
+    if (chunk !== undefined) {
+      this.write(chunk, encoding);
+    } else {
+      this.start();
+    }
+    this.bodyStream.end();
+    this.emit('finish');
+    return this;
+  }
+
+  public toBrokerResponse(requestId: string): VerserLocalBrokerResponse {
+    return {
+      requestId,
+      statusCode: this.statusCode,
+      headers: flattenVerserHeaders(validateVerserHeaders(Object.fromEntries(this.headers))),
+      body: this.bodyStream,
+    };
+  }
+
+  public fail(error: Error): void {
+    this.bodyStream.destroy(error);
+    this.emit('error', error);
+  }
+
+  private start(): void {
+    if (this.started) {
+      return;
+    }
+    this.started = true;
+    this.emit('response');
+  }
 }
 
 interface GuestLeaseStream {
@@ -192,6 +321,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     for (const peer of this.peers.values()) {
       peer.controlStream?.close(http2.constants.NGHTTP2_NO_ERROR);
+      peer.localBroker?.routeWaiters.clear();
     }
 
     this.closeAllLeases();
@@ -216,6 +346,88 @@ export class NodeHttp2VerserHost implements VerserHost {
    */
   public getRoutedDomains(): RoutedDomainRegistration[] {
     return [...this.guestRegistrations.values()].flat();
+  }
+
+  public async attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle> {
+    const peerId = createPeerId(options.guestId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
+
+    await this.authorizeLocalRegistration(peerId, {
+      peerId,
+      role: 'guest',
+      routedDomains: [...(options.routedDomains ?? [])],
+    });
+
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'guest' });
+    this.peers.set(peerId, {
+      peerId,
+      role: 'guest',
+      transport: 'local',
+      localGuest: { listener: this.extractLocalGuestListener(peerId, options.listener) },
+    });
+    this.guestRegistrations.set(
+      peerId,
+      (options.routedDomains ?? []).map((domain) =>
+        createRoutedDomainRegistration({ targetId: peerId, domain }),
+      ),
+    );
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'guest' });
+    this.advertiseRoutes();
+
+    let closed = false;
+    return {
+      close: async (reason = 'local-guest-close') => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        this.detachLocalPeer(peerId, reason);
+      },
+    };
+  }
+
+  public async attachLocalBroker(
+    options: VerserLocalBrokerOptions,
+  ): Promise<VerserLocalBrokerHandle> {
+    const peerId = createPeerId(options.brokerId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
+
+    await this.authorizeLocalRegistration(peerId, {
+      peerId,
+      role: 'broker',
+      routedDomains: [],
+    });
+
+    const localBroker: LocalBrokerState = {
+      routes: this.getRoutedDomains(),
+      routeWaiters: new Map(),
+      requestCounter: 0,
+      closed: false,
+    };
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'broker' });
+    this.peers.set(peerId, { peerId, role: 'broker', transport: 'local', localBroker });
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'broker' });
+
+    return {
+      get routedRequestCount() {
+        return localBroker.requestCounter;
+      },
+      getRoutes: () => [...localBroker.routes],
+      waitForRoute: (domain: string) => this.waitForLocalBrokerRoute(localBroker, domain),
+      request: (request: VerserLocalBrokerRequest) =>
+        this.routeLocalBrokerRequest(peerId, localBroker, request),
+      close: async (reason = 'local-broker-close') => {
+        if (localBroker.closed) {
+          return;
+        }
+        localBroker.closed = true;
+        this.detachLocalPeer(peerId, reason);
+      },
+    };
   }
 
   /**
@@ -294,6 +506,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     const peer: RegisteredPeer = {
       peerId,
       role: registration.role,
+      transport: 'h2',
       session,
       controlStream: registration.role === 'broker' ? stream : undefined,
     };
@@ -376,6 +589,27 @@ export class NodeHttp2VerserHost implements VerserHost {
     return false;
   }
 
+  private extractLocalGuestListener(
+    peerId: VerserPeerId,
+    serverOrListener: VerserLocalGuestOptions['listener'],
+  ): VerserLocalGuestRequestListener {
+    if (serverOrListener instanceof http.Server) {
+      const listener = serverOrListener.listeners('request')[0];
+      if (listener === undefined) {
+        throw createVerserError(
+          'local-handler-failure',
+          'Attached HTTP server has no request listener',
+          {
+            guestId: peerId,
+          },
+        );
+      }
+      return listener as unknown as VerserLocalGuestRequestListener;
+    }
+
+    return serverOrListener;
+  }
+
   private getCertificateIdentity(tlsSocket: TLSSocket): VerserCertificateIdentity | undefined {
     return extractCertificateIdentity(
       tlsSocket.getPeerCertificate(true),
@@ -383,9 +617,256 @@ export class NodeHttp2VerserHost implements VerserHost {
     );
   }
 
+  private async authorizeLocalRegistration(
+    peerId: VerserPeerId,
+    registration: VerserRegistrationRequest,
+  ): Promise<void> {
+    const callback = this.options.tls?.clientAuth?.authorizeRegistration;
+    if (callback === undefined) {
+      return;
+    }
+
+    const action = await callback({
+      peerId,
+      role: registration.role,
+      routedDomains: registration.routedDomains ?? [],
+      certificate: undefined,
+      metadata: { local: true, authorized: true },
+    });
+    if (action.action === 'allow') {
+      return;
+    }
+
+    const reason = action.reason ?? 'registration rejected by local peer policy';
+    const error = createVerserError('invalid-registration', reason, {
+      peerId,
+      role: registration.role,
+    });
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.error,
+      peerId,
+      role: registration.role,
+      error,
+    });
+    throw error;
+  }
+
+  private detachLocalPeer(peerId: VerserPeerId, reason: string): void {
+    const peer = this.peers.get(peerId);
+    if (peer === undefined || peer.transport !== 'local') {
+      return;
+    }
+
+    this.peers.delete(peerId);
+    const shouldAdvertiseRoutes = peer.role === 'guest';
+    if (shouldAdvertiseRoutes) {
+      this.guestRegistrations.delete(peerId);
+      this.closeGuestLeases(peerId);
+      this.failQueuedLeaseAcquisitions(peerId, reason);
+    }
+    peer.localBroker?.routeWaiters.clear();
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.disconnected,
+      peerId,
+      role: peer.role,
+      reason,
+    });
+    if (shouldAdvertiseRoutes) {
+      this.advertiseRoutes();
+    }
+  }
+
+  private waitForLocalBrokerRoute(broker: LocalBrokerState, domain: string): Promise<void> {
+    if (broker.routes.some((route) => route.domain === domain)) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      broker.routeWaiters.set(domain, [...(broker.routeWaiters.get(domain) ?? []), resolve]);
+    });
+  }
+
+  private routeLocalBrokerRequest(
+    sourceId: VerserPeerId,
+    broker: LocalBrokerState,
+    request: VerserLocalBrokerRequest,
+  ): Promise<VerserLocalBrokerResponse> {
+    if (broker.closed) {
+      return Promise.reject(createVerserError('disconnected-target', 'Local Broker is closed'));
+    }
+
+    const requestId = `${sourceId}-${++broker.requestCounter}`;
+    const targetId = createPeerId(request.targetId);
+    const body = this.toReadableBody(request.body);
+    return this.routeLocalRequest({
+      requestId,
+      sourceId,
+      targetId,
+      method: request.method,
+      path: request.path,
+      headers: flattenVerserHeaders(validateVerserHeaders(request.headers ?? {})),
+      body,
+    });
+  }
+
+  private async routeLocalRequest(
+    request: LocalDispatchRequest,
+  ): Promise<VerserLocalBrokerResponse> {
+    const target = this.peers.get(request.targetId);
+    if (target === undefined || target.role !== 'guest') {
+      throw createVerserError('missing-guest', 'Target Guest is not registered', {
+        targetId: request.targetId,
+      });
+    }
+
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.requestStarted,
+      peerId: request.targetId,
+      role: 'guest',
+    });
+    try {
+      const response =
+        target.transport === 'local'
+          ? await this.routeLocalRequestToLocalGuest(request, target)
+          : await this.routeLocalRequestToH2Guest(request);
+      this.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
+        peerId: request.targetId,
+        role: 'guest',
+      });
+      return response;
+    } catch (error) {
+      const verserError = toVerserError(error);
+      this.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.error,
+        peerId: request.targetId,
+        role: 'guest',
+        error: verserError,
+      });
+      throw verserError;
+    }
+  }
+
+  private routeLocalRequestToLocalGuest(
+    request: LocalDispatchRequest,
+    target: RegisteredPeer,
+  ): Promise<VerserLocalBrokerResponse> {
+    const localGuest = target.localGuest;
+    if (localGuest === undefined) {
+      return Promise.reject(
+        createVerserError('disconnected-target', 'Target local Guest is not attached', {
+          targetId: request.targetId,
+        }),
+      );
+    }
+
+    const localRequest = new LocalIncomingMessage(request);
+    const localResponse = new LocalServerResponse();
+    return new Promise((resolve, reject) => {
+      const rejectBeforeResponse = (error: unknown): void => {
+        reject(
+          createVerserError('local-handler-failure', this.getErrorMessage(error), {
+            targetId: request.targetId,
+            requestId: request.requestId,
+            path: request.path,
+          }),
+        );
+      };
+      localResponse.once('response', () =>
+        resolve(localResponse.toBrokerResponse(request.requestId)),
+      );
+      localResponse.once('error', (error) => {
+        if (localResponse.headersStarted) {
+          return;
+        }
+        rejectBeforeResponse(error);
+      });
+
+      try {
+        localGuest.listener(localRequest, localResponse);
+      } catch (error) {
+        const verserError = createVerserError(
+          'local-handler-failure',
+          this.getErrorMessage(error),
+          {
+            targetId: request.targetId,
+            requestId: request.requestId,
+            path: request.path,
+          },
+        );
+        if (localResponse.headersStarted) {
+          localResponse.fail(verserError);
+          resolve(localResponse.toBrokerResponse(request.requestId));
+          return;
+        }
+        reject(verserError);
+      }
+    });
+  }
+
+  private async routeLocalRequestToH2Guest(
+    request: LocalDispatchRequest,
+  ): Promise<VerserLocalBrokerResponse> {
+    const lease = await this.acquireLease(request.targetId, request.requestId, 30_000);
+    const responsePromise = readLeaseResponseMetadataFromStream(lease.stream, {
+      requestId: request.requestId,
+      targetId: request.targetId,
+    });
+    lease.stream.write(
+      encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId: request.requestId,
+          sourceId: request.sourceId,
+          targetId: request.targetId,
+          method: request.method,
+          path: request.path,
+          headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
+        },
+      }),
+    );
+    request.body.once('error', (error) => lease.stream.destroy(error));
+    request.body.pipe(lease.stream);
+    const metadata = await responsePromise;
+    return {
+      requestId: request.requestId,
+      statusCode: metadata.statusCode,
+      headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),
+      body: lease.stream,
+    };
+  }
+
+  private toReadableBody(body: VerserLocalBrokerRequest['body']): Readable {
+    if (body === undefined) {
+      return Readable.from([]);
+    }
+    if (body instanceof Readable) {
+      return body;
+    }
+    return Readable.from(body);
+  }
+
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
   private advertiseRoutes(): void {
     const routes = this.getRoutedDomains();
     for (const peer of this.peers.values()) {
+      if (peer.role === 'broker' && peer.transport === 'local' && peer.localBroker !== undefined) {
+        peer.localBroker.routes = [...routes];
+        for (const route of routes) {
+          for (const resolve of peer.localBroker.routeWaiters.get(route.domain) ?? []) {
+            resolve();
+          }
+          peer.localBroker.routeWaiters.delete(route.domain);
+        }
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
+          peerId: peer.peerId,
+          role: peer.role,
+        });
+        continue;
+      }
       if (
         peer.role === 'broker' &&
         peer.controlStream !== undefined &&
@@ -464,6 +945,18 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (target === undefined) {
       throw createVerserError('missing-guest', 'Target Guest is not registered', { targetId });
     }
+    if (target.role !== 'guest') {
+      throw createVerserError('missing-guest', 'Target peer is not a Guest', { targetId });
+    }
+    if (target.transport === 'local') {
+      await this.routeH2BrokerRequestToLocalGuest(
+        stream,
+        headers,
+        requestId,
+        createPeerId(targetId),
+      );
+      return;
+    }
     const lease = await this.tryAcquireLease(
       createPeerId(targetId),
       requestId,
@@ -480,6 +973,35 @@ export class NodeHttp2VerserHost implements VerserHost {
       parseLeaseAcquireTimeoutMs(headers),
     );
     await this.routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
+  }
+
+  private async routeH2BrokerRequestToLocalGuest(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+    requestId: string,
+    targetId: VerserPeerId,
+  ): Promise<void> {
+    const response = await this.routeLocalRequest({
+      requestId,
+      sourceId: String(headers['x-verser-source-id'] ?? ''),
+      targetId,
+      method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
+      path: String(headers['x-verser-path'] ?? '/'),
+      headers: flattenVerserHeaders(
+        validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+      ),
+      body: stream,
+    });
+    stream.respond({
+      ':status': response.statusCode,
+      ...validateVerserHeaders(response.headers),
+    });
+    response.body.once('error', () => {
+      if (!stream.closed) {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    });
+    response.body.pipe(stream);
   }
 
   private async routeBrokerRequestOverLease(

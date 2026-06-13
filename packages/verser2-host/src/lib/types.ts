@@ -1,4 +1,6 @@
+import type { Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { Readable } from 'node:stream';
 
 import type {
   VerserPeerRole as CommonVerserPeerRole,
@@ -41,6 +43,66 @@ export interface VerserHostOptions {
  * @public
  */
 export type VerserHostRegistrationRequest = VerserRegistrationRequest;
+
+/** Minimal Node-compatible request listener used by local Host-side Guests. */
+export type VerserLocalGuestRequestListener = (
+  request: Readable & {
+    readonly method: string;
+    readonly url: string;
+    readonly headers: Record<string, string>;
+  },
+  response: {
+    statusCode: number;
+    setHeader(name: string, value: string | number | boolean): unknown;
+    getHeader(name: string): string | undefined;
+    writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): unknown;
+    write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
+    end(chunk?: string | Buffer, encoding?: BufferEncoding): unknown;
+  },
+) => void;
+
+/** Options for attaching an in-process Guest directly to the Host. */
+export interface VerserLocalGuestOptions {
+  readonly guestId: string;
+  readonly routedDomains?: readonly string[];
+  readonly listener: VerserLocalGuestRequestListener | HttpServer;
+}
+
+/** Options for attaching an in-process Broker directly to the Host. */
+export interface VerserLocalBrokerOptions {
+  readonly brokerId: string;
+}
+
+/** Request shape accepted by an in-process Broker handle. */
+export interface VerserLocalBrokerRequest {
+  readonly targetId: string;
+  readonly method: string;
+  readonly path: string;
+  readonly headers?: Record<string, string>;
+  readonly body?: readonly Buffer[] | Readable;
+}
+
+/** Response shape returned by an in-process Broker handle. */
+export interface VerserLocalBrokerResponse {
+  readonly requestId: string;
+  readonly statusCode: number;
+  readonly headers: Record<string, string>;
+  readonly body: Readable;
+}
+
+/** Handle returned for an attached in-process Guest. */
+export interface VerserLocalGuestHandle {
+  close(reason?: string): Promise<void>;
+}
+
+/** Handle returned for an attached in-process Broker. */
+export interface VerserLocalBrokerHandle {
+  readonly routedRequestCount: number;
+  getRoutes(): RoutedDomainRegistration[];
+  waitForRoute(domain: string): Promise<void>;
+  request(request: VerserLocalBrokerRequest): Promise<VerserLocalBrokerResponse>;
+  close(reason?: string): Promise<void>;
+}
 
 /**
  * A lifecycle event emitted by the Verser Host.
@@ -126,6 +188,10 @@ export interface VerserHost {
    * @returns The current route table.
    */
   getRoutedDomains(): RoutedDomainRegistration[];
+  /** Attaches an in-process local Guest without opening a TLS HTTP/2 connection. */
+  attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle>;
+  /** Attaches an in-process local Broker without opening a TLS HTTP/2 connection. */
+  attachLocalBroker(options: VerserLocalBrokerOptions): Promise<VerserLocalBrokerHandle>;
   /**
    * Subscribes to Host lifecycle events.
    *

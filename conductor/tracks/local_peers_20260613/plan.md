@@ -55,48 +55,54 @@
 
 ## Phase 2: Local Host peer implementation, streaming routing, and public API integration
 
-- [ ] Task: Implement transport-neutral Host peer registration and route state
-    - [ ] Introduce or refactor internal Host peer state so local peers and H2 peers share duplicate ID checks, registration storage, route table updates, and cleanup semantics.
-    - [ ] Keep the existing H2 `/verser/register`, `/verser/guest/control`, `/verser/guest/lease`, and `/verser/request` behavior compatible.
-    - [ ] Add Host local attachment primitives for local Guest and local Broker registration handles.
-    - [ ] Ensure local handles expose deterministic close/detach behavior.
-    - [ ] Make local Brokers receive route-control updates with the same full route-table replacement semantics as H2 Brokers.
-    - [ ] Ensure local Guest registration and detachment advertise additions and removals to all Brokers, local and H2.
-    - [ ] Preserve `getRoutedDomains()` behavior for both local and H2 Guests.
-- [ ] Task: Implement local registration authorization
-    - [ ] Reuse the existing Host `authorizeRegistration` callback for local peers.
-    - [ ] Build local authorization context inside Host code, not from caller-provided metadata.
-    - [ ] Use `certificate: undefined` and metadata indicating local trusted transport state, such as `local: true` and `authorized: true`.
-    - [ ] Map callback rejection to the same style of invalid-registration error and lifecycle error behavior as H2 registration.
-    - [ ] Preserve H2 authorization context behavior from TLS socket state.
-- [ ] Task: Implement local Guest dispatch by short-wiring existing Guest behavior where practical
-    - [ ] Reuse or adapt Node Guest minimal HTTP request/response handling for local Guest request listeners.
-    - [ ] Avoid using the buffered `dispatchRoutedRequest()` path as the primary local routing implementation.
-    - [ ] Bridge Host-routed request streams into local Guest handlers and stream local responses back to the requester.
-    - [ ] Preserve local handler failure behavior before and after headers start.
-- [ ] Task: Implement local Broker request routing and H2/local interop
-    - [ ] Provide a local Broker `request()` primitive that sends requests through Host target checks and routing state.
-    - [ ] Preserve request IDs, source IDs, target IDs, methods, paths, validated headers, lease/acquisition timeout semantics where applicable, and response streaming.
-    - [ ] Reuse existing Broker route-table/waiter logic where practical.
-    - [ ] Allow H2 Broker requests to acquire and dispatch to local Guest targets.
-    - [ ] Allow local Broker requests to dispatch to H2 Guest lease streams.
-    - [ ] Preserve existing H2 lease cleanup and cancellation behavior.
-    - [ ] Prevent local peer cleanup from closing unrelated H2 sessions or streams.
-- [ ] Task: Implement public API exports and Node-facing convenience wrappers
-    - [ ] Add Host package types for local Guest attachment options, local Broker attachment options, local handles, local route control, request, and response shapes as needed.
-    - [ ] Export only stable public APIs from package entrypoints.
-    - [ ] Keep transport-specific or runtime-specific internals private.
-    - [ ] Reuse guest-node request listener extraction and minimal HTTP behavior for local Guest attachment where appropriate.
-    - [ ] Reuse guest-node Broker route/request helpers for local Broker wrappers where practical.
-    - [ ] Keep `undici`-dependent wrappers in `@signicode/verser2-guest-node`, not in `@signicode/verser2-host`.
-    - [ ] Ensure declaration generation succeeds for new public types.
-- [ ] Task: Validate Phase 2 narrowly
-    - [ ] Run focused Host tests for local registration, route advertisement, duplicate ID handling, lifecycle, authorization, routing, streaming, and error behavior.
-    - [ ] Run focused package API tests for Host and guest-node surfaces.
-    - [ ] Run focused existing H2 Host/Guest/Broker tests touched by registration and routing refactors to prove compatibility.
-    - [ ] Run package build for affected packages to verify generated declarations.
-    - [ ] Run lint for affected packages.
-    - [ ] Record coverage status for changed registration, routing, streaming, authorization, and API behavior.
+- [x] Task: Implement transport-neutral Host peer registration and route state
+    - [x] Introduce or refactor internal Host peer state so local peers and H2 peers share duplicate ID checks, registration storage, route table updates, and cleanup semantics.
+    - [x] Keep the existing H2 `/verser/register`, `/verser/guest/control`, `/verser/guest/lease`, and `/verser/request` behavior compatible.
+    - [x] Add Host local attachment primitives for local Guest and local Broker registration handles.
+    - [x] Ensure local handles expose deterministic close/detach behavior.
+    - [x] Make local Brokers receive route-control updates with the same full route-table replacement semantics as H2 Brokers.
+    - [x] Ensure local Guest registration and detachment advertise additions and removals to all Brokers, local and H2.
+    - [x] Preserve `getRoutedDomains()` behavior for both local and H2 Guests.
+- [x] Task: Implement local registration authorization
+    - [x] Reuse the existing Host `authorizeRegistration` callback for local peers.
+    - [x] Build local authorization context inside Host code, not from caller-provided metadata.
+    - [x] Use `certificate: undefined` and metadata indicating local trusted transport state, such as `local: true` and `authorized: true`.
+    - [x] Map callback rejection to the same style of invalid-registration error and lifecycle error behavior as H2 registration.
+    - [x] Preserve H2 authorization context behavior from TLS socket state.
+- [x] Task: Implement local Guest dispatch by short-wiring existing Guest behavior where practical
+    - [x] Reuse or adapt Node Guest minimal HTTP request/response handling for local Guest request listeners.
+    - [x] Avoid using the buffered `dispatchRoutedRequest()` path as the primary local routing implementation.
+    - [x] Bridge Host-routed request streams into local Guest handlers and stream local responses back to the requester.
+    - [x] Preserve local handler failure behavior before and after headers start.
+
+    Recovery note: `node --test test/host.test.js test/broker-routing.test.js` initially timed out after local streaming/routing changes. Following `conductor/known-solutions.md`, the hang was reproduced with `--test-name-pattern` and `--test-timeout`; root cause was session-introduced and in scope. An H2 Broker connected after a local Guest ignored the initial registration route snapshot, so `waitForRoute()` never settled. `Http2VerserBroker` now treats registration frames with `routes` as route-table replacement frames.
+- [x] Task: Implement local Broker request routing and H2/local interop
+    - [x] Provide a local Broker `request()` primitive that sends requests through Host target checks and routing state.
+    - [x] Preserve request IDs, source IDs, target IDs, methods, paths, validated headers, lease/acquisition timeout semantics where applicable, and response streaming.
+    - [x] Reuse existing Broker route-table/waiter logic where practical.
+    - [x] Allow H2 Broker requests to acquire and dispatch to local Guest targets.
+    - [x] Allow local Broker requests to dispatch to H2 Guest lease streams.
+    - [x] Preserve existing H2 lease cleanup and cancellation behavior.
+    - [x] Prevent local peer cleanup from closing unrelated H2 sessions or streams.
+- [x] Task: Implement public API exports and Node-facing convenience wrappers
+    - [x] Add Host package types for local Guest attachment options, local Broker attachment options, local handles, local route control, request, and response shapes as needed.
+    - [x] Export only stable public APIs from package entrypoints.
+    - [x] Keep transport-specific or runtime-specific internals private.
+    - [x] Reuse guest-node request listener extraction and minimal HTTP behavior for local Guest attachment where appropriate.
+    - [x] Reuse guest-node Broker route/request helpers for local Broker wrappers where practical.
+    - [x] Keep `undici`-dependent wrappers in `@signicode/verser2-guest-node`, not in `@signicode/verser2-host`.
+    - [x] Ensure declaration generation succeeds for new public types.
+
+    API note: Phase 2 exposes stable local peer primitives from `@signicode/verser2-host`. Runtime-specific Agent/Dispatcher/fetch helpers remain in `@signicode/verser2-guest-node`; the Host local Broker handle keeps the same `request()`/`getRoutes()` router shape those helpers use without importing `undici` into the Host package.
+- [x] Task: Validate Phase 2 narrowly
+    - [x] Run focused Host tests for local registration, route advertisement, duplicate ID handling, lifecycle, authorization, routing, streaming, and error behavior.
+    - [x] Run focused package API tests for Host and guest-node surfaces.
+    - [x] Run focused existing H2 Host/Guest/Broker tests touched by registration and routing refactors to prove compatibility.
+    - [x] Run package build for affected packages to verify generated declarations.
+    - [x] Run lint for affected packages.
+    - [x] Record coverage status for changed registration, routing, streaming, authorization, and API behavior.
+
+    Validation note: `npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run lint && node --test --test-timeout=10000 test/host.test.js test/broker-routing.test.js test/agent.test.js test/dispatcher.test.js` passed. Exact percentage coverage is not emitted by the current focused runner; changed behavior is covered by focused success, failure, streaming, authorization, duplicate ID, local/H2 interop, Agent, and Dispatcher suites.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Local Host peer implementation, streaming routing, and public API integration' (Protocol in workflow.md)
     - [ ] Commit and push the Phase 2 checkpoint branch before requesting manual validation so the PR is current.
     - [ ] Request user manual validation after the pushed checkpoint is available.
