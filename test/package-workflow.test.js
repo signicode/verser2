@@ -22,14 +22,14 @@ test('package publish workflow is defined', () => {
   );
 });
 
-test('workflow supports pull request and main/tag push triggers', () => {
+test('workflow supports pull request and unfiltered main/tag push triggers', () => {
   const content = loadWorkflow();
   assert.match(content, /\non:\s*\n[\s\S]*?pull_request:/);
   assert.match(content, /pull_request:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
   assert.match(content, /push:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
   assert.match(content, /tags:\n[\s\S]*?-\s*'v\*'/);
   assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'packages\/\*\/src\/\*\*'/);
-  assert.match(content, /push:[\s\S]*?paths:[\s\S]*?-\s*'test\/\*\*'/);
+  assert.equal(/push:[\s\S]*?paths:/.test(content), false);
   assert.equal(/conductor\/\*\*/.test(content), false);
   assert.equal(/docs\/\*\*/.test(content), false);
 });
