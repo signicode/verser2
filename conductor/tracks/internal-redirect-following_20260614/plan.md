@@ -39,11 +39,12 @@
     - [x] Run focused failing tests to confirm expected failures and no unrelated failures.
     - [x] Review test quality and scope against the specification.
     - [x] Fix test scaffolding issues before requesting manual verification.
-- [~] Task: Phase checkpoint before manual review
+- [x] Task: Phase checkpoint before manual review
     - [x] Run the narrowest validation suitable for the phase.
-    - [ ] Commit the completed phase changes with a scoped phase summary.
-    - [ ] Push the phase checkpoint branch before asking for manual verification.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Redirect Design Inventory and Test Scaffolding' (Protocol in workflow.md)
+    - [x] Commit the completed phase changes with a scoped phase summary.
+    - [x] Push the phase checkpoint branch before asking for manual verification.
+        - Checkpoint commit: `78a1b88`.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Redirect Design Inventory and Test Scaffolding' (Protocol in workflow.md)
 
 ## Phase 2: Direct Broker Redirect Implementation
 
@@ -70,11 +71,12 @@
     - [x] Run automated code review or equivalent self-review against redirect semantics, replay limits, route-table lookup, and error paths.
     - [x] Fix review findings that are in scope before requesting manual verification.
     - [x] Re-run focused validation after fixes.
-- [~] Task: Phase checkpoint before manual review
+- [x] Task: Phase checkpoint before manual review
     - [x] Run the narrowest validation suitable for the phase.
-    - [ ] Commit the completed phase changes with a scoped phase summary.
-    - [ ] Push the phase checkpoint branch before asking for manual verification.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Direct Broker Redirect Implementation' (Protocol in workflow.md)
+    - [x] Commit the completed phase changes with a scoped phase summary.
+    - [x] Push the phase checkpoint branch before asking for manual verification.
+        - Checkpoint commit: `78a1b88`.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Direct Broker Redirect Implementation' (Protocol in workflow.md)
 
 ## Phase 3: Agent, Dispatcher, Fetch, and Documentation Integration
 
@@ -103,8 +105,9 @@
     - [x] Run automated code review or equivalent self-review across direct Broker, Agent, Dispatcher/fetch, docs, and tests.
     - [x] Fix in-scope review findings before requesting manual verification.
     - [x] Re-run focused validation after fixes.
-- [~] Task: Phase checkpoint before manual review
+- [x] Task: Phase checkpoint before manual review
     - [x] Run the narrowest validation suitable for the phase.
-    - [ ] Commit the completed phase changes with a scoped phase summary.
-    - [ ] Push the phase checkpoint branch before asking for manual verification.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Agent, Dispatcher, Fetch, and Documentation Integration' (Protocol in workflow.md)
+    - [x] Commit the completed phase changes with a scoped phase summary.
+    - [x] Push the phase checkpoint branch before asking for manual verification.
+        - Checkpoint commit: `78a1b88`.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Agent, Dispatcher, Fetch, and Documentation Integration' (Protocol in workflow.md)
