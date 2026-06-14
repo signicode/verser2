@@ -2,6 +2,8 @@
 
 This runbook describes the release-engineering helpers for preparing Verser2 workspace packages for GitHub Packages validation. It does not change Host, Guest, Broker, Peer, HTTP routing, or streaming behavior.
 
+For the end-to-end release commit, tag, publish, and post-release bump procedure, see [Release procedure](./release-procedure.md).
+
 ## Version and dist-tag policy
 
 Use `npm run package:version-policy` to inspect how a package version maps to publish metadata.
