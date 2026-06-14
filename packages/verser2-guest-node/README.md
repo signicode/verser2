@@ -66,6 +66,10 @@ original method, headers, path/query, and replayable body, and is bounded by
 not advertised, the original redirect response is returned unchanged. Exceeding
 the redirect count fails with a `protocol-error`.
 
+`broker.createFetch()` defaults Undici's redirect option to `manual` so fallback
+redirect responses remain visible to callers instead of being followed through
+DNS. Pass an explicit `redirect` option to override that fetch-level behavior.
+
 ## Caveats
 
 - Node Guest/Broker use outbound TLS HTTP/2.

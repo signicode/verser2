@@ -132,6 +132,10 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   public request(request: VerserBrokerRequest): Promise<VerserBrokerResponse> {
+    if (this.session === undefined) {
+      return Promise.reject(createVerserError('disconnected-target', 'Broker is not connected'));
+    }
+
     const maxInternalRedirects =
       this.options.maxInternalRedirects ?? DEFAULT_MAX_INTERNAL_REDIRECTS;
     const replayBufferLimit =
@@ -237,7 +241,12 @@ export class Http2VerserBroker implements VerserBroker {
       }
 
       if (body instanceof nodeStream.Readable) {
-        body.once('error', reject);
+        body.once('error', (error) => {
+          if (!stream.closed && !stream.destroyed) {
+            stream.close(http2.constants.NGHTTP2_CANCEL);
+          }
+          reject(error);
+        });
         body.pipe(stream);
         return;
       }
@@ -282,11 +291,9 @@ export class Http2VerserBroker implements VerserBroker {
     let replayable = true;
     let streamError: Error | undefined;
     let resolveReplayBody: (body: readonly Buffer[] | undefined) => void = () => {};
-    let rejectReplayBody: (error: Error) => void = () => {};
     let replayDecisionSettled = false;
-    const replayDecision = new Promise<readonly Buffer[] | undefined>((resolve, reject) => {
+    const replayDecision = new Promise<readonly Buffer[] | undefined>((resolve) => {
       resolveReplayBody = resolve;
-      rejectReplayBody = reject;
     });
     const settleReplayDecision = (replayBody: readonly Buffer[] | undefined): void => {
       if (replayDecisionSettled) {
@@ -295,33 +302,29 @@ export class Http2VerserBroker implements VerserBroker {
       replayDecisionSettled = true;
       resolveReplayBody(replayBody);
     };
-    const rejectReplayDecision = (error: Error): void => {
-      if (replayDecisionSettled) {
-        return;
-      }
-      replayDecisionSettled = true;
-      rejectReplayBody(error);
-    };
-
     body.on('data', (chunk: Buffer | string) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       totalBytes += buffer.length;
       if (totalBytes > replayBufferLimit) {
         replayable = false;
         replayChunks.length = 0;
-        settleReplayDecision(undefined);
-        return;
+      } else if (replayable) {
+        replayChunks.push(Buffer.from(buffer));
       }
-      replayChunks.push(Buffer.from(buffer));
+      if (!tee.write(buffer)) {
+        body.pause();
+        tee.once('drain', () => body.resume());
+      }
     });
     body.once('end', () => {
+      tee.end();
       settleReplayDecision(replayable ? replayChunks : undefined);
     });
     body.once('error', (error) => {
       streamError = error;
-      rejectReplayDecision(error);
+      tee.destroy(error);
+      settleReplayDecision(undefined);
     });
-    body.pipe(tee);
 
     return {
       body: tee,

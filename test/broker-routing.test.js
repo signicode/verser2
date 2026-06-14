@@ -165,6 +165,41 @@ test('Broker connects, receives route advertisements, and forwards requests to a
   }
 });
 
+test('Broker request rejects when a Readable upload body errors', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let broker;
+  let guest;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-upload-error' });
+    guest = createGuest({ hostUrl, guestId: 'guest-upload-error' });
+    guest.attach((_request, response) => {
+      setTimeout(() => response.end('too-late'), 250);
+    }, 'upload-error.local.test');
+
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('upload-error.local.test');
+
+    const body = new PassThrough();
+    const responsePromise = broker.request({
+      targetId: 'guest-upload-error',
+      method: 'POST',
+      path: '/upload',
+      body,
+    });
+    body.destroy(new Error('upload failed'));
+
+    await assert.rejects(() => responsePromise, /upload failed/);
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Broker follows 307 internal redirects to advertised routes and replays request bodies', async () => {
   const host = createHost({ port: 0 });
   await host.start();
