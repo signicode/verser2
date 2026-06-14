@@ -9,6 +9,7 @@
     "build": "npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-guest-js-common && npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run build --workspace=@signicode/verser2-guest-bun && npm run build --workspace=@signicode/verser2-guest-python",
     "stage:packages": "node ./scripts/stage-packages.js",
     "package:version-policy": "node ./scripts/package-version-policy.js",
+    "package:prepare-release": "node ./scripts/prepare-release.js",
     "test:package-consumers": "node ./scripts/test-package-consumers.js",
     "test:package-tarballs": "node ./scripts/test-package-tarballs.js",
     "test": "npm run build && npm run stage:packages && node --test test/*.test.js",

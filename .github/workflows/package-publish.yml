@@ -23,20 +23,6 @@ on:
       - main
     tags:
       - 'v*'
-    paths:
-      - '.github/workflows/package-publish.yml'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'biome.json'
-      - 'biome.jsonc'
-      - 'tsconfig*.json'
-      - 'packages/*/package.json'
-      - 'packages/*/tsconfig*.json'
-      - 'packages/*/pyproject.toml'
-      - 'packages/*/src/**'
-      - 'packages/*/scripts/**'
-      - 'scripts/**'
-      - 'test/**'
 
 jobs:
   package-validation:
