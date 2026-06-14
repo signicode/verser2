@@ -1,0 +1,113 @@
+# Implementation Plan: Broker Internal Redirect Following
+
+## Phase 1: Track Branch and PR Setup, Architectural Inventory and Test Scaffolding
+
+- [x] Task: Create the Conductor review branch
+    - [x] Confirm current working tree status and avoid staging unrelated changes.
+    - [x] Create a dedicated branch for this track before implementation work.
+    - [x] Use a branch name based on the track id and redirect-following scope.
+- [x] Task: Create the track pull request review surface
+    - [x] Push the dedicated branch.
+    - [x] Create a GitHub pull request with a title and body describing the final TO-BE behavior: Brokers follow eligible internal 307/308 redirects for advertised routes by default with bounded replay and configurable limits.
+    - [x] Use a real multiline PR body file as required by `workflow.md`.
+- [x] Task: Confirm affected Broker request surfaces and route-table behavior
+    - [x] Review `packages/verser2-guest-node/src/lib/http2-verser-broker.ts` direct request flow.
+    - [x] Review `packages/verser2-guest-node/src/lib/broker-socket.ts` Agent-backed request flow.
+    - [x] Review `packages/verser2-guest-node/src/lib/broker-dispatcher.ts` and fetch wrapper behavior.
+    - [x] Review existing common helpers in `@signicode/verser-common`, especially route resolution, request body normalization, and error primitives.
+    - [x] Record whether redirect helpers should live in common or remain package-local for this phase.
+        - Kept redirect replay and follow logic package-local because it is currently specific to Node Broker request/body streams; route resolution reuses `resolveRouteForUrl` from `@signicode/verser-common`.
+- [x] Task: Define the minimal redirect configuration and error shape
+    - [x] Identify existing Broker/Agent/Dispatcher option types that can carry redirect settings.
+    - [x] Specify default values: internal redirects enabled, replay buffer limit `16 KiB`, max internal redirects `3`.
+    - [x] Specify how callers configure max hops and replay buffer size consistently across direct Broker, Agent, and fetch/Dispatcher paths.
+    - [x] Specify the redirect-limit error code/context using existing `VerserError` conventions where possible.
+- [x] Task: Add failing focused tests for direct Broker request redirects
+    - [x] Test `307` internal redirect to an advertised route returns the final Guest response.
+    - [x] Test `308` internal redirect to an advertised route returns the final Guest response.
+    - [x] Test non-GET body replay sends the full body from the beginning to the redirected Guest.
+    - [x] Test body replay includes bytes that were already read before the redirect decision.
+    - [x] Test oversized buffered body returns the original `307`/`308` response unchanged.
+    - [x] Test unadvertised redirect host remains client-visible.
+    - [x] Test redirect loop or over-limit hops fails with a clear redirect-limit error.
+    - [x] Test configured max hop value is enforced.
+- [x] Task: Add failing integration coverage for Agent and fetch-style paths
+    - [x] Add or extend Agent tests to prove eligible internal redirects are followed by default.
+    - [x] Add or extend Dispatcher/fetch tests to prove eligible internal redirects are followed by default.
+    - [x] Add focused coverage that configuration is threaded into these surfaces where applicable.
+- [x] Task: Run automated review and fix loop before manual review
+    - [x] Run focused failing tests to confirm expected failures and no unrelated failures.
+    - [x] Review test quality and scope against the specification.
+    - [x] Fix test scaffolding issues before requesting manual verification.
+- [x] Task: Phase checkpoint before manual review
+    - [x] Run the narrowest validation suitable for the phase.
+    - [x] Commit the completed phase changes with a scoped phase summary.
+    - [x] Push the phase checkpoint branch before asking for manual verification.
+        - Checkpoint commit: `78a1b88`.
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Redirect Design Inventory and Test Scaffolding' (Protocol in workflow.md)
+
+## Phase 2: Direct Broker Redirect Implementation
+
+- [x] Task: Implement bounded replay support for Broker requests
+    - [x] Buffer request body chunks only up to the configured internal redirect replay limit.
+    - [x] Preserve backpressure and avoid unbounded buffering.
+    - [x] Ensure replayed redirected requests receive the body from the beginning.
+    - [x] Ensure requests above the configured replay limit are not internally redirected and return the original response unchanged.
+- [x] Task: Implement internal redirect resolution and hop handling
+    - [x] Detect only `307` and `308` responses with a valid `Location` header.
+    - [x] Resolve `Location` hostnames only through exact advertised route-table matches.
+    - [x] Apply redirected path and query from `Location` while preserving the original method and headers.
+    - [x] Enforce default and configured maximum internal redirect hops.
+    - [x] Surface a clear redirect-limit error when the configured maximum is exceeded.
+- [x] Task: Wire direct Broker options and defaults
+    - [x] Add or update TypeScript option types for default-on internal redirect following.
+    - [x] Add configurable replay buffer size and max hop settings.
+    - [x] Keep any disabling or override options minimal and documented if introduced by the implementation shape.
+- [x] Task: Validate direct Broker request behavior narrowly
+    - [x] Run the focused Broker redirect tests and confirm they pass.
+    - [x] Run nearby routing/streaming tests affected by body replay logic.
+    - [x] Record coverage and any skipped validation in the phase notes.
+- [x] Task: Run automated review and fix loop before manual review
+    - [x] Run automated code review or equivalent self-review against redirect semantics, replay limits, route-table lookup, and error paths.
+    - [x] Fix review findings that are in scope before requesting manual verification.
+    - [x] Re-run focused validation after fixes.
+- [x] Task: Phase checkpoint before manual review
+    - [x] Run the narrowest validation suitable for the phase.
+    - [x] Commit the completed phase changes with a scoped phase summary.
+    - [x] Push the phase checkpoint branch before asking for manual verification.
+        - Checkpoint commit: `78a1b88`.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Direct Broker Redirect Implementation' (Protocol in workflow.md)
+
+## Phase 3: Agent, Dispatcher, Fetch, and Documentation Integration
+
+- [x] Task: Thread redirect behavior through Agent-backed requests
+    - [x] Update the Agent/Broker socket path to use the same redirect defaults and configurable limits.
+    - [x] Preserve Node `http.Agent` request/response streaming semantics.
+    - [x] Ensure client-visible fallback returns the original redirect response unchanged when internal following is not possible.
+- [x] Task: Thread redirect behavior through Dispatcher and fetch-style integrations
+    - [x] Update Dispatcher/fetch request conversion so redirect settings reach the Broker request layer.
+    - [x] Preserve Undici Dispatcher/fetch response streaming semantics from the final target.
+    - [x] Confirm unadvertised and oversized cases remain client-visible.
+- [x] Task: Update public docs and package guidance
+    - [x] Document default-on internal 307/308 redirects for advertised verser2 routes.
+    - [x] Document configurable max hops and replay buffer limit, including defaults of `3` and `16 KiB`.
+    - [x] Document that oversized request bodies return the original redirect response for the client to handle.
+    - [x] Keep Host/Guest/Broker terminology precise and avoid implying DNS or public gateway behavior.
+- [x] Task: Validate integrated behavior
+    - [x] Run focused Agent tests.
+    - [x] Run focused Dispatcher/fetch tests.
+    - [x] Run focused Broker routing tests.
+    - [x] Run `npm run build` if TypeScript public types changed.
+    - [x] Run `npm run lint` if source or docs changes require style validation.
+    - [x] Record coverage status and deduplication results.
+        - Validation: `npx tsc -p packages/verser2-guest-node/tsconfig.json --noEmit false`, `npm run build`, `npm run lint`, and `node --test test/broker-routing.test.js test/dispatcher.test.js test/agent.test.js` passed. Coverage is meaningful focused integration coverage for changed redirect behavior; no numeric coverage report is available for this repository's Node test command. Deduplication: route lookup reuses common `resolveRouteForUrl`; redirect replay stays Node Broker-local because it is stream/runtime-specific.
+- [x] Task: Run automated review and fix loop before manual review
+    - [x] Run automated code review or equivalent self-review across direct Broker, Agent, Dispatcher/fetch, docs, and tests.
+    - [x] Fix in-scope review findings before requesting manual verification.
+    - [x] Re-run focused validation after fixes.
+- [x] Task: Phase checkpoint before manual review
+    - [x] Run the narrowest validation suitable for the phase.
+    - [x] Commit the completed phase changes with a scoped phase summary.
+    - [x] Push the phase checkpoint branch before asking for manual verification.
+        - Checkpoint commit: `78a1b88`.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Agent, Dispatcher, Fetch, and Documentation Integration' (Protocol in workflow.md)

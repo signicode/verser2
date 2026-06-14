@@ -35,7 +35,7 @@ The implemented foundation includes the TypeScript/Node.js package path, a Bun G
 - A Node Guest that owns or receives a normal `http.Server` or request listener without calling `listen()`.
 - A Bun Guest that adapts Bun/Fetch-style handlers and local Bun-style routes without calling `Bun.serve()` or opening an inbound port, plus a Bun-facing Broker API that reuses the existing transport internally.
 - A Python Guest that connects outbound to the existing Host and dispatches routed requests into an ASGI 3 app without opening an inbound port.
-- Node, Bun-facing, and Python Broker APIs that can present client certificate identity when configured and route requests through the Host into a connected Guest's local handler.
+- Node, Bun-facing, and Python Broker APIs that can present client certificate identity when configured and route requests through the Host into a connected Guest's local handler; Node Broker request paths also follow eligible internal `307`/`308` redirects for advertised routes with bounded body replay.
 - A minimal plain `node:http` Agent path for Host-advertised domains.
 - End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
 
@@ -71,7 +71,7 @@ Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Ja
 - A Bun guest can attach a Bun/Fetch-style handler or local Bun-style route table without opening a port.
 - A Python guest can attach an ASGI 3 application without opening a port.
 - A connected Broker can issue a request through the host to that guest server.
-- Method, path, headers, request body, status, response headers, and response body are preserved.
+- Method, path, headers, request body, status, response headers, and response body are preserved, including method-preserving Node Broker internal redirects when the redirected hostname is an advertised route and the body stays within the configured replay limit.
 - Shared primitives needed by multiple packages are provided by `@signicode/verser-common` instead of duplicated in package-local implementations.
 - Concurrent request or multiplexing behavior is proven only when a track explicitly introduces that transport behavior.
 - Errors include enough context to diagnose connection, target, protocol, path, stream, timeout, and close-reason failures.
