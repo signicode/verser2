@@ -165,6 +165,198 @@ test('Broker connects, receives route advertisements, and forwards requests to a
   }
 });
 
+test('Broker follows 307 internal redirects to advertised routes and replays request bodies', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let broker;
+  let redirectGuest;
+  let targetGuest;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-redirect-307' });
+    redirectGuest = createGuest({ hostUrl, guestId: 'guest-redirect-307-a' });
+    targetGuest = createGuest({ hostUrl, guestId: 'guest-redirect-307-b' });
+    redirectGuest.attach((_request, response) => {
+      response.writeHead(307, { location: 'http://target-307.local.test/final?via=redirect' });
+      response.end('redirecting');
+    }, 'redirect-307.local.test');
+    targetGuest.attach((request, response) => {
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => {
+        response.writeHead(209, { 'x-final-path': request.url, 'x-final-method': request.method });
+        response.end(Buffer.concat(chunks));
+      });
+    }, 'target-307.local.test');
+
+    await broker.connect();
+    await redirectGuest.connect();
+    await targetGuest.connect();
+    await broker.waitForRoute('redirect-307.local.test');
+    await broker.waitForRoute('target-307.local.test');
+
+    const response = await broker.request({
+      targetId: 'guest-redirect-307-a',
+      method: 'PATCH',
+      path: '/start',
+      headers: { 'x-input': 'redirect' },
+      body: [Buffer.from('first-'), Buffer.from('second')],
+    });
+
+    assert.equal(response.statusCode, 209);
+    assert.equal(response.headers['x-final-path'], '/final?via=redirect');
+    assert.equal(response.headers['x-final-method'], 'PATCH');
+    assert.deepEqual(await readBody(response.body), Buffer.from('first-second'));
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (redirectGuest !== undefined) await redirectGuest.close('test-complete');
+    if (targetGuest !== undefined) await targetGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker follows 308 internal redirects and enforces configured redirect limits', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let broker;
+  let redirectGuest;
+  let targetGuest;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-redirect-308', maxInternalRedirects: 1 });
+    redirectGuest = createGuest({ hostUrl, guestId: 'guest-redirect-308-a' });
+    targetGuest = createGuest({ hostUrl, guestId: 'guest-redirect-308-b' });
+    redirectGuest.attach((_request, response) => {
+      response.writeHead(308, { location: 'http://target-308.local.test/final' });
+      response.end();
+    }, 'redirect-308.local.test');
+    targetGuest.attach((_request, response) => {
+      response.writeHead(308, { location: 'http://redirect-308.local.test/again' });
+      response.end();
+    }, 'target-308.local.test');
+
+    await broker.connect();
+    await redirectGuest.connect();
+    await targetGuest.connect();
+    await broker.waitForRoute('redirect-308.local.test');
+    await broker.waitForRoute('target-308.local.test');
+
+    await assert.rejects(
+      () => broker.request({ targetId: 'guest-redirect-308-a', method: 'GET', path: '/start' }),
+      (error) => {
+        assert.equal(error.code, 'protocol-error');
+        assert.match(error.message, /internal redirect limit/i);
+        assert.equal(error.context.maxInternalRedirects, 1);
+        return true;
+      },
+    );
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (redirectGuest !== undefined) await redirectGuest.close('test-complete');
+    if (targetGuest !== undefined) await targetGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker leaves oversized and unadvertised internal redirect responses client-visible', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let broker;
+  let guest;
+
+  try {
+    broker = createBroker({
+      hostUrl,
+      brokerId: 'broker-redirect-fallback',
+      internalRedirectReplayBufferBytes: 4,
+    });
+    guest = createGuest({ hostUrl, guestId: 'guest-redirect-fallback' });
+    guest.attach((request, response) => {
+      request.on('data', () => {});
+      request.on('end', () => {
+        response.writeHead(307, { location: 'http://not-advertised.local.test/final' });
+        response.end('visible redirect');
+      });
+    }, 'redirect-fallback.local.test');
+
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('redirect-fallback.local.test');
+
+    const response = await broker.request({
+      targetId: 'guest-redirect-fallback',
+      method: 'POST',
+      path: '/start',
+      body: [Buffer.from('larger-than-limit')],
+    });
+
+    assert.equal(response.statusCode, 307);
+    assert.equal(response.headers.location, 'http://not-advertised.local.test/final');
+    assert.deepEqual(await readBody(response.body), Buffer.from('visible redirect'));
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker returns advertised redirects unchanged when the body exceeds the replay limit', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let broker;
+  let redirectGuest;
+  let targetGuest;
+  let targetHit = false;
+
+  try {
+    broker = createBroker({
+      hostUrl,
+      brokerId: 'broker-redirect-oversized-advertised',
+      internalRedirectReplayBufferBytes: 4,
+    });
+    redirectGuest = createGuest({ hostUrl, guestId: 'guest-redirect-oversized-a' });
+    targetGuest = createGuest({ hostUrl, guestId: 'guest-redirect-oversized-b' });
+    redirectGuest.attach((request, response) => {
+      request.on('data', () => {});
+      request.on('end', () => {
+        response.writeHead(307, { location: 'http://oversized-target.local.test/final' });
+        response.end('too large to replay');
+      });
+    }, 'oversized-redirect.local.test');
+    targetGuest.attach((_request, response) => {
+      targetHit = true;
+      response.end('should-not-hit-target');
+    }, 'oversized-target.local.test');
+
+    await broker.connect();
+    await redirectGuest.connect();
+    await targetGuest.connect();
+    await broker.waitForRoute('oversized-redirect.local.test');
+    await broker.waitForRoute('oversized-target.local.test');
+
+    const response = await broker.request({
+      targetId: 'guest-redirect-oversized-a',
+      method: 'POST',
+      path: '/start',
+      body: [Buffer.from('larger-than-limit')],
+    });
+
+    assert.equal(response.statusCode, 307);
+    assert.equal(response.headers.location, 'http://oversized-target.local.test/final');
+    assert.deepEqual(await readBody(response.body), Buffer.from('too large to replay'));
+    assert.equal(targetHit, false);
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (redirectGuest !== undefined) await redirectGuest.close('test-complete');
+    if (targetGuest !== undefined) await targetGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Broker maps missing guests and Guest handler failures to actionable errors', async () => {
   const host = createHost({ port: 0 });
   await host.start();

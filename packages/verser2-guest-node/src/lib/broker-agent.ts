@@ -12,7 +12,11 @@ export class VerserBrokerAgent extends http.Agent {
     broker: BrokerRequestRouter,
     private readonly options: Pick<
       VerserBrokerOptions,
-      'maxChunkDecoderPendingBytes' | 'maxChunkSizeLineBytes' | 'maxRequestHeaderBytes'
+      | 'internalRedirectReplayBufferBytes'
+      | 'maxChunkDecoderPendingBytes'
+      | 'maxChunkSizeLineBytes'
+      | 'maxInternalRedirects'
+      | 'maxRequestHeaderBytes'
     > = {},
   ) {
     super({ keepAlive: false });

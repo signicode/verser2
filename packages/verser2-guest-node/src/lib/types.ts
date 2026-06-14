@@ -99,6 +99,10 @@ export interface VerserBrokerOptions {
   readonly maxChunkSizeLineBytes?: number;
   /** Maximum pending bytes buffered by the chunked-body decoder. Defaults to 64 KiB. */
   readonly maxChunkDecoderPendingBytes?: number;
+  /** Maximum bytes buffered to replay a request body for internal 307/308 redirects. Defaults to 16 KiB. */
+  readonly internalRedirectReplayBufferBytes?: number;
+  /** Maximum number of internal 307/308 redirect hops followed by Broker request paths. Defaults to `3`. */
+  readonly maxInternalRedirects?: number;
   /** TLS options for the outbound HTTP/2 connection (CA trust, client certificates). */
   readonly tls?: VerserClientTlsOptions;
 }

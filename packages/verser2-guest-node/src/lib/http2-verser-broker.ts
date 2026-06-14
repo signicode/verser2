@@ -8,6 +8,7 @@ import {
   createVerserError,
   normalizeClientTlsOptions,
   readNdjsonLines,
+  resolveRouteForUrl,
   stripHttp2PseudoHeaders,
   validateVerserHeaders,
   verserErrorFromResponseBody,
@@ -18,11 +19,20 @@ import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
 import type {
   BrokerControlFrame,
+  BrokerRoute,
   VerserBroker,
   VerserBrokerOptions,
   VerserBrokerRequest,
   VerserBrokerResponse,
 } from './types';
+
+const DEFAULT_INTERNAL_REDIRECT_REPLAY_BUFFER_BYTES = 16 * 1024;
+const DEFAULT_MAX_INTERNAL_REDIRECTS = 3;
+
+interface ReplayableRequestBody {
+  readonly body?: readonly Buffer[] | nodeStream.Readable;
+  readonly getReplayBody: () => Promise<readonly Buffer[] | undefined>;
+}
 
 export class Http2VerserBroker implements VerserBroker {
   private readonly options: VerserBrokerOptions;
@@ -107,6 +117,7 @@ export class Http2VerserBroker implements VerserBroker {
       return undiciFetch(input, {
         ...init,
         dispatcher: init?.dispatcher ?? dispatcher,
+        redirect: init?.redirect ?? 'manual',
       });
     } satisfies typeof undiciFetch;
   }
@@ -121,6 +132,60 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   public request(request: VerserBrokerRequest): Promise<VerserBrokerResponse> {
+    const maxInternalRedirects =
+      this.options.maxInternalRedirects ?? DEFAULT_MAX_INTERNAL_REDIRECTS;
+    const replayBufferLimit =
+      this.options.internalRedirectReplayBufferBytes ??
+      DEFAULT_INTERNAL_REDIRECT_REPLAY_BUFFER_BYTES;
+    const replayableBody = this.createReplayableRequestBody(request.body, replayBufferLimit);
+    return this.requestWithInternalRedirects(
+      { ...request, body: replayableBody.body },
+      replayableBody,
+      maxInternalRedirects,
+    );
+  }
+
+  private async requestWithInternalRedirects(
+    request: VerserBrokerRequest,
+    replayableBody: ReplayableRequestBody,
+    maxInternalRedirects: number,
+    hopCount = 0,
+  ): Promise<VerserBrokerResponse> {
+    const response = await this.requestOnce(request);
+    const redirectTarget = this.resolveInternalRedirect(response, request.path);
+    if (redirectTarget === undefined) {
+      return response;
+    }
+
+    if (hopCount >= maxInternalRedirects) {
+      response.body.destroy();
+      throw createVerserError('protocol-error', 'Broker internal redirect limit exceeded', {
+        maxInternalRedirects,
+        redirectLocation: response.headers.location,
+      });
+    }
+
+    const replayBody = await replayableBody.getReplayBody();
+    if (replayBody === undefined) {
+      return response;
+    }
+
+    response.body.destroy();
+    return this.requestWithInternalRedirects(
+      {
+        targetId: redirectTarget.route.targetId,
+        method: request.method,
+        path: `${redirectTarget.url.pathname}${redirectTarget.url.search}`,
+        headers: request.headers,
+        body: replayBody,
+      },
+      replayableBody,
+      maxInternalRedirects,
+      hopCount + 1,
+    );
+  }
+
+  private requestOnce(request: VerserBrokerRequest): Promise<VerserBrokerResponse> {
     const session = this.session;
     if (session === undefined) {
       return Promise.reject(createVerserError('disconnected-target', 'Broker is not connected'));
@@ -182,6 +247,121 @@ export class Http2VerserBroker implements VerserBroker {
       }
       stream.end();
     });
+  }
+
+  private createReplayableRequestBody(
+    body: VerserBrokerRequest['body'],
+    replayBufferLimit: number,
+  ): ReplayableRequestBody {
+    if (body === undefined) {
+      return { body: undefined, getReplayBody: async () => [] };
+    }
+
+    if (!(body instanceof nodeStream.Readable)) {
+      const replayChunks: Buffer[] = [];
+      let totalBytes = 0;
+      let replayable = true;
+      for (const chunk of body) {
+        totalBytes += chunk.length;
+        if (totalBytes > replayBufferLimit) {
+          replayable = false;
+          replayChunks.length = 0;
+          break;
+        }
+        replayChunks.push(Buffer.from(chunk));
+      }
+      return {
+        body,
+        getReplayBody: async () => (replayable ? replayChunks : undefined),
+      };
+    }
+
+    const replayChunks: Buffer[] = [];
+    const tee = new nodeStream.PassThrough();
+    let totalBytes = 0;
+    let replayable = true;
+    let streamError: Error | undefined;
+    let resolveReplayBody: (body: readonly Buffer[] | undefined) => void = () => {};
+    let rejectReplayBody: (error: Error) => void = () => {};
+    let replayDecisionSettled = false;
+    const replayDecision = new Promise<readonly Buffer[] | undefined>((resolve, reject) => {
+      resolveReplayBody = resolve;
+      rejectReplayBody = reject;
+    });
+    const settleReplayDecision = (replayBody: readonly Buffer[] | undefined): void => {
+      if (replayDecisionSettled) {
+        return;
+      }
+      replayDecisionSettled = true;
+      resolveReplayBody(replayBody);
+    };
+    const rejectReplayDecision = (error: Error): void => {
+      if (replayDecisionSettled) {
+        return;
+      }
+      replayDecisionSettled = true;
+      rejectReplayBody(error);
+    };
+
+    body.on('data', (chunk: Buffer | string) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > replayBufferLimit) {
+        replayable = false;
+        replayChunks.length = 0;
+        settleReplayDecision(undefined);
+        return;
+      }
+      replayChunks.push(Buffer.from(buffer));
+    });
+    body.once('end', () => {
+      settleReplayDecision(replayable ? replayChunks : undefined);
+    });
+    body.once('error', (error) => {
+      streamError = error;
+      rejectReplayDecision(error);
+    });
+    body.pipe(tee);
+
+    return {
+      body: tee,
+      getReplayBody: async () => {
+        if (streamError !== undefined) {
+          return undefined;
+        }
+        return replayDecision;
+      },
+    };
+  }
+
+  private resolveInternalRedirect(
+    response: VerserBrokerResponse,
+    requestPath: string,
+  ): { readonly route: BrokerRoute; readonly url: URL } | undefined {
+    if (response.statusCode !== 307 && response.statusCode !== 308) {
+      return undefined;
+    }
+
+    const location = response.headers.location;
+    if (location === undefined) {
+      return undefined;
+    }
+
+    let url: URL;
+    try {
+      url = new URL(location, `http://verser.invalid${requestPath}`);
+    } catch {
+      return undefined;
+    }
+    if (url.hostname === 'verser.invalid') {
+      return undefined;
+    }
+
+    const route = resolveRouteForUrl(this.routes, url);
+    if (route === undefined) {
+      return undefined;
+    }
+    return { route, url };
   }
 
   private async register(session: http2.ClientHttp2Session): Promise<void> {
