@@ -57,6 +57,19 @@ The Broker provides multiple ways to route requests:
 - `broker.createDispatcher()` — Undici Dispatcher for `fetch(url, { dispatcher })`
 - `broker.createFetch()` — pre-wired fetch helper
 
+Broker request paths follow internal `307` and `308` redirects by default when
+the response `Location` hostname exactly matches an advertised verser2 route.
+The redirected request is resolved through the Broker route table, preserves the
+original method, headers, path/query, and replayable body, and is bounded by
+`maxInternalRedirects` (default `3`) and `internalRedirectReplayBufferBytes`
+(default `16 KiB`). If the body is too large to replay or the target hostname is
+not advertised, the original redirect response is returned unchanged. Exceeding
+the redirect count fails with a `protocol-error`.
+
+`broker.createFetch()` defaults Undici's redirect option to `manual` so fallback
+redirect responses remain visible to callers instead of being followed through
+DNS. Pass an explicit `redirect` option to override that fetch-level behavior.
+
 ## Caveats
 
 - Node Guest/Broker use outbound TLS HTTP/2.
