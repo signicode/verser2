@@ -78,6 +78,37 @@ const uploadResponse = await broker.request({
 uploadResponse.body.pipe(destination);
 ```
 
+Node Broker request paths follow internal `307` and `308` redirects by default
+when the response `Location` hostname exactly matches an advertised verser2
+route. Redirect targets are resolved through the Broker route table, not DNS, and
+the original method, headers, path/query semantics, and replayable request body
+are preserved. This applies to direct `broker.request()`, Agent-backed
+`node:http` requests, and Dispatcher/fetch requests that use the Node Broker.
+
+Redirect following is bounded. `maxInternalRedirects` defaults to `3`, and
+`internalRedirectReplayBufferBytes` defaults to `16 KiB`:
+
+```ts
+const broker = createVerserBroker({
+  hostUrl: 'https://localhost:8443',
+  brokerId: 'broker-a',
+  maxInternalRedirects: 2,
+  internalRedirectReplayBufferBytes: 32 * 1024,
+});
+```
+
+If the request body exceeds the replay buffer limit, or if the `Location` header
+is missing, invalid, or points to an unadvertised hostname, the original
+`307`/`308` response remains client-visible for the caller to handle. Exceeding
+the configured redirect count fails with a `protocol-error` that identifies the
+internal redirect limit.
+
+The `broker.createFetch()` helper defaults fetch redirect handling to `manual` so
+client-visible fallback responses are not followed through DNS by Undici. When
+using `fetch(url, { dispatcher: broker.createDispatcher() })` directly, pass
+`redirect: 'manual'` if you need to observe those fallback `307`/`308` responses
+unchanged.
+
 ## Agent
 
 `createAgent()` returns a plain `http:` Agent that routes advertised hostnames
