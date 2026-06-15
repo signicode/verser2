@@ -26,6 +26,11 @@ export interface ImportedRouteRejection {
   readonly error: VerserError;
 }
 
+export interface ImportedRouteUpdate {
+  readonly rejected: ImportedRouteRejection[];
+  readonly changed: boolean;
+}
+
 export class HostRouteRegistry {
   private readonly localRoutes = new Map<string, FederatedRouteRegistration[]>();
 
@@ -56,7 +61,7 @@ export class HostRouteRegistry {
   public setImportedRoutes(
     upstreamId: string,
     routes: readonly FederatedRouteRegistration[],
-  ): ImportedRouteRejection[] {
+  ): ImportedRouteUpdate {
     const accepted: FederatedRouteRegistration[] = [];
     const rejected: ImportedRouteRejection[] = [];
 
@@ -70,8 +75,10 @@ export class HostRouteRegistry {
       }
     }
 
+    const changed =
+      routeSetKey(this.importedRoutes.get(upstreamId) ?? []) !== routeSetKey(accepted);
     this.importedRoutes.set(upstreamId, accepted);
-    return rejected;
+    return { rejected, changed };
   }
 
   public removeImportedRoutes(upstreamId: string): void {
@@ -101,6 +108,26 @@ export class HostRouteRegistry {
       .map((candidate) => candidate.route);
   }
 
+  public getFederatedRoutesForExport(peerHostId?: string): FederatedRouteRegistration[] {
+    return this.getSelectedCandidates()
+      .filter(
+        (candidate) =>
+          peerHostId === undefined ||
+          (candidate.route.originHostId !== peerHostId &&
+            !candidate.route.viaHostIds.includes(peerHostId)),
+      )
+      .filter((candidate) => candidate.route.hopCount + 1 <= this.options.maxFederationHopCount)
+      .map((candidate) =>
+        createFederatedRouteRegistration({
+          ...candidate.route,
+          nextHopHostId: this.options.hostId,
+          hopCount: candidate.route.hopCount + 1,
+          viaHostIds: appendHostId(candidate.route.viaHostIds, this.options.hostId),
+          source: candidate.route.source,
+        }),
+      );
+  }
+
   private getImportedRouteRejection(route: FederatedRouteRegistration): VerserError | undefined {
     if (isFederatedRouteLoop(route, this.options.hostId)) {
       return createVerserError('route-loop', 'Federated route would revisit this Host', {
@@ -122,16 +149,11 @@ export class HostRouteRegistry {
   }
 
   private getSelectedLocalCandidates(): StoredRouteCandidate[] {
-    const selected = new Map<string, StoredRouteCandidate>();
+    return selectCandidates(this.getLocalCandidates());
+  }
 
-    for (const candidate of this.getLocalCandidates().sort(compareCandidates)) {
-      const key = routeIdentity(candidate.route);
-      if (!selected.has(key)) {
-        selected.set(key, candidate);
-      }
-    }
-
-    return [...selected.values()].sort(compareCandidates);
+  private getSelectedCandidates(): StoredRouteCandidate[] {
+    return selectCandidates(this.getAllCandidates());
   }
 
   private getLocalCandidates(): StoredRouteCandidate[] {
@@ -168,8 +190,41 @@ export function createHostRouteRegistry(options: {
   return new HostRouteRegistry({ hostId, maxFederationHopCount });
 }
 
+function selectCandidates(candidates: StoredRouteCandidate[]): StoredRouteCandidate[] {
+  const selected = new Map<string, StoredRouteCandidate>();
+
+  for (const candidate of candidates.sort(compareCandidates)) {
+    const key = routeIdentity(candidate.route);
+    if (!selected.has(key)) {
+      selected.set(key, candidate);
+    }
+  }
+
+  return [...selected.values()].sort(compareCandidates);
+}
+
+function appendHostId(hostIds: readonly string[], hostId: string): readonly string[] {
+  return hostIds.includes(hostId) ? hostIds : [...hostIds, hostId];
+}
+
 function routeIdentity(route: RoutedDomainRegistration): string {
   return `${route.targetId}\u0000${route.domain}`;
+}
+
+function routeSetKey(routes: readonly FederatedRouteRegistration[]): string {
+  return JSON.stringify(routes.map(routeFingerprint).sort());
+}
+
+function routeFingerprint(route: FederatedRouteRegistration): string {
+  return [
+    route.targetId,
+    route.domain,
+    route.originHostId,
+    route.nextHopHostId,
+    String(route.hopCount),
+    route.viaHostIds.join(','),
+    route.source,
+  ].join('\u0000');
 }
 
 function compareCandidates(left: StoredRouteCandidate, right: StoredRouteCandidate): number {

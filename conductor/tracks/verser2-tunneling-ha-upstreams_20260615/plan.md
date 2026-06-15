@@ -113,29 +113,41 @@
 
 ## Phase 4: Route Import and Export Across Hosts
 
-- [ ] Task: Write failing route federation tests
-    - [ ] Test downstream local Guest routes are exported to an upstream Host.
-    - [ ] Test downstream Host imports upstream route advertisements.
-    - [ ] Test manager -> hub -> runner topology route propagation without custom application code.
-    - [ ] Test route withdrawal propagation when Guest, downstream Host, or upstream link disconnects.
-- [ ] Task: Implement route export policy and upstream advertisements
-    - [ ] Export selected local route candidates with origin Host ID, next-hop Host ID, hop count, and via chain.
-    - [ ] Include hop distance in federated route state so downstream route selection can prefer the closest candidate.
-    - [ ] Avoid exporting imported routes back to a visited Host.
-    - [ ] Preserve existing full route-table replacement semantics for legacy Broker control streams.
-- [ ] Task: Implement route import policy and registry integration
-    - [ ] Import eligible upstream route candidates into the Host route registry.
-    - [ ] Suppress looped, over-hop-limit, unauthorized, or conflicting routes.
-    - [ ] Trigger Broker route updates when imported route availability changes.
-- [ ] Task: Validate route federation phase
-    - [ ] Run focused Host route, lifecycle, and Broker route advertisement tests.
-    - [ ] Confirm legacy Brokers receive compatible route frames.
-    - [ ] Record route import/export policy defaults and deduplication result.
+- [x] Task: Write failing route federation tests
+    - [x] Test downstream local Guest routes are exported to an upstream Host.
+    - [x] Test downstream Host imports upstream route advertisements.
+    - [x] Test manager -> hub -> runner topology route propagation without custom application code.
+    - [x] Test route withdrawal propagation when Guest, downstream Host, or upstream link disconnects.
+- [x] Task: Implement route export policy and upstream advertisements
+    - [x] Export selected local route candidates with origin Host ID, next-hop Host ID, hop count, and via chain.
+    - [x] Include hop distance in federated route state so downstream route selection can prefer the closest candidate.
+    - [x] Avoid exporting imported routes back to a visited Host.
+    - [x] Preserve existing full route-table replacement semantics for legacy Broker control streams.
+- [x] Task: Implement route import policy and registry integration
+    - [x] Import eligible upstream route candidates into the Host route registry.
+    - [x] Suppress looped, over-hop-limit, unauthorized, or conflicting routes.
+    - [x] Trigger route updates when imported route availability changes.
+- [x] Task: Validate route federation phase
+    - [x] Run focused Host route, lifecycle, and Broker route advertisement tests.
+    - [x] Confirm legacy Brokers receive compatible route frames.
+    - [x] Record route import/export policy defaults and deduplication result.
 - [ ] Task: Push phase checkpoint for GitHub-visible manual verification
     - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
     - [ ] Push the track branch to the remote branch before requesting manual verification.
     - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Route Import and Export Across Hosts' (Protocol in workflow.md)
+
+### Phase 4 notes
+
+- Added persistent Host-to-Host route streams at `/verser/host/federation/routes` using full-replacement NDJSON `federated-routes` control frames.
+- Export policy sends selected route candidates with `originHostId`, `nextHopHostId`, incremented `hopCount`, and appended `viaHostIds`; exports are filtered so a route is not sent back to its origin or any visited Host.
+- Import policy stores accepted federated candidates per upstream/inbound Host owner in the Host route registry and re-advertises federation changes after local route, imported route, and disconnect events.
+- Route withdrawals now propagate for Guest close, explicit upstream close, unexpected upstream close, and inbound downstream Host disconnect. Host shutdown destroys persistent HTTP/2 sessions after closing route streams to avoid test/process hangs.
+- Review fixes: outbound links store the upstream response `hostId` separately from local `upstreamId` so loop filtering uses remote Host IDs; unchanged imported full-replacement tables no longer trigger federation re-advertisement churn; outbound route-stream close is treated as link failure; over-hop exports are suppressed before sending.
+- Legacy Broker route advertisements remain full-replacement and local-only until federated request forwarding exists, so imported routes do not expose federation metadata or unreachable paths to current Brokers.
+- Validation passed: `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-host && node --test test/host-upstreams.test.js test/host-route-registry.test.js test/host.test.js test/broker-routing.test.js`; `npm run lint`; `node --test --experimental-test-coverage test/host-upstreams.test.js`.
+- Coverage: focused upstream/federation tests now cover route export/import, manager -> hub -> runner propagation, loop-filtered re-export, legacy Broker local-only compatibility, and withdrawal on Guest/upstream/downstream disconnect. Node experimental coverage remains bundle-wide rather than a per-feature threshold report.
+- Deduplication/common reuse: route streams reuse common `createFederatedRoutesControlFrame`, `readNdjsonLines`, federation route validators, Host IDs, loop/hop helpers, and existing route-registry candidate selection; no duplicate protocol validation was added.
 
 ## Phase 5: Federated Request Forwarding
 
