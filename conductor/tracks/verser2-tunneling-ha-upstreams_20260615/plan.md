@@ -247,7 +247,7 @@
     - [x] Push the track branch to the remote branch before requesting manual verification.
     - [x] Record the pushed commit SHA in this plan.
         - Checkpoint commit: `25c2258`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 7: Documentation, Examples, and Final Compatibility Validation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 7: Documentation, Examples, and Final Compatibility Validation' (Protocol in workflow.md)
 
 ### Phase 7 notes
 
@@ -257,3 +257,4 @@
 - Added focused documentation assertions in `test/docs.test.js`; docs-only coverage is covered by source-verified documentation assertions rather than behavior coverage thresholds.
 - Validation passed: `node --test test/docs.test.js`; `npm run lint`; `npm run build`; `node --test test/docs.test.js test/packages.test.js`; `npm test` (256 tests: 252 passed, 4 skipped).
 - Code/documentation review: `@oracle` initially found blockers in the federated example and error-code wording; fixes were applied and re-review found no blockers and confirmed the docs respect Host/Guest/Broker boundaries and implementation limits.
+- Manual verification: approved by user after Phase 7 checkpoint was pushed to PR #22 at `f4f3ff350fa407e597da604a14768a372c78ae38`.
