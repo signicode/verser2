@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import * as http2 from 'node:http2';
+import { PassThrough } from 'node:stream';
 import { text as readStreamText } from 'node:stream/consumers';
 import type { TLSSocket } from 'node:tls';
 
@@ -33,6 +34,7 @@ import {
   normalizeServerTlsOptions,
   parseLeaseAcquireTimeoutMs,
   parseRegistrationRequest,
+  readLeaseRequestMetadataFromStream,
   readLeaseResponseMetadataFromStream,
   readNdjsonLines,
   validateVerserHeaders,
@@ -98,6 +100,7 @@ interface UpstreamLink {
   readonly remoteHostId: VerserHostId;
   readonly session: http2.ClientHttp2Session;
   readonly routeStream: http2.ClientHttp2Stream;
+  requestStream: http2.ClientHttp2Stream;
   closing: boolean;
 }
 
@@ -105,6 +108,14 @@ interface InboundFederationLink {
   readonly hostId: string;
   readonly session: http2.Http2Session;
   readonly routeStream?: http2.ServerHttp2Stream;
+  readonly requestStream?: http2.ServerHttp2Stream;
+  readonly requestBusy?: boolean;
+}
+
+interface FederatedRequestStreamWaiter {
+  readonly timeout: NodeJS.Timeout;
+  readonly resolve: (stream: http2.ServerHttp2Stream) => void;
+  readonly reject: (error: VerserError) => void;
 }
 
 const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 1000;
@@ -154,6 +165,11 @@ export class NodeHttp2VerserHost implements VerserHost {
   private readonly pendingUpstreamConnections = new Set<string>();
 
   private readonly inboundFederationHosts = new Map<string, InboundFederationLink>();
+
+  private readonly federatedRequestStreamWaiters = new Map<
+    string,
+    FederatedRequestStreamWaiter[]
+  >();
 
   private server?: http2.Http2SecureServer;
 
@@ -340,10 +356,12 @@ export class NodeHttp2VerserHost implements VerserHost {
       });
       const remoteHostId = await this.sendUpstreamHandshake(session, upstreamId);
       const routeStream = await this.openUpstreamRouteStream(session, upstreamId);
-      link = { upstreamId, remoteHostId, session, routeStream, closing: false };
+      const requestStream = await this.openUpstreamRequestStream(session, upstreamId);
+      link = { upstreamId, remoteHostId, session, routeStream, requestStream, closing: false };
       this.upstreamLinks.set(upstreamId, link);
       session.once('close', () => this.handleUpstreamSessionClose(upstreamId));
       routeStream.once('close', () => this.handleUpstreamRouteStreamClose(upstreamId));
+      void this.handleUpstreamRequestStream(requestStream, upstreamId);
       session.on('error', (error) => {
         this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
       });
@@ -497,6 +515,11 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     if (path === '/verser/host/federation/routes') {
       this.handleHostFederationRouteStream(stream, headers);
+      return;
+    }
+
+    if (path === '/verser/host/federation/request') {
+      this.handleHostFederationRequestStream(stream, headers);
       return;
     }
 
@@ -709,6 +732,164 @@ export class NodeHttp2VerserHost implements VerserHost {
     return stream;
   }
 
+  private async openUpstreamRequestStream(
+    session: http2.ClientHttp2Session,
+    upstreamId: string,
+  ): Promise<http2.ClientHttp2Stream> {
+    const stream = session.request({
+      ':method': 'POST',
+      ':path': '/verser/host/federation/request',
+      'x-verser-host-id': this.options.hostId ?? 'host-local',
+    });
+    const headers = await this.waitForUpstreamHandshakeResponse(stream, upstreamId);
+    const statusCode = Number(headers[':status'] ?? 0);
+    if (statusCode < 200 || statusCode >= 300) {
+      stream.close(http2.constants.NGHTTP2_CANCEL);
+      throw createVerserError(
+        'upstream-unavailable',
+        'Upstream federation request stream rejected',
+        {
+          upstreamId,
+          statusCode,
+        },
+      );
+    }
+
+    return stream;
+  }
+
+  private handleHostFederationRequestStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): void {
+    const hostId = String(headers['x-verser-host-id'] ?? '').trim();
+    const link = this.inboundFederationHosts.get(hostId);
+    if (hostId.length === 0 || link === undefined || link.session !== stream.session) {
+      throw createVerserError(
+        'disconnected-target',
+        'Federated Host request stream is not registered',
+        { hostId },
+      );
+    }
+
+    this.inboundFederationHosts.set(hostId, { ...link, requestStream: stream, requestBusy: false });
+    stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
+    this.resolveNextFederatedRequestStreamWaiter(hostId);
+    stream.on('close', () => {
+      const current = this.inboundFederationHosts.get(hostId);
+      if (current?.requestStream === stream) {
+        this.inboundFederationHosts.set(hostId, {
+          ...current,
+          requestStream: undefined,
+          requestBusy: false,
+        });
+      }
+    });
+  }
+
+  private async handleUpstreamRequestStream(
+    stream: http2.ClientHttp2Stream,
+    upstreamId: string,
+  ): Promise<void> {
+    let requestId: string | undefined;
+    let targetId: string | undefined;
+    try {
+      const metadata = await readLeaseRequestMetadataFromStream(stream, {
+        guestId: this.options.hostId ?? 'host-local',
+        leaseId: upstreamId,
+      });
+      requestId = metadata.requestId;
+      targetId = metadata.targetId;
+      const controller = new AbortController();
+      const abortForwardedRequest = (): void => controller.abort();
+      stream.once('aborted', abortForwardedRequest);
+      stream.once('error', abortForwardedRequest);
+      const response = await this.routeLocalRequest({
+        requestId: metadata.requestId,
+        sourceId: metadata.sourceId,
+        targetId: metadata.targetId,
+        method: metadata.method,
+        path: metadata.path,
+        headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),
+        body: stream,
+        leaseAcquireTimeoutMs: UPSTREAM_HANDSHAKE_TIMEOUT_MS,
+        signal: controller.signal,
+      });
+      stream.write(
+        encodeVerserEnvelope({
+          type: 'response',
+          metadata: {
+            requestId: response.requestId,
+            statusCode: response.statusCode,
+            headers: flattenVerserHeaders(validateVerserHeaders(response.headers)),
+          },
+        }),
+      );
+      response.body.once('error', () => {
+        if (!stream.closed) {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+        }
+      });
+      response.body.once('end', () => {
+        stream.off('aborted', abortForwardedRequest);
+        stream.off('error', abortForwardedRequest);
+      });
+      response.body.pipe(stream);
+    } catch (error) {
+      const verserError = toVerserError(error);
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: verserError });
+      if (requestId !== undefined && targetId !== undefined && !stream.closed) {
+        stream.end(
+          encodeVerserEnvelope({
+            type: 'error',
+            metadata: {
+              requestId,
+              targetId,
+              code: verserError.code,
+              message: verserError.message,
+              context: verserError.context,
+            },
+          }),
+        );
+        return;
+      }
+      if (!stream.closed) {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    } finally {
+      if (stream.closed) {
+        void this.replenishUpstreamRequestStream(upstreamId, stream);
+      } else {
+        stream.once('close', () => void this.replenishUpstreamRequestStream(upstreamId, stream));
+      }
+    }
+  }
+
+  private async replenishUpstreamRequestStream(
+    upstreamId: string,
+    completedStream: http2.ClientHttp2Stream,
+  ): Promise<void> {
+    const link = this.upstreamLinks.get(upstreamId);
+    if (
+      link === undefined ||
+      link.closing ||
+      link.requestStream !== completedStream ||
+      link.session.closed ||
+      link.session.destroyed
+    ) {
+      return;
+    }
+
+    try {
+      const requestStream = await this.openUpstreamRequestStream(link.session, upstreamId);
+      link.requestStream = requestStream;
+      void this.handleUpstreamRequestStream(requestStream, upstreamId);
+    } catch (error) {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+      this.handleUpstreamRouteStreamClose(upstreamId);
+    }
+  }
+
   private handleFederatedRouteFrame(ownerId: string, frame: unknown): void {
     if (
       typeof frame !== 'object' ||
@@ -798,8 +979,18 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
     this.inboundFederationHosts.delete(hostId);
+    this.failFederatedRequestStreamWaiters(hostId, 'Federated Host disconnected');
     this.removeImportedFederatedRoutes(hostId);
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected, peerId: hostId });
+  }
+
+  private failFederatedRequestStreamWaiters(hostId: string, message: string): void {
+    const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
+    this.federatedRequestStreamWaiters.delete(hostId);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(createVerserError('upstream-unavailable', message, { hostId }));
+    }
   }
 
   private async sendUpstreamHandshake(
@@ -986,6 +1177,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (!link.routeStream.closed) {
       link.routeStream.close(http2.constants.NGHTTP2_NO_ERROR);
     }
+    if (!link.requestStream.closed) {
+      link.requestStream.close(http2.constants.NGHTTP2_NO_ERROR);
+    }
     link.session.destroy();
     await new Promise<void>((resolve) => {
       if (link.session.closed) {
@@ -1099,6 +1293,10 @@ export class NodeHttp2VerserHost implements VerserHost {
   ): Promise<VerserLocalBrokerResponse> {
     const target = this.peers.get(request.targetId);
     if (target === undefined || target.role !== 'guest') {
+      const forwarded = await this.tryRouteLocalRequestToFederatedHost(request);
+      if (forwarded !== undefined) {
+        return forwarded;
+      }
       throw createVerserError('missing-guest', 'Target Guest is not registered', {
         targetId: request.targetId,
       });
@@ -1165,6 +1363,117 @@ export class NodeHttp2VerserHost implements VerserHost {
         untrackController();
       }
     }
+  }
+
+  private async tryRouteLocalRequestToFederatedHost(
+    request: LocalDispatchRequest,
+  ): Promise<VerserLocalBrokerResponse | undefined> {
+    for (const candidate of this.routeRegistry.getCandidates(request.targetId)) {
+      if (candidate.source !== 'upstream') {
+        continue;
+      }
+      const requestStream = await this.acquireFederatedRequestStream(
+        candidate.nextHopHostId,
+        request.leaseAcquireTimeoutMs,
+      );
+
+      return this.routeLocalRequestOverFederationStream(request, requestStream);
+    }
+
+    return undefined;
+  }
+
+  private acquireFederatedRequestStream(
+    hostId: string,
+    timeoutMs: number,
+  ): Promise<http2.ServerHttp2Stream> {
+    const link = this.inboundFederationHosts.get(hostId);
+    if (link?.requestStream !== undefined && !link.requestStream.closed && !link.requestBusy) {
+      this.inboundFederationHosts.set(hostId, { ...link, requestBusy: true });
+      return Promise.resolve(link.requestStream);
+    }
+
+    return new Promise<http2.ServerHttp2Stream>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
+        this.federatedRequestStreamWaiters.set(
+          hostId,
+          waiters.filter((waiter) => waiter.resolve !== resolve),
+        );
+        reject(
+          createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
+            hostId,
+          }),
+        );
+      }, timeoutMs);
+      const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
+      waiters.push({ timeout, resolve, reject });
+      this.federatedRequestStreamWaiters.set(hostId, waiters);
+    });
+  }
+
+  private resolveNextFederatedRequestStreamWaiter(hostId: string): void {
+    const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
+    const waiter = waiters.shift();
+    if (waiter === undefined) {
+      return;
+    }
+    if (waiters.length === 0) {
+      this.federatedRequestStreamWaiters.delete(hostId);
+    } else {
+      this.federatedRequestStreamWaiters.set(hostId, waiters);
+    }
+    const link = this.inboundFederationHosts.get(hostId);
+    if (link?.requestStream === undefined || link.requestStream.closed || link.requestBusy) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(
+        createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
+          hostId,
+        }),
+      );
+      return;
+    }
+    clearTimeout(waiter.timeout);
+    this.inboundFederationHosts.set(hostId, { ...link, requestBusy: true });
+    waiter.resolve(link.requestStream);
+  }
+
+  private async routeLocalRequestOverFederationStream(
+    request: LocalDispatchRequest,
+    requestStream: http2.ServerHttp2Stream,
+  ): Promise<VerserLocalBrokerResponse> {
+    const body = new PassThrough();
+    const responsePromise = readLeaseResponseMetadataFromStream(requestStream, {
+      requestId: request.requestId,
+      targetId: request.targetId,
+    });
+    requestStream.write(
+      encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId: request.requestId,
+          sourceId: request.sourceId,
+          targetId: request.targetId,
+          method: request.method,
+          path: request.path,
+          headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
+        },
+      }),
+    );
+    request.body.once('error', (error) => requestStream.destroy(error));
+    request.body.pipe(requestStream);
+    const metadata = await responsePromise;
+    requestStream.pipe(body);
+    requestStream.once('end', () => body.end());
+    requestStream.once('error', (error) => body.destroy(error));
+    requestStream.once('close', () => body.end());
+
+    return {
+      requestId: request.requestId,
+      statusCode: metadata.statusCode,
+      headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),
+      body,
+    };
   }
 
   private routeLocalRequestToAttachedGuest(
@@ -1358,6 +1667,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     const target = this.peers.get(targetId);
 
     if (target === undefined) {
+      if (await this.tryRouteH2BrokerRequestToFederatedHost(stream, headers, requestId, targetId)) {
+        return;
+      }
       throw createVerserError('missing-guest', 'Target Guest is not registered', { targetId });
     }
     if (target.role !== 'guest') {
@@ -1388,6 +1700,105 @@ export class NodeHttp2VerserHost implements VerserHost {
       parseLeaseAcquireTimeoutMs(headers),
     );
     await this.routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
+  }
+
+  private async tryRouteH2BrokerRequestToFederatedHost(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+    requestId: string,
+    targetId: string,
+  ): Promise<boolean> {
+    for (const candidate of this.routeRegistry.getCandidates(targetId)) {
+      if (candidate.source !== 'upstream') {
+        continue;
+      }
+      const requestStream = await this.acquireFederatedRequestStream(
+        candidate.nextHopHostId,
+        parseLeaseAcquireTimeoutMs(headers),
+      );
+
+      await this.routeH2BrokerRequestOverFederationStream(
+        stream,
+        headers,
+        requestStream,
+        requestId,
+        targetId,
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  private async routeH2BrokerRequestOverFederationStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+    requestStream: http2.ServerHttp2Stream,
+    requestId: string,
+    targetId: string,
+  ): Promise<void> {
+    let completed = false;
+    const cancelForwarding = (): void => {
+      if (!completed && !requestStream.closed) {
+        requestStream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    };
+    const cleanupCancellation = (): void => {
+      stream.off('aborted', cancelForwarding);
+      stream.off('close', cancelOnReset);
+      stream.off('error', cancelForwarding);
+    };
+    const cancelOnReset = (): void => {
+      if (stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR) {
+        cancelForwarding();
+      }
+    };
+    stream.once('aborted', cancelForwarding);
+    stream.once('close', cancelOnReset);
+    stream.once('error', cancelForwarding);
+    const responsePromise = readLeaseResponseMetadataFromStream(requestStream, {
+      requestId,
+      targetId,
+    });
+    requestStream.write(
+      encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId,
+          sourceId: String(headers['x-verser-source-id'] ?? ''),
+          targetId,
+          method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
+          path: String(headers['x-verser-path'] ?? '/'),
+          headers: flattenVerserHeaders(
+            validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+          ),
+        },
+      }),
+    );
+    stream.once('error', (error) => requestStream.destroy(error));
+    stream.pipe(requestStream);
+
+    try {
+      const responseMetadata = await responsePromise;
+      stream.respond({
+        ':status': responseMetadata.statusCode,
+        ...validateVerserHeaders(responseMetadata.headers),
+      });
+      requestStream.once('error', () => {
+        if (!stream.closed) {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+        }
+      });
+      requestStream.pipe(stream);
+      stream.once('finish', () => {
+        completed = true;
+        cleanupCancellation();
+      });
+    } finally {
+      if (stream.writableEnded || stream.closed) {
+        cleanupCancellation();
+      }
+    }
   }
 
   private async routeH2BrokerRequestToLocalGuest(

@@ -91,7 +91,7 @@ export class HostRouteRegistry {
   }
 
   public getBrokerRoutes(): RoutedDomainRegistration[] {
-    return this.getSelectedLocalCandidates().map((candidate) => ({
+    return this.getSelectedCandidates().map((candidate) => ({
       targetId: candidate.route.targetId,
       domain: candidate.route.domain,
     }));
@@ -146,10 +146,6 @@ export class HostRouteRegistry {
     }
 
     return undefined;
-  }
-
-  private getSelectedLocalCandidates(): StoredRouteCandidate[] {
-    return selectCandidates(this.getLocalCandidates());
   }
 
   private getSelectedCandidates(): StoredRouteCandidate[] {
