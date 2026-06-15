@@ -18,12 +18,17 @@
     - [ ] Run the narrowest common protocol tests.
     - [ ] Run TypeScript build for affected packages if type exports changed.
     - [ ] Record coverage applicability and common-library reuse notes.
+- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [ ] Push the track branch to the remote branch before requesting manual verification.
+    - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Protocol and API Design Foundations' (Protocol in workflow.md)
 
 ## Phase 2: Host Route Registry and Local-First Resolution
 
 - [ ] Task: Write failing Host route-registry tests
     - [ ] Test local Guest routes overriding imported upstream candidates for the same route identity.
+    - [ ] Test Hosts with no configured upstreams and Hosts with unavailable upstreams continue serving local routes correctly.
     - [ ] Test multi-candidate route storage for future HA selection.
     - [ ] Test route withdrawal when imported upstream routes disappear.
     - [ ] Test loop suppression and hop-limit rejection.
@@ -39,6 +44,10 @@
     - [ ] Run focused Host and common protocol tests.
     - [ ] Confirm existing Broker/Guest routing tests still pass for unchanged behavior.
     - [ ] Record deduplication result and route conflict semantics.
+- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [ ] Push the track branch to the remote branch before requesting manual verification.
+    - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Host Route Registry and Local-First Resolution' (Protocol in workflow.md)
 
 ## Phase 3: Upstream Host Link Lifecycle and Authorization
@@ -60,6 +69,10 @@
     - [ ] Run focused TLS/configuration and Host lifecycle tests.
     - [ ] Run build for affected TypeScript packages.
     - [ ] Record coverage and certificate-chain limitations if any Node TLS details cannot be exposed safely.
+- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [ ] Push the track branch to the remote branch before requesting manual verification.
+    - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Upstream Host Link Lifecycle and Authorization' (Protocol in workflow.md)
 
 ## Phase 4: Route Import and Export Across Hosts
@@ -71,6 +84,7 @@
     - [ ] Test route withdrawal propagation when Guest, downstream Host, or upstream link disconnects.
 - [ ] Task: Implement route export policy and upstream advertisements
     - [ ] Export selected local route candidates with origin Host ID, next-hop Host ID, hop count, and via chain.
+    - [ ] Include hop distance in federated route state so downstream route selection can prefer the closest candidate.
     - [ ] Avoid exporting imported routes back to a visited Host.
     - [ ] Preserve existing full route-table replacement semantics for legacy Broker control streams.
 - [ ] Task: Implement route import policy and registry integration
@@ -81,6 +95,10 @@
     - [ ] Run focused Host route, lifecycle, and Broker route advertisement tests.
     - [ ] Confirm legacy Brokers receive compatible route frames.
     - [ ] Record route import/export policy defaults and deduplication result.
+- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [ ] Push the track branch to the remote branch before requesting manual verification.
+    - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Route Import and Export Across Hosts' (Protocol in workflow.md)
 
 ## Phase 5: Federated Request Forwarding
@@ -102,6 +120,10 @@
     - [ ] Run focused end-to-end federation tests.
     - [ ] Run existing end-to-end and broker-routing tests that prove compatibility.
     - [ ] Record streaming/backpressure validation and coverage results.
+- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [ ] Push the track branch to the remote branch before requesting manual verification.
+    - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Federated Request Forwarding' (Protocol in workflow.md)
 
 ## Phase 6: HA Candidate Selection and Safe Retry
@@ -113,7 +135,7 @@
     - [ ] Test route-table updates after upstream loss and recovery.
 - [ ] Task: Implement route candidate health and selection
     - [ ] Track upstream readiness based on session state, handshake success, authorization success, and route availability.
-    - [ ] Select eligible route candidates with local-first behavior and deterministic fallback.
+    - [ ] Select eligible route candidates with local-first behavior, hop-distance preference, and deterministic fallback.
     - [ ] Avoid consensus, leader election, or durable cluster state.
 - [ ] Task: Implement safe retry controls
     - [ ] Retry only before response headers and only when the request is replayable/idempotent or caller policy explicitly allows it.
@@ -123,6 +145,10 @@
     - [ ] Run focused HA and route withdrawal tests.
     - [ ] Run relevant Broker Agent/Dispatcher/fetch tests if route selection affects them.
     - [ ] Record limitations: eventual consistency, no active migration, no exactly-once delivery.
+- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [ ] Push the track branch to the remote branch before requesting manual verification.
+    - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 6: HA Candidate Selection and Safe Retry' (Protocol in workflow.md)
 
 ## Phase 7: Documentation, Examples, and Final Compatibility Validation
@@ -145,4 +171,8 @@
     - [ ] Confirm the implementation matches `spec.md` acceptance criteria.
     - [ ] Confirm common-library reuse/deduplication was completed or intentionally deferred with reasons.
     - [ ] Confirm docs, tests, and code are aligned.
+- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [ ] Push the track branch to the remote branch before requesting manual verification.
+    - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 7: Documentation, Examples, and Final Compatibility Validation' (Protocol in workflow.md)
