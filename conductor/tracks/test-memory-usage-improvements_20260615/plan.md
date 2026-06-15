@@ -2,8 +2,8 @@
 
 ## Phase 1: Track Setup, PR Setup, and Test-First Coverage
 
-- [ ] Task: Create the track review surface required by the workflow
-    - [ ] Create a dedicated track branch before implementation work.
+- [~] Task: Create the track review surface required by the workflow
+    - [x] Create a dedicated track branch before implementation work.
     - [ ] Create a GitHub pull request with a TO-BE title and body describing the final intended test and memory-usage improvement state.
     - [ ] Record the branch and PR link in this plan.
 - [ ] Task: Confirm affected scripts, docs, and test entrypoints
