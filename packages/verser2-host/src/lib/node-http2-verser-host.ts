@@ -10,17 +10,21 @@ import {
   type VerserCertificateIdentity,
   type VerserError,
   type VerserHostFederationHandshake,
+  type VerserHostId,
   type VerserPeerId,
   type VerserPeerRole,
   type VerserRegistrationAuthorizationContext,
   type VerserRegistrationRequest,
   type VerserRegistrationResponse,
   createBrokerRoutesControlFrame,
+  createFederatedRoutesControlFrame,
   createPeerId,
   createRoutedDomainRegistration,
   createVerserError,
   createVerserHostFederationHandshake,
+  createVerserHostId,
   decodeHeaderMap,
+  encodeJsonLine,
   encodeVerserEnvelope,
   extractCertificateIdentity,
   flattenVerserHeaders,
@@ -91,8 +95,16 @@ interface QueuedLeaseAcquisition {
 
 interface UpstreamLink {
   readonly upstreamId: string;
+  readonly remoteHostId: VerserHostId;
   readonly session: http2.ClientHttp2Session;
+  readonly routeStream: http2.ClientHttp2Stream;
   closing: boolean;
+}
+
+interface InboundFederationLink {
+  readonly hostId: string;
+  readonly session: http2.Http2Session;
+  readonly routeStream?: http2.ServerHttp2Stream;
 }
 
 const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 1000;
@@ -141,7 +153,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly pendingUpstreamConnections = new Set<string>();
 
-  private readonly inboundFederationHosts = new Map<string, http2.Http2Session>();
+  private readonly inboundFederationHosts = new Map<string, InboundFederationLink>();
 
   private server?: http2.Http2SecureServer;
 
@@ -254,8 +266,11 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.closeAllLeases();
     this.failAllQueuedLeaseAcquisitions(reason);
 
+    for (const link of this.inboundFederationHosts.values()) {
+      link.routeStream?.close(http2.constants.NGHTTP2_NO_ERROR);
+    }
     for (const session of this.sessions) {
-      session.close();
+      session.destroy();
     }
     this.sessions.clear();
     this.peers.clear();
@@ -280,17 +295,22 @@ export class NodeHttp2VerserHost implements VerserHost {
     upstreamId: string,
     routes: readonly FederatedRouteRegistration[],
   ): VerserError[] {
-    const rejected = this.routeRegistry.setImportedRoutes(upstreamId, routes);
-    for (const rejection of rejected) {
+    const update = this.routeRegistry.setImportedRoutes(upstreamId, routes);
+    for (const rejection of update.rejected) {
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: rejection.error });
     }
+    if (!update.changed) {
+      return update.rejected.map((rejection) => rejection.error);
+    }
     this.advertiseRoutes();
-    return rejected.map((rejection) => rejection.error);
+    this.advertiseFederatedRoutes();
+    return update.rejected.map((rejection) => rejection.error);
   }
 
   public removeImportedFederatedRoutes(upstreamId: string): void {
     this.routeRegistry.removeImportedRoutes(upstreamId);
     this.advertiseRoutes();
+    this.advertiseFederatedRoutes();
   }
 
   public getFederatedRouteCandidates(
@@ -318,14 +338,17 @@ export class NodeHttp2VerserHost implements VerserHost {
         session.once('connect', resolve);
         session.once('error', reject);
       });
-      await this.sendUpstreamHandshake(session, upstreamId);
-      link = { upstreamId, session, closing: false };
+      const remoteHostId = await this.sendUpstreamHandshake(session, upstreamId);
+      const routeStream = await this.openUpstreamRouteStream(session, upstreamId);
+      link = { upstreamId, remoteHostId, session, routeStream, closing: false };
       this.upstreamLinks.set(upstreamId, link);
       session.once('close', () => this.handleUpstreamSessionClose(upstreamId));
+      routeStream.once('close', () => this.handleUpstreamRouteStreamClose(upstreamId));
       session.on('error', (error) => {
         this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
       });
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId: upstreamId });
+      this.advertiseFederatedRoutes();
     } catch (error) {
       session.destroy();
       throw toVerserError(error);
@@ -374,6 +397,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     );
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'guest' });
     this.advertiseRoutes();
+    this.advertiseFederatedRoutes();
 
     let closed = false;
     return {
@@ -471,6 +495,11 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
+    if (path === '/verser/host/federation/routes') {
+      this.handleHostFederationRouteStream(stream, headers);
+      return;
+    }
+
     if (path !== '/verser/register') {
       throw createVerserError('protocol-error', 'Unsupported Host stream path', {
         path,
@@ -541,6 +570,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     stream.end(JSON.stringify(response));
     this.advertiseRoutes();
+    this.advertiseFederatedRoutes();
   }
 
   private async authorizeRegistration(
@@ -613,7 +643,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (session === undefined) {
       throw createVerserError('protocol-error', 'Host federation stream has no HTTP/2 session');
     }
-    this.inboundFederationHosts.set(handshake.hostId, session);
+    this.inboundFederationHosts.set(handshake.hostId, { hostId: handshake.hostId, session });
     session.once('close', () => this.removeInboundFederationHost(handshake.hostId));
 
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId: handshake.hostId });
@@ -622,6 +652,102 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     stream.end(
       JSON.stringify({ status: 'registered', hostId: this.options.hostId ?? 'host-local' }),
+    );
+  }
+
+  private handleHostFederationRouteStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): void {
+    const hostId = String(headers['x-verser-host-id'] ?? '').trim();
+    const link = this.inboundFederationHosts.get(hostId);
+    if (hostId.length === 0 || link === undefined || link.session !== stream.session) {
+      throw createVerserError(
+        'disconnected-target',
+        'Federated Host route stream is not registered',
+        {
+          hostId,
+        },
+      );
+    }
+
+    this.inboundFederationHosts.set(hostId, { ...link, routeStream: stream });
+    stream.respond({ ':status': 200, 'content-type': 'application/x-ndjson' });
+    stream.on('close', () => this.removeInboundFederationHost(hostId));
+    readNdjsonLines<unknown>(
+      stream,
+      (frame) => this.handleFederatedRouteFrame(hostId, frame),
+      (error) => this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error }),
+    );
+    this.writeFederatedRoutes(stream, hostId);
+  }
+
+  private async openUpstreamRouteStream(
+    session: http2.ClientHttp2Session,
+    upstreamId: string,
+  ): Promise<http2.ClientHttp2Stream> {
+    const stream = session.request({
+      ':method': 'POST',
+      ':path': '/verser/host/federation/routes',
+      'x-verser-host-id': this.options.hostId ?? 'host-local',
+    });
+    const headers = await this.waitForUpstreamHandshakeResponse(stream, upstreamId);
+    const statusCode = Number(headers[':status'] ?? 0);
+    if (statusCode < 200 || statusCode >= 300) {
+      stream.close(http2.constants.NGHTTP2_CANCEL);
+      throw createVerserError('upstream-unavailable', 'Upstream federation route stream rejected', {
+        upstreamId,
+        statusCode,
+      });
+    }
+
+    readNdjsonLines<unknown>(
+      stream,
+      (frame) => this.handleFederatedRouteFrame(upstreamId, frame),
+      (error) => this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error }),
+    );
+    return stream;
+  }
+
+  private handleFederatedRouteFrame(ownerId: string, frame: unknown): void {
+    if (
+      typeof frame !== 'object' ||
+      frame === null ||
+      !('type' in frame) ||
+      frame.type !== 'federated-routes' ||
+      !('routes' in frame) ||
+      !Array.isArray(frame.routes)
+    ) {
+      throw createVerserError('protocol-error', 'Invalid federated routes control frame', {
+        ownerId,
+      });
+    }
+    this.setImportedFederatedRoutes(ownerId, frame.routes as FederatedRouteRegistration[]);
+  }
+
+  private advertiseFederatedRoutes(): void {
+    for (const link of this.upstreamLinks.values()) {
+      if (!link.routeStream.closed) {
+        this.writeFederatedRoutes(link.routeStream, link.remoteHostId);
+      }
+    }
+    for (const link of this.inboundFederationHosts.values()) {
+      if (link.routeStream !== undefined && !link.routeStream.closed) {
+        this.writeFederatedRoutes(link.routeStream, link.hostId);
+      }
+    }
+  }
+
+  private writeFederatedRoutes(
+    stream: http2.ClientHttp2Stream | http2.ServerHttp2Stream,
+    peerHostId: string,
+  ): void {
+    stream.write(
+      encodeJsonLine(
+        createFederatedRoutesControlFrame(
+          this.routeRegistry.getFederatedRoutesForExport(peerHostId),
+        ),
+      ),
     );
   }
 
@@ -672,13 +798,14 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
     this.inboundFederationHosts.delete(hostId);
+    this.removeImportedFederatedRoutes(hostId);
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected, peerId: hostId });
   }
 
   private async sendUpstreamHandshake(
     session: http2.ClientHttp2Session,
     upstreamId: string,
-  ): Promise<void> {
+  ): Promise<VerserHostId> {
     const stream = session.request({
       ':method': 'POST',
       ':path': '/verser/host/federation',
@@ -704,7 +831,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     );
     const statusCode = Number(headers[':status'] ?? 0);
     if (statusCode >= 200 && statusCode < 300) {
-      return;
+      return this.getUpstreamHandshakeHostId(body, upstreamId);
     }
 
     throw createVerserError('authorization-denied', this.getUpstreamRejectionReason(body), {
@@ -813,6 +940,19 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
+  private getUpstreamHandshakeHostId(body: string, upstreamId: string): VerserHostId {
+    try {
+      const parsed = JSON.parse(body) as { hostId?: unknown };
+      if (typeof parsed.hostId === 'string') {
+        return createVerserHostId(parsed.hostId);
+      }
+    } catch {
+      // Ignore malformed success bodies and fall back to the local upstream identifier.
+    }
+
+    return createVerserHostId(upstreamId);
+  }
+
   private handleUpstreamSessionClose(upstreamId: string): void {
     const link = this.upstreamLinks.get(upstreamId);
     if (link === undefined) {
@@ -826,13 +966,27 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
   }
 
+  private handleUpstreamRouteStreamClose(upstreamId: string): void {
+    const link = this.upstreamLinks.get(upstreamId);
+    if (link === undefined) {
+      return;
+    }
+    if (!link.session.closed && !link.session.destroyed) {
+      link.session.destroy();
+    }
+    this.handleUpstreamSessionClose(upstreamId);
+  }
+
   private async closeUpstreamLink(link: UpstreamLink, reason: string): Promise<void> {
     if (!this.upstreamLinks.has(link.upstreamId)) {
       return;
     }
     link.closing = true;
     this.removeImportedFederatedRoutes(link.upstreamId);
-    link.session.close();
+    if (!link.routeStream.closed) {
+      link.routeStream.close(http2.constants.NGHTTP2_NO_ERROR);
+    }
+    link.session.destroy();
     await new Promise<void>((resolve) => {
       if (link.session.closed) {
         resolve();
@@ -910,6 +1064,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
     if (shouldAdvertiseRoutes) {
       this.advertiseRoutes();
+      this.advertiseFederatedRoutes();
     }
   }
 
@@ -1364,6 +1519,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     if (shouldAdvertiseRoutes) {
       this.advertiseRoutes();
+      this.advertiseFederatedRoutes();
     }
   }
 
