@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.4.0 - Host federation, upstreams, and HA foundations
+
+- Adds route-aware Host-to-Host federation over TLS HTTP/2 with stable Host IDs, upstream link lifecycle APIs, mTLS federation authorization, and federated route import/export.
+- Enables Brokers connected to an upstream Host to reach Guests attached to downstream Hosts while preserving HTTP method, path, headers, status, and streaming request/response bodies.
+- Adds local-first route candidate selection, loop/hop suppression, route withdrawal propagation, and new-request fallback to another available federated candidate before forwarding starts.
+- Documents federation topology, runner -> hub -> manager deployments, HA limitations, failure modes, and non-goals including no CONNECT tunneling, consensus, exactly-once delivery, or active in-flight migration.
+
 ## v0.3.1 - Release workflow reliability
 
 - Preserves staged-package dependency resolution in publish-job validation when validated build artifacts are reused.
