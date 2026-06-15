@@ -45,6 +45,7 @@ async def app(scope, receive, send):
     await send({"type": "http.response.body", "body": b""})
 
 async def main():
+    connect_timeout = float(os.environ.get("VERSER_CONNECT_TIMEOUT", "10"))
     opts = {
         "host_url": os.environ["VERSER_HOST_URL"],
         "guest_id": os.environ.get("VERSER_GUEST_ID", "python-guest-mtls"),
@@ -64,7 +65,7 @@ async def main():
             opts[option_name] = os.environ[env_name]
     guest = create_verser_guest(**opts)
     try:
-        await asyncio.wait_for(guest.connect(), timeout=10)
+        await asyncio.wait_for(guest.connect(), timeout=connect_timeout)
         print("python guest connected", flush=True)
     finally:
         try:
@@ -97,9 +98,12 @@ except Exception as exc:
     );
     let stdout = '';
     let stderr = '';
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-    }, 20_000);
+    const timeout = setTimeout(
+      () => {
+        child.kill('SIGKILL');
+      },
+      Number(env.VERSER_PROCESS_TIMEOUT_MS || 20_000),
+    );
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString('utf8');
     });
@@ -180,6 +184,8 @@ test(
     try {
       const result = await runPythonGuest(host, {
         VERSER_GUEST_ID: 'python-guest-mtls-untrusted-cert',
+        VERSER_CONNECT_TIMEOUT: '2',
+        VERSER_PROCESS_TIMEOUT_MS: '5000',
         VERSER_TLS_CERT_FILE: untrustedClient.certificatePath,
         VERSER_TLS_KEY_FILE: untrustedClient.keyPath,
       });
