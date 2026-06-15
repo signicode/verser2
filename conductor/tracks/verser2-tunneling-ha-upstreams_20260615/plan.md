@@ -98,7 +98,7 @@
     - [x] Push the track branch to the remote branch before requesting manual verification.
     - [x] Record the pushed commit SHA in this plan.
         - Checkpoint commit: `8801028`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Upstream Host Link Lifecycle and Authorization' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Upstream Host Link Lifecycle and Authorization' (Protocol in workflow.md)
 
 ### Phase 3 notes
 
