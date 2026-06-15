@@ -25,9 +25,10 @@ unsubscribe();
 listening. Use `host.close()` for shutdown.
 
 Host lifecycle events are emitted for local peers attached with
-`attachLocalGuest()` and `attachLocalBroker()` as well as remote TLS HTTP/2
-peers. Local registrations, route advertisements, request start/completion,
-errors, disconnections, and Host close events use the same event surface.
+`attachLocalGuest()` and `attachLocalBroker()`, remote TLS HTTP/2 peers, and
+upstream Host links. Local registrations, upstream Host registration and
+disconnection, local Broker route advertisements, request start/completion,
+errors, and Host close events use the Host lifecycle surface.
 
 ### Node and Bun Guest lifecycle
 
@@ -125,6 +126,7 @@ try {
 | Guest handler throws       | Host returns a `local-handler-failure` error envelope        |
 | TLS certificate expired    | HTTP/2 session setup fails                                   |
 | Connection lost            | Requests fail until the application closes and reconnects    |
+| Upstream link lost         | Imported routes are withdrawn; new requests fall back or fail |
 | Lease acquire timeout      | Routed request fails with a timeout error                    |
 | Response exceeds max bytes | Direct dispatch fails with a size-limit error                |
 
@@ -143,6 +145,10 @@ failure classes:
 | `local-handler-failure` | A Guest-side handler or ASGI app failed before a successful response could be completed. |
 | `invalid-registration` | A peer registration was rejected because the role, ID, routed domains, or duplicate state was invalid. |
 | `certificate-verification-failure` | TLS certificate validation or pinning failed. |
+| `upstream-unavailable` | No usable upstream Host request stream is available for a federated route. |
+| `route-loop` | A federated route would revisit a Host or exceed the configured hop limit. |
+| `authorization-denied` | An upstream federation authorization callback rejected the Host link. |
+| `unsafe-retry` | Reserved for retry policy failures; active non-replayable streams are not retried transparently. |
 
 ## Clean shutdown
 

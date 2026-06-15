@@ -18,6 +18,9 @@
  * - `/verser/guest/control` — Guest control stream for coordination.
  * - `/verser/guest/lease` — Guest lease stream for request/response bodies.
  * - `/verser/request` — Broker request dispatch to target Guests.
+ * - `/verser/host/federation` — Host-to-Host federation handshake.
+ * - `/verser/host/federation/routes` — Host-to-Host federated route stream.
+ * - `/verser/host/federation/request` — Host-to-Host federated request stream.
  *
  * ## TLS / Security
  *
@@ -66,6 +69,9 @@ export type {
   VerserLocalGuestRequestListener,
   VerserHostOptions,
   VerserHostRegistrationRequest,
+  VerserHostUpstreamHandle,
+  VerserHostUpstreamOptions,
+  VerserHostUpstreamStatus,
 } from './lib/types';
 
 export type { VerserPeerRole } from '@signicode/verser-common';

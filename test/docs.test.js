@@ -97,6 +97,59 @@ test('user docs document local Host peer attachment APIs', () => {
   assert.match(indexDocs, /in-process local peers/i);
 });
 
+test('user docs document Host federation and upstream HA behavior', () => {
+  const readme = fs.readFileSync(path.join(rootDirectory, 'README.md'), 'utf8');
+  const hostReadme = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-host/README.md'),
+    'utf8',
+  );
+  const commonReadme = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser-common/README.md'),
+    'utf8',
+  );
+  const indexDocs = fs.readFileSync(path.join(rootDirectory, 'docs/index.md'), 'utf8');
+  const federationDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/host-federation.md'),
+    'utf8',
+  );
+  const connectingDocs = fs.readFileSync(path.join(rootDirectory, 'docs/connecting.md'), 'utf8');
+  const routesDocs = fs.readFileSync(path.join(rootDirectory, 'docs/routes.md'), 'utf8');
+  const authorizationDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/authorization.md'),
+    'utf8',
+  );
+  const certificatesDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/certificates.md'),
+    'utf8',
+  );
+  const lifecycleDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/lifecycle-and-errors.md'),
+    'utf8',
+  );
+
+  assert.match(readme, /docs\/host-federation\.md/);
+  assert.match(indexDocs, /Host federation and upstreams/);
+  assert.match(connectingDocs, /connectUpstream/);
+  assert.match(connectingDocs, /hostId/);
+  assert.match(hostReadme, /connectUpstream/);
+  assert.match(hostReadme, /getUpstreams/);
+  assert.match(hostReadme, /VerserHostUpstreamHandle/);
+  assert.match(commonReadme, /createFederatedRouteRegistration/);
+  assert.match(commonReadme, /upstream-unavailable/);
+  assert.match(routesDocs, /Federated route candidates/);
+  assert.match(routesDocs, /local Guest routes first/i);
+  assert.match(authorizationDocs, /authorizeFederation/);
+  assert.match(certificatesDocs, /Upstream Host link TLS/);
+  assert.match(lifecycleDocs, /upstream Host links/i);
+  assert.match(lifecycleDocs, /route-loop/);
+  assert.match(federationDocs, /runner Host/i);
+  assert.match(federationDocs, /runner -> hub -> manager/i);
+  assert.match(federationDocs, /Broker reaching a downstream Guest/);
+  assert.match(federationDocs, /eventually consistent/);
+  assert.match(federationDocs, /not\*\* migrate active requests/);
+  assert.match(federationDocs, /CONNECT tunneling/);
+});
+
 test('Bun package README documents handler and entrypoint semantics', () => {
   const bunReadme = fs.readFileSync(
     path.join(rootDirectory, 'packages/verser2-guest-bun/README.md'),

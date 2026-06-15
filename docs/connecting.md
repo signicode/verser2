@@ -1,6 +1,7 @@
 # Connecting
 
-This guide covers creating a Host and connecting Guests and Brokers.
+This guide covers creating a Host and connecting Guests and Brokers. For
+multi-Host topologies, see [Host federation and upstreams](./host-federation.md).
 
 ## Host
 
@@ -12,6 +13,7 @@ import fs from 'node:fs';
 import { createVerserHost } from '@signicode/verser2-host';
 
 const host = createVerserHost({
+  hostId: 'host-edge-a',
   port: 8443,
   tls: {
     certFile: '/etc/verser/host.crt',
@@ -29,9 +31,29 @@ await host.start();
 - `host.address` throws before the Host starts listening.
 - Server certificate material can be reloaded while running via
   `host.reloadTlsCertificate()`.
-- Examples often use one Host, but this is not a built-in cluster or HA model.
-  Route state is per Host instance and per connected peer set. Multi-Host
-  topologies and shared route state are deployment architecture and future work.
+- Examples often use one Host, but Hosts can also connect outbound to upstream
+  Hosts with `connectUpstream()` for route-aware federation. Route state remains
+  eventually consistent per Host; there is no consensus, durable cluster state,
+  or active in-flight request migration.
+
+### Upstream Host links
+
+Use `connectUpstream()` when a Host should export its local Guest routes to an
+upstream Host and import eligible routes advertised by that upstream:
+
+```ts
+const handle = await host.connectUpstream({
+  upstreamId: 'manager',
+  url: 'https://manager.internal:8443',
+  tls: { caFile: '/etc/verser/manager-ca.crt' },
+});
+
+console.log(host.getUpstreams());
+await handle.close('planned-maintenance');
+```
+
+The receiving Host can authorize upstream links with
+`tls.clientAuth.authorizeFederation`; see [Authorization](./authorization.md).
 
 ### Local Host peers
 
