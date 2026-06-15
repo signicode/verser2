@@ -258,3 +258,11 @@
 - Validation passed: `node --test test/docs.test.js`; `npm run lint`; `npm run build`; `node --test test/docs.test.js test/packages.test.js`; `npm test` (256 tests: 252 passed, 4 skipped).
 - Code/documentation review: `@oracle` initially found blockers in the federated example and error-code wording; fixes were applied and re-review found no blockers and confirmed the docs respect Host/Guest/Broker boundaries and implementation limits.
 - Manual verification: approved by user after Phase 7 checkpoint was pushed to PR #22 at `f4f3ff350fa407e597da604a14768a372c78ae38`.
+
+## Post-completion PR review follow-up
+
+- GitHub Copilot PR comments were fetched with `gh pr view 22 --comments`, `gh api repos/signicode/verser2/pulls/22/comments --paginate`, and `gh pr view 22 --json comments,reviews`.
+- Corrections made from Copilot review: federation now requires configured `hostId` before opening or accepting Host-to-Host links; handshake/route/request streams no longer advertise fallback `host-local`; successful upstream handshake responses must include a valid remote Host ID; timed-out federated request-stream waiters delete empty waiter buckets; federated response readers preserve known downstream `VerserErrorCode` values; local and HTTP/2 Broker paths report `upstream-unavailable` when imported candidates exist but none are usable; public Host protocol-path docs now include `/verser/host/federation/routes` and `/verser/host/federation/request`.
+- Regression coverage added in `test/host-upstreams.test.js` for required Host IDs, unusable-candidate `upstream-unavailable` behavior for local and HTTP/2 Brokers, and preservation of downstream structured error codes through federation.
+- Post-review validation passed: `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-host && node --test --test-name-pattern "Host federation requires|upstream unavailable|preserves downstream" test/host-upstreams.test.js`; focused regression validation with `test/host-upstreams.test.js test/host-route-registry.test.js test/host.test.js test/broker-routing.test.js test/packages.test.js test/docs.test.js`; `npm run lint`.
+- `@oracle` reviewed the Copilot fixes; formatting and stale codemap/fallback concerns were addressed before commit.
