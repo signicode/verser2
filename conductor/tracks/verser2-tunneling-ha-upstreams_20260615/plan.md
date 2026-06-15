@@ -169,10 +169,11 @@
     - [x] Run focused end-to-end federation tests.
     - [x] Run existing end-to-end and broker-routing tests that prove compatibility.
     - [x] Record streaming/backpressure validation and coverage results.
-- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
-    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
-    - [ ] Push the track branch to the remote branch before requesting manual verification.
-    - [ ] Record the pushed commit SHA in this plan.
+- [x] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [x] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [x] Push the track branch to the remote branch before requesting manual verification.
+    - [x] Record the pushed commit SHA in this plan.
+        - Checkpoint commit: `6fd5d4d`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Federated Request Forwarding' (Protocol in workflow.md)
 
 ### Phase 5 notes
