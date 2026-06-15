@@ -131,10 +131,11 @@
     - [x] Run focused Host route, lifecycle, and Broker route advertisement tests.
     - [x] Confirm legacy Brokers receive compatible route frames.
     - [x] Record route import/export policy defaults and deduplication result.
-- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
-    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
-    - [ ] Push the track branch to the remote branch before requesting manual verification.
-    - [ ] Record the pushed commit SHA in this plan.
+- [x] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [x] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [x] Push the track branch to the remote branch before requesting manual verification.
+    - [x] Record the pushed commit SHA in this plan.
+        - Checkpoint commit: `56cda1e`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Route Import and Export Across Hosts' (Protocol in workflow.md)
 
 ### Phase 4 notes
