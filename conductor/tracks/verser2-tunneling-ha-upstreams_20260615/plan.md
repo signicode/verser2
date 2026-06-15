@@ -23,7 +23,7 @@
     - [x] Push the track branch to the remote branch before requesting manual verification.
     - [x] Record the pushed commit SHA in this plan.
         - Checkpoint commit: `3650cf4`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Protocol and API Design Foundations' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Protocol and API Design Foundations' (Protocol in workflow.md)
 
 ### Phase 1 notes
 
