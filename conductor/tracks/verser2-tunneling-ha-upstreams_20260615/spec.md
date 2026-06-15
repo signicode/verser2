@@ -35,6 +35,7 @@ The design should also establish HA foundations. Brokers and downstream Hosts ma
   - reconnect behavior,
   - maximum hop limit or a default inherited from Host options.
 - Upstream HTTP/2 sessions must be long-lived, reconnectable, and observable through lifecycle events.
+- Host must still work correctly when no upstreams are configured or when all upstreams are unavailable, serving only locally available routes.
 
 ### Route federation
 
@@ -71,6 +72,7 @@ The design should also establish HA foundations. Brokers and downstream Hosts ma
 ### HA behavior
 
 - Route state may contain multiple candidates for the same domain/target when multiple Hosts advertise availability.
+- Route state must in such case include hop distance so that Brokers can prefer the closest candidate.
 - New requests may fail over to another healthy candidate when the selected Host/upstream is unavailable before response headers are received and retry is safe.
 - Safe automatic retry is limited to replayable/idempotent requests or caller-approved retry policy. Non-replayable streaming bodies must not be retried transparently.
 - Existing in-flight requests fail if their selected Host/session/lease dies; active request migration is out of scope.
