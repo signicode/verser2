@@ -42,6 +42,40 @@ test('Host connects outbound to an upstream Host and closes the link', async () 
   await upstream.close();
 });
 
+test('Host federation requires configured Host IDs on both sides', async () => {
+  const upstream = createVerserHost({ tls: tlsOptions() });
+  const downstream = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  await upstream.start();
+
+  await assert.rejects(
+    () =>
+      downstream.connectUpstream({
+        upstreamId: 'manager',
+        url: hostUrl(upstream),
+        tls: { ca: trusted.certificate },
+      }),
+    /hostId/i,
+  );
+
+  await downstream.close();
+  await upstream.close();
+
+  const configuredUpstream = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const unconfiguredDownstream = createVerserHost({ tls: tlsOptions() });
+  await configuredUpstream.start();
+  await assert.rejects(
+    () =>
+      unconfiguredDownstream.connectUpstream({
+        upstreamId: 'manager',
+        url: hostUrl(configuredUpstream),
+        tls: { ca: trusted.certificate },
+      }),
+    /hostId/i,
+  );
+  await unconfiguredDownstream.close();
+  await configuredUpstream.close();
+});
+
 test('Host close cleans up upstream links even when the downstream Host was never started', async () => {
   const upstream = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const downstream = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
@@ -806,6 +840,132 @@ test('Federated HA falls back when a preferred imported candidate has no request
   } finally {
     await broker?.close();
     await farRunner.close();
+    await manager.close();
+  }
+});
+
+test('Federated HA reports upstream unavailable when all local Broker candidates are unusable', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  let broker;
+  try {
+    manager.setImportedFederatedRoutes('stale-runner', [
+      {
+        targetId: 'guest-ha-unavailable-local',
+        domain: 'ha-unavailable-local.verser.test',
+        originHostId: 'host-stale-runner',
+        nextHopHostId: 'host-stale-runner',
+        hopCount: 1,
+        viaHostIds: ['host-stale-runner'],
+        source: 'upstream',
+      },
+    ]);
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-ha-unavailable-local' });
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-ha-unavailable-local',
+          method: 'GET',
+          path: '/ha-unavailable',
+          headers: { host: 'ha-unavailable-local.verser.test' },
+          leaseAcquireTimeoutMs: 10,
+        }),
+      (error) => error.code === 'upstream-unavailable',
+    );
+  } finally {
+    await broker?.close();
+    await manager.close();
+  }
+});
+
+test('Federated HA reports upstream unavailable when all H2 Broker candidates are unusable', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    manager.setImportedFederatedRoutes('stale-runner', [
+      {
+        targetId: 'guest-ha-unavailable-h2',
+        domain: 'ha-unavailable-h2.verser.test',
+        originHostId: 'host-stale-runner',
+        nextHopHostId: 'host-stale-runner',
+        hopCount: 1,
+        viaHostIds: ['host-stale-runner'],
+        source: 'upstream',
+      },
+    ]);
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-ha-unavailable-h2',
+      tls: { ca: trusted.certificate },
+      leaseAcquireTimeoutMs: 10,
+    });
+    await broker.connect();
+    await broker.waitForRoute('ha-unavailable-h2.verser.test');
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-ha-unavailable-h2',
+          method: 'GET',
+          path: '/ha-unavailable',
+          headers: { host: 'ha-unavailable-h2.verser.test' },
+        }),
+      (error) => error.code === 'upstream-unavailable',
+    );
+  } finally {
+    await broker?.close();
+    await manager.close();
+  }
+});
+
+test('Federated forwarding preserves downstream structured error codes', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    runner.setImportedFederatedRoutes('stale-leaf', [
+      {
+        targetId: 'guest-leaf-unavailable',
+        domain: 'leaf-unavailable.verser.test',
+        originHostId: 'host-leaf',
+        nextHopHostId: 'host-leaf',
+        hopCount: 1,
+        viaHostIds: ['host-leaf'],
+        source: 'upstream',
+      },
+    ]);
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-leaf-unavailable',
+          'leaf-unavailable.verser.test',
+        ).length,
+        1,
+      ),
+    );
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-preserve-federated-error' });
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-leaf-unavailable',
+          method: 'GET',
+          path: '/unavailable',
+          headers: { host: 'leaf-unavailable.verser.test' },
+          leaseAcquireTimeoutMs: 10,
+        }),
+      (error) => error.code === 'upstream-unavailable',
+    );
+  } finally {
+    await broker?.close();
+    await runner.close();
     await manager.close();
   }
 });

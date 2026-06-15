@@ -10,6 +10,7 @@ import {
   VERSER_LIFECYCLE_EVENTS,
   type VerserCertificateIdentity,
   type VerserError,
+  type VerserErrorEnvelopeMetadata,
   type VerserHostFederationHandshake,
   type VerserHostId,
   type VerserPeerId,
@@ -17,6 +18,7 @@ import {
   type VerserRegistrationAuthorizationContext,
   type VerserRegistrationRequest,
   type VerserRegistrationResponse,
+  type VerserResponseEnvelopeMetadata,
   createBrokerRoutesControlFrame,
   createFederatedRoutesControlFrame,
   createPeerId,
@@ -37,6 +39,8 @@ import {
   readLeaseRequestMetadataFromStream,
   readLeaseResponseMetadataFromStream,
   readNdjsonLines,
+  readVerserEnvelopeFromStream,
+  toVerserErrorCode,
   validateVerserHeaders,
 } from '@signicode/verser-common';
 import { sendError, writeJsonLine } from './http2-io';
@@ -131,12 +135,14 @@ const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 1000;
  * - Creates a Node `http2.createSecureServer` with TLS.
  * - Listens on `127.0.0.1` port `0` (ephemeral) by default.
  * - Handles only the Verser protocol paths (`/verser/register`,
- *   `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`).
+ *   `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`,
+ *   `/verser/host/federation`, `/verser/host/federation/routes`, and
+ *   `/verser/host/federation/request`).
  * - Peer sessions are tracked for lifecycle management; duplicate peer IDs
  *   are rejected at registration time.
  * - Lease streams are managed as an idle pool; when a Broker request arrives,
  *   the Host acquires a lease from the pool (or queues the request waiting for one).
- * - Handles Host federation handshakes at `/verser/host/federation`.
+ * - Handles Host federation handshakes, route streams, and request streams.
  * - Route changes are advertised to all connected Brokers via NDJSON control frames.
  *
  * @internal
@@ -339,6 +345,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   public async connectUpstream(
     options: VerserHostUpstreamOptions,
   ): Promise<VerserHostUpstreamHandle> {
+    const localHostId = this.getFederationHostId();
     const upstreamId = createPeerId(options.upstreamId);
     if (this.upstreamLinks.has(upstreamId) || this.pendingUpstreamConnections.has(upstreamId)) {
       throw createVerserError('invalid-registration', 'Upstream is already connected', {
@@ -354,9 +361,9 @@ export class NodeHttp2VerserHost implements VerserHost {
         session.once('connect', resolve);
         session.once('error', reject);
       });
-      const remoteHostId = await this.sendUpstreamHandshake(session, upstreamId);
-      const routeStream = await this.openUpstreamRouteStream(session, upstreamId);
-      const requestStream = await this.openUpstreamRequestStream(session, upstreamId);
+      const remoteHostId = await this.sendUpstreamHandshake(session, upstreamId, localHostId);
+      const routeStream = await this.openUpstreamRouteStream(session, upstreamId, localHostId);
+      const requestStream = await this.openUpstreamRequestStream(session, upstreamId, localHostId);
       link = { upstreamId, remoteHostId, session, routeStream, requestStream, closing: false };
       this.upstreamLinks.set(upstreamId, link);
       session.once('close', () => this.handleUpstreamSessionClose(upstreamId));
@@ -473,6 +480,16 @@ export class NodeHttp2VerserHost implements VerserHost {
   public onLifecycle(listener: (event: VerserHostLifecycleEvent) => void): () => void {
     this.lifecycle.on('event', listener);
     return () => this.lifecycle.off('event', listener);
+  }
+
+  private getFederationHostId(): VerserHostId {
+    if (this.options.hostId === undefined || this.options.hostId.trim().length === 0) {
+      throw createVerserError(
+        'invalid-registration',
+        'Host federation requires a configured hostId',
+      );
+    }
+    return createVerserHostId(this.options.hostId);
   }
 
   private trackSession(session: http2.ServerHttp2Session): void {
@@ -643,6 +660,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   }
 
   private async handleHostFederationStream(stream: http2.ServerHttp2Stream): Promise<void> {
+    const localHostId = this.getFederationHostId();
     let handshake: VerserHostFederationHandshake;
     try {
       handshake = createVerserHostFederationHandshake(JSON.parse(await readStreamText(stream)));
@@ -673,9 +691,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (!stream.headersSent) {
       stream.respond({ ':status': 200, 'content-type': 'application/json' });
     }
-    stream.end(
-      JSON.stringify({ status: 'registered', hostId: this.options.hostId ?? 'host-local' }),
-    );
+    stream.end(JSON.stringify({ status: 'registered', hostId: localHostId }));
   }
 
   private handleHostFederationRouteStream(
@@ -708,11 +724,12 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async openUpstreamRouteStream(
     session: http2.ClientHttp2Session,
     upstreamId: string,
+    localHostId: VerserHostId,
   ): Promise<http2.ClientHttp2Stream> {
     const stream = session.request({
       ':method': 'POST',
       ':path': '/verser/host/federation/routes',
-      'x-verser-host-id': this.options.hostId ?? 'host-local',
+      'x-verser-host-id': localHostId,
     });
     const headers = await this.waitForUpstreamHandshakeResponse(stream, upstreamId);
     const statusCode = Number(headers[':status'] ?? 0);
@@ -735,11 +752,12 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async openUpstreamRequestStream(
     session: http2.ClientHttp2Session,
     upstreamId: string,
+    localHostId: VerserHostId,
   ): Promise<http2.ClientHttp2Stream> {
     const stream = session.request({
       ':method': 'POST',
       ':path': '/verser/host/federation/request',
-      'x-verser-host-id': this.options.hostId ?? 'host-local',
+      'x-verser-host-id': localHostId,
     });
     const headers = await this.waitForUpstreamHandshakeResponse(stream, upstreamId);
     const statusCode = Number(headers[':status'] ?? 0);
@@ -795,7 +813,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     let targetId: string | undefined;
     try {
       const metadata = await readLeaseRequestMetadataFromStream(stream, {
-        guestId: this.options.hostId ?? 'host-local',
+        guestId: this.getFederationHostId(),
         leaseId: upstreamId,
       });
       requestId = metadata.requestId;
@@ -881,7 +899,11 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     try {
-      const requestStream = await this.openUpstreamRequestStream(link.session, upstreamId);
+      const requestStream = await this.openUpstreamRequestStream(
+        link.session,
+        upstreamId,
+        this.getFederationHostId(),
+      );
       link.requestStream = requestStream;
       void this.handleUpstreamRequestStream(requestStream, upstreamId);
     } catch (error) {
@@ -996,6 +1018,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async sendUpstreamHandshake(
     session: http2.ClientHttp2Session,
     upstreamId: string,
+    localHostId: VerserHostId,
   ): Promise<VerserHostId> {
     const stream = session.request({
       ':method': 'POST',
@@ -1006,7 +1029,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     stream.end(
       JSON.stringify(
         createVerserHostFederationHandshake({
-          hostId: this.options.hostId ?? 'host-local',
+          hostId: localHostId,
           protocolVersion: 1,
           maxHopCount: this.options.maxFederationHopCount,
           importRoutes: true,
@@ -1124,8 +1147,17 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private getUpstreamRejectionReason(body: string): string {
     try {
-      const parsed = JSON.parse(body) as { reason?: string; status?: string };
-      return parsed.reason ?? parsed.status ?? 'Upstream Host federation rejected';
+      const parsed = JSON.parse(body) as {
+        reason?: string;
+        status?: string;
+        error?: { message?: string };
+      };
+      return (
+        parsed.reason ??
+        parsed.error?.message ??
+        parsed.status ??
+        'Upstream Host federation rejected'
+      );
     } catch {
       return body.trim() || 'Upstream Host federation rejected';
     }
@@ -1137,11 +1169,20 @@ export class NodeHttp2VerserHost implements VerserHost {
       if (typeof parsed.hostId === 'string') {
         return createVerserHostId(parsed.hostId);
       }
-    } catch {
-      // Ignore malformed success bodies and fall back to the local upstream identifier.
+    } catch (error) {
+      throw createVerserError(
+        'protocol-error',
+        'Upstream federation response has invalid Host ID',
+        {
+          upstreamId,
+          cause: error instanceof Error ? error.message : String(error),
+        },
+      );
     }
 
-    return createVerserHostId(upstreamId);
+    throw createVerserError('protocol-error', 'Upstream federation response missing Host ID', {
+      upstreamId,
+    });
   }
 
   private handleUpstreamSessionClose(upstreamId: string): void {
@@ -1368,10 +1409,12 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async tryRouteLocalRequestToFederatedHost(
     request: LocalDispatchRequest,
   ): Promise<VerserLocalBrokerResponse | undefined> {
+    let hadUpstreamCandidate = false;
     for (const candidate of this.routeRegistry.getCandidates(request.targetId)) {
       if (candidate.source !== 'upstream') {
         continue;
       }
+      hadUpstreamCandidate = true;
       const requestStream = await this.tryAcquireFederatedRequestStream(
         candidate.nextHopHostId,
         request.leaseAcquireTimeoutMs,
@@ -1381,6 +1424,16 @@ export class NodeHttp2VerserHost implements VerserHost {
       }
 
       return this.routeLocalRequestOverFederationStream(request, requestStream);
+    }
+
+    if (hadUpstreamCandidate) {
+      throw createVerserError(
+        'upstream-unavailable',
+        'No federated route candidates are available',
+        {
+          targetId: request.targetId,
+        },
+      );
     }
 
     return undefined;
@@ -1414,10 +1467,12 @@ export class NodeHttp2VerserHost implements VerserHost {
     return new Promise<http2.ServerHttp2Stream>((resolve, reject) => {
       const timeout = setTimeout(() => {
         const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
-        this.federatedRequestStreamWaiters.set(
-          hostId,
-          waiters.filter((waiter) => waiter.resolve !== resolve),
-        );
+        const remainingWaiters = waiters.filter((waiter) => waiter.resolve !== resolve);
+        if (remainingWaiters.length === 0) {
+          this.federatedRequestStreamWaiters.delete(hostId);
+        } else {
+          this.federatedRequestStreamWaiters.set(hostId, remainingWaiters);
+        }
         reject(
           createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
             hostId,
@@ -1461,7 +1516,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     requestStream: http2.ServerHttp2Stream,
   ): Promise<VerserLocalBrokerResponse> {
     const body = new PassThrough();
-    const responsePromise = readLeaseResponseMetadataFromStream(requestStream, {
+    const responsePromise = this.readFederatedResponseMetadata(requestStream, {
       requestId: request.requestId,
       targetId: request.targetId,
     });
@@ -1507,6 +1562,37 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     return dispatchLocalGuestRequest(request, target.localGuest.listener);
+  }
+
+  private async readFederatedResponseMetadata(
+    stream: http2.ServerHttp2Stream,
+    options: { readonly requestId: string; readonly targetId: string },
+  ): Promise<VerserResponseEnvelopeMetadata> {
+    const parsed = await readVerserEnvelopeFromStream(stream, {
+      context: { requestId: options.requestId, targetId: options.targetId },
+    });
+
+    if (parsed.type === 'response') {
+      return parsed.metadata as VerserResponseEnvelopeMetadata;
+    }
+
+    if (parsed.type === 'error') {
+      const errorMetadata = parsed.metadata as VerserErrorEnvelopeMetadata;
+      throw createVerserError(toVerserErrorCode(errorMetadata.code), errorMetadata.message, {
+        targetId: options.targetId,
+        requestId: options.requestId,
+        ...(errorMetadata.context ?? {}),
+      });
+    }
+
+    throw createVerserError(
+      'protocol-error',
+      'Federated request returned a non-response envelope',
+      {
+        targetId: options.targetId,
+        requestId: options.requestId,
+      },
+    );
   }
 
   private async routeLocalRequestToH2Guest(
@@ -1726,10 +1812,12 @@ export class NodeHttp2VerserHost implements VerserHost {
     requestId: string,
     targetId: string,
   ): Promise<boolean> {
+    let hadUpstreamCandidate = false;
     for (const candidate of this.routeRegistry.getCandidates(targetId)) {
       if (candidate.source !== 'upstream') {
         continue;
       }
+      hadUpstreamCandidate = true;
       const requestStream = await this.tryAcquireFederatedRequestStream(
         candidate.nextHopHostId,
         parseLeaseAcquireTimeoutMs(headers),
@@ -1746,6 +1834,16 @@ export class NodeHttp2VerserHost implements VerserHost {
         targetId,
       );
       return true;
+    }
+
+    if (hadUpstreamCandidate) {
+      throw createVerserError(
+        'upstream-unavailable',
+        'No federated route candidates are available',
+        {
+          targetId,
+        },
+      );
     }
 
     return false;
@@ -1777,7 +1875,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     stream.once('aborted', cancelForwarding);
     stream.once('close', cancelOnReset);
     stream.once('error', cancelForwarding);
-    const responsePromise = readLeaseResponseMetadataFromStream(requestStream, {
+    const responsePromise = this.readFederatedResponseMetadata(requestStream, {
       requestId,
       targetId,
     });

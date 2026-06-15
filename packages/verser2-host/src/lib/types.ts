@@ -230,7 +230,8 @@ export interface VerserHostLifecycleEvent {
  *   TLS HTTP/2 peer connection.
  *
  * **Only protocol paths** `/verser/register`, `/verser/guest/control`,
- * `/verser/guest/lease`, `/verser/request`, and `/verser/host/federation`
+ * `/verser/guest/lease`, `/verser/request`, `/verser/host/federation`,
+ * `/verser/host/federation/routes`, and `/verser/host/federation/request`
  * are supported.
  *
  * @remarks
