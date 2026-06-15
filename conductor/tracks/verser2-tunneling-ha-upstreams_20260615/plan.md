@@ -242,10 +242,11 @@
     - [x] Confirm the implementation matches `spec.md` acceptance criteria.
     - [x] Confirm common-library reuse/deduplication was completed or intentionally deferred with reasons.
     - [x] Confirm docs, tests, and code are aligned.
-- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
-    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
-    - [ ] Push the track branch to the remote branch before requesting manual verification.
-    - [ ] Record the pushed commit SHA in this plan.
+- [x] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [x] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [x] Push the track branch to the remote branch before requesting manual verification.
+    - [x] Record the pushed commit SHA in this plan.
+        - Checkpoint commit: `25c2258`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 7: Documentation, Examples, and Final Compatibility Validation' (Protocol in workflow.md)
 
 ### Phase 7 notes
