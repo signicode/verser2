@@ -2,16 +2,19 @@
 
 Host package for verser2. The Host listens for outbound Peer (Guest and Broker)
 connections over TLS HTTP/2 and routes requests to advertised Guest routes. It
-can also attach in-process local Guests and local Brokers directly to the Host.
+can also attach in-process local Guests and local Brokers directly to the Host,
+and can connect outbound to upstream Hosts for route-aware federation.
 
 ## Public API
 
 - `createVerserHost(options?: VerserHostOptions): VerserHost`
 - Host methods: `host.attachLocalGuest(options)`,
-  `host.attachLocalBroker(options)`
+  `host.attachLocalBroker(options)`, `host.connectUpstream(options)`,
+  `host.getUpstreams()`
 - Types: `VerserHost`, `VerserHostLifecycleEvent`, `VerserHostOptions`,
-  `VerserHostRegistrationRequest`, `VerserLocalGuestRequestListener`,
-  `VerserLocalGuestResponse`, `VerserLocalGuestOptions`,
+  `VerserHostRegistrationRequest`, `VerserHostUpstreamOptions`,
+  `VerserHostUpstreamStatus`, `VerserHostUpstreamHandle`,
+  `VerserLocalGuestRequestListener`, `VerserLocalGuestResponse`, `VerserLocalGuestOptions`,
   `VerserLocalBrokerOptions`, `VerserLocalBrokerRequest`,
   `VerserLocalBrokerResponse`, `VerserLocalGuestHandle`,
   `VerserLocalBrokerHandle`
@@ -25,6 +28,7 @@ import fs from 'node:fs';
 import { createVerserHost } from '@signicode/verser2-host';
 
 const host = createVerserHost({
+  hostId: 'host-edge-a',
   port: 8443,
   tls: {
     certFile: '/etc/verser/host.crt',
@@ -33,6 +37,22 @@ const host = createVerserHost({
 });
 
 await host.start();
+```
+
+### Upstream Host links
+
+Use upstream links when this Host should participate in Host federation and
+exchange routes with another Host:
+
+```ts
+const upstream: VerserHostUpstreamHandle = await host.connectUpstream({
+  upstreamId: 'manager',
+  url: 'https://manager.internal:8443',
+  tls: { caFile: '/etc/verser/manager-ca.crt' },
+});
+
+console.log(host.getUpstreams());
+await upstream.close('planned-maintenance');
 ```
 
 ### Local Host peers
@@ -74,6 +94,11 @@ await guest.close();
 - `host.address` throws before the Host starts listening.
 - Server certificate material can be reloaded while running via
   `host.reloadTlsCertificate()`.
+- Host federation route state is eventually consistent. New requests can fall
+  back to another route candidate before forwarding starts, but active in-flight
+  requests are not migrated or transparently replayed.
+- Automatic upstream reconnect policy is not yet configurable; applications can
+  observe lifecycle events and reconnect at their boundary.
 - Registration authorization is a registration-time mTLS/client-certificate hook
   only — it is not complete application authentication/authorization, and
   per-request Broker target authorization is not implemented.
@@ -90,3 +115,4 @@ await guest.close();
 - [Docs: Connecting](../../docs/connecting.md)
 - [Docs: Certificates](../../docs/certificates.md)
 - [Docs: Authorization](../../docs/authorization.md)
+- [Docs: Host federation and upstreams](../../docs/host-federation.md)

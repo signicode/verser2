@@ -1,9 +1,9 @@
 # Authorization
 
-Verser2 provides a registration-time authorization hook based on mTLS client
-certificates. This is a transport-level check — verser2 is not a complete
-public gateway. Applications remain responsible for authentication,
-authorization, and routing policy beyond these checks.
+Verser2 provides registration-time and upstream federation authorization hooks
+based on mTLS client certificates. These are transport-level checks — verser2 is
+not a complete public gateway. Applications remain responsible for
+authentication, authorization, and routing policy beyond these checks.
 
 ## Registration authorization callback
 
@@ -64,6 +64,40 @@ are not trusted or forwarded; the Host replaces them with `{ local: true,
 authorized: true }`. Applications that rely on mTLS certificate identity should
 treat local peers as a separate trusted in-process path.
 
+## Federation authorization callback
+
+The Host can also provide an `authorizeFederation` callback under
+`tls.clientAuth`. It is called when another Host opens an upstream federation
+link and sends its Host federation handshake:
+
+```ts
+const host = createVerserHost({
+  hostId: 'host-manager',
+  tls: {
+    certFile: '/etc/verser/manager.crt',
+    keyFile: '/etc/verser/manager.key',
+    clientAuth: {
+      caFile: '/etc/verser/host-client-ca.crt',
+      authorizeFederation(context) {
+        // context.hostId: declared upstream Host ID
+        // context.handshake.hostId: Host ID from the versioned handshake
+        // context.metadata.authorized: Node TLS authorization state
+        // context.certificate?.fingerprint256: client certificate fingerprint
+        if (context.hostId === 'host-runner-a' && context.metadata.authorized === true) {
+          return { action: 'allow' };
+        }
+        return { action: 'close', reason: 'upstream Host is not authorized' };
+      },
+    },
+  },
+});
+```
+
+The callback returns `{ action: 'allow' }` to accept the Host link or
+`{ action: 'close', reason }` to reject it. mTLS trust is transport evidence;
+the application callback still decides whether the declared Host identity and
+certificate context are allowed.
+
 ## Certificate identity and fingerprints
 
 When mTLS is enabled, the Host extracts structured certificate identity metadata
@@ -114,6 +148,7 @@ Guest request handlers or by wrapping the Broker request path.
 |-----------------|--------------------------------------------------------|
 | TLS handshake   | Encrypted transport, optional mTLS client verification |
 | Registration    | Certificate-based `authorizeRegistration` hook         |
+| Federation handshake | Certificate-based `authorizeFederation` hook for Host links |
 | Local peer attach | In-process registration hook with Host-owned metadata |
 | Request routing | No per-request authorization                           |
 | Guest handler   | Application-controlled (token validation, etc.)        |
