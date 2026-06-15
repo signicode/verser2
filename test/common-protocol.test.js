@@ -160,6 +160,144 @@ test('shared broker control frames preserve route advertisements', () => {
   });
 });
 
+test('shared federation helpers create host ids and handshake metadata', () => {
+  const hostId = common.createVerserHostId('host-runner');
+  const handshake = common.createVerserHostFederationHandshake({
+    hostId,
+    protocolVersion: 1,
+    maxHopCount: 4,
+    importRoutes: true,
+    exportRoutes: false,
+  });
+
+  assert.equal(hostId, 'host-runner');
+  assert.deepEqual(handshake, {
+    type: 'verser-host-federation-handshake',
+    protocolVersion: 1,
+    hostId: 'host-runner',
+    maxHopCount: 4,
+    importRoutes: true,
+    exportRoutes: false,
+  });
+  assert.throws(() => common.createVerserHostId(''), /host id/i);
+  assert.throws(
+    () => common.createVerserHostFederationHandshake({ hostId: 'host-a', protocolVersion: 0 }),
+    /protocol version/i,
+  );
+  assert.throws(
+    () =>
+      common.createVerserHostFederationHandshake({
+        type: 'wrong-handshake-type',
+        hostId: 'host-a',
+        protocolVersion: 1,
+      }),
+    /handshake type/i,
+  );
+  assert.throws(
+    () =>
+      common.createVerserHostFederationHandshake({
+        hostId: 'host-a',
+        protocolVersion: 1,
+        importRoutes: 'yes',
+      }),
+    /importRoutes/i,
+  );
+});
+
+test('shared federation route metadata validates hop counts and loop prevention', () => {
+  const route = common.createFederatedRouteRegistration({
+    targetId: 'guest-alpha',
+    domain: 'alpha.verser.test',
+    originHostId: 'host-runner',
+    nextHopHostId: 'host-hub',
+    hopCount: 2,
+    viaHostIds: ['host-runner', 'host-hub'],
+    source: 'upstream',
+  });
+
+  assert.deepEqual(route, {
+    targetId: 'guest-alpha',
+    domain: 'alpha.verser.test',
+    originHostId: 'host-runner',
+    nextHopHostId: 'host-hub',
+    hopCount: 2,
+    viaHostIds: ['host-runner', 'host-hub'],
+    source: 'upstream',
+  });
+  assert.equal(common.isFederatedRouteLoop(route, 'host-hub'), true);
+  assert.equal(common.isFederatedRouteLoop(route, 'host-manager'), false);
+  assert.equal(common.exceedsFederatedRouteHopLimit(route, 1), true);
+  assert.equal(common.exceedsFederatedRouteHopLimit(route, 2), false);
+  assert.throws(
+    () =>
+      common.createFederatedRouteRegistration({
+        targetId: 'guest-alpha',
+        domain: 'alpha.verser.test',
+        originHostId: 'host-runner',
+        nextHopHostId: 'host-hub',
+        hopCount: -1,
+        viaHostIds: [],
+        source: 'upstream',
+      }),
+    /hop count/i,
+  );
+  assert.throws(
+    () =>
+      common.createFederatedRouteRegistration({
+        targetId: 'guest-alpha',
+        domain: 'alpha.verser.test',
+        originHostId: 'host-runner',
+        nextHopHostId: 'host-hub',
+        hopCount: 1,
+        source: 'upstream',
+      }),
+    /viaHostIds/i,
+  );
+  assert.throws(
+    () =>
+      common.createFederatedRouteRegistration({
+        targetId: 'guest-alpha',
+        domain: 'alpha.verser.test',
+        originHostId: 'host-runner',
+        nextHopHostId: 'host-hub',
+        hopCount: 1,
+        viaHostIds: ['host-runner'],
+        source: 'sideways',
+      }),
+    /source/i,
+  );
+});
+
+test('shared federation control frames preserve legacy broker route compatibility', () => {
+  const federatedRoute = common.createFederatedRouteRegistration({
+    targetId: 'guest-alpha',
+    domain: 'alpha.verser.test',
+    originHostId: 'host-runner',
+    nextHopHostId: 'host-hub',
+    hopCount: 1,
+    viaHostIds: ['host-runner'],
+    source: 'local',
+  });
+  const federationFrame = common.createFederatedRoutesControlFrame([federatedRoute]);
+  const brokerFrame = common.createBrokerRoutesControlFrame(federationFrame.routes);
+
+  assert.deepEqual(federationFrame, {
+    type: 'federated-routes',
+    routes: [federatedRoute],
+  });
+  assert.deepEqual(brokerFrame, {
+    type: 'routes',
+    routes: [{ targetId: 'guest-alpha', domain: 'alpha.verser.test' }],
+  });
+});
+
+test('shared federation error codes are recognized', () => {
+  assert.equal(common.toVerserErrorCode('upstream-unavailable'), 'upstream-unavailable');
+  assert.equal(common.toVerserErrorCode('route-loop'), 'route-loop');
+  assert.equal(common.toVerserErrorCode('authorization-denied'), 'authorization-denied');
+  assert.equal(common.toVerserErrorCode('unsafe-retry'), 'unsafe-retry');
+});
+
 test('shared request and response envelopes preserve HTTP semantics', () => {
   const request = common.createRoutedRequestEnvelope({
     requestId: 'req-1',

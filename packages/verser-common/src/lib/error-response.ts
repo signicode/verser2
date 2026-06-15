@@ -59,7 +59,11 @@ export function toVerserErrorCode(code: string | undefined): VerserErrorCode {
     code === 'protocol-error' ||
     code === 'local-handler-failure' ||
     code === 'invalid-registration' ||
-    code === 'certificate-verification-failure'
+    code === 'certificate-verification-failure' ||
+    code === 'upstream-unavailable' ||
+    code === 'route-loop' ||
+    code === 'authorization-denied' ||
+    code === 'unsafe-retry'
   ) {
     return code;
   }
