@@ -263,7 +263,7 @@ try {
     }
   }
 
-  {
+  if (process.env.VERSER_BUN_SELF_CHECK_FETCH === '1') {
     const fetchResponse = await fetchSelfCheckResponse(resolvedGuestDomain);
     const fetchBody = fetchResponse as {
       ok: unknown;

@@ -24,6 +24,7 @@ import os
 from verser2_guest_python import create_verser_broker
 
 async def main():
+    connect_timeout = float(os.environ.get("VERSER_CONNECT_TIMEOUT", "10"))
     opts = {
         "host_url": os.environ["VERSER_HOST_URL"],
         "broker_id": os.environ.get("VERSER_BROKER_ID", "python-broker-mtls"),
@@ -40,7 +41,7 @@ async def main():
         if os.environ.get(env_name):
             opts[option_name] = os.environ[env_name]
     broker = create_verser_broker(**opts)
-    await broker.connect()
+    await asyncio.wait_for(broker.connect(), timeout=connect_timeout)
     print("python broker connected", flush=True)
     await broker.close()
 
@@ -62,9 +63,12 @@ asyncio.run(main())
     );
     let stdout = '';
     let stderr = '';
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL');
-    }, options.timeout ?? 20_000);
+    const timeout = setTimeout(
+      () => {
+        child.kill('SIGKILL');
+      },
+      Number(options.env?.VERSER_PROCESS_TIMEOUT_MS || options.timeout || 20_000),
+    );
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString('utf8');
     });
@@ -171,6 +175,8 @@ test(
         env: {
           VERSER_HOST_URL: `https://127.0.0.1:${host.address.port}`,
           VERSER_TLS_CA_FILE: trusted.certificatePath,
+          VERSER_CONNECT_TIMEOUT: '2',
+          VERSER_PROCESS_TIMEOUT_MS: '5000',
           VERSER_BROKER_ID: 'python-broker-mtls-missing-cert',
         },
       });
@@ -197,6 +203,8 @@ test(
         env: {
           VERSER_HOST_URL: `https://127.0.0.1:${host.address.port}`,
           VERSER_TLS_CA_FILE: trusted.certificatePath,
+          VERSER_CONNECT_TIMEOUT: '2',
+          VERSER_PROCESS_TIMEOUT_MS: '5000',
           VERSER_TLS_CERT_FILE: untrustedClient.certificatePath,
           VERSER_TLS_KEY_FILE: untrustedClient.keyPath,
           VERSER_BROKER_ID: 'python-broker-mtls-untrusted-cert',

@@ -54,12 +54,13 @@ async function readBody(stream) {
 }
 
 function withTimeout(promise, label, timeoutMs = 30_000) {
+  let timeout;
   return Promise.race([
     promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs),
-    ),
-  ]);
+    new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timeout));
 }
 
 function waitForProcessOutput(process, pattern, label) {
@@ -361,7 +362,11 @@ test(
       ]);
     } finally {
       streamUpload.end();
-      await withTimeout(terminateChildProcess(guestProcess), 'Bun guest terminate');
+      await withTimeout(
+        terminateChildProcess(guestProcess, { timeoutMs: 1_000 }),
+        'Bun guest terminate',
+        2_000,
+      );
       await closeWithTimeout(broker, 'Bun broker close');
       await closeWithTimeout(host, 'Bun host close');
     }
@@ -406,7 +411,11 @@ test(
         'Bun mTLS runtime guest startup',
       );
     } finally {
-      await withTimeout(terminateChildProcess(guestProcess), 'Bun mTLS Guest termination');
+      await withTimeout(
+        terminateChildProcess(guestProcess, { timeoutMs: 1_000 }),
+        'Bun mTLS Guest termination',
+        2_000,
+      );
       await closeWithTimeout(host, 'Bun mTLS Host close');
     }
   },
