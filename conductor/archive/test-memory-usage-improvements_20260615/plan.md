@@ -86,4 +86,5 @@
     - [x] Run full `npm test`: passes.
     - [x] Run `npm run lint`: passes.
     - [x] Record validation results, skipped checks, coverage status, and deduplication outcome: default source tests now intentionally skip redundant package-consumer matrix wrappers and the staged-package `npm pack --dry-run` wrapper; package validation remains covered by explicit `npm run test:package-consumers -- --source=source`, `--source=staging`, `--source=tarball`, and `npm run test:package-tarballs` commands, all of which pass. The skipped wrappers remain opt-in inside `node --test` via `VERSER_RUN_PACKAGE_CONSUMER_MATRIX=1` and `VERSER_RUN_PACK_DRY_RUN_TESTS=1`, and the opt-in focused checks pass. Reusable subprocess output/timeout code is centralized in `test/support/child-process.cjs`; CI remains on the existing full path while bounded validation is documented for developer/OOM workflows.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Documentation, CI Review, and Final Validation' (Protocol in workflow.md)
+    - [x] Phase checkpoint commit: `48a1b93`.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Documentation, CI Review, and Final Validation' (Protocol in workflow.md)
