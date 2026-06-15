@@ -1,13 +1,13 @@
 {
   "name": "@signicode/verser2-guest-js-common",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Runtime-neutral JavaScript Guest foundations for Verser2 packages.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@signicode/verser-common": "0.3.0"
+    "@signicode/verser-common": "0.3.1"
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
