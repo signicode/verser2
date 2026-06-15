@@ -372,9 +372,13 @@ if (_exports === undefined || _exports === null) {
 }
 
 function runConsumerChecks(projectRoot, packageName, mode) {
+  const nodeOptions = ['--preserve-symlinks', process.env.NODE_OPTIONS || '']
+    .filter(Boolean)
+    .join(' ');
   const runEnv = {
     ...process.env,
     NODE_PATH: `${nodeModulesDirectory}${path.delimiter}${process.env.NODE_PATH || ''}`,
+    NODE_OPTIONS: nodeOptions,
   };
 
   const scriptPaths = writeProbeScripts(projectRoot, packageName, mode);
