@@ -131,3 +131,25 @@ test('staged packages are packable with npm pack dry-run', () => {
     );
   }
 });
+
+test('Python Guest build emits native Python distribution artifacts', () => {
+  const pythonDistDirectory = path.join(
+    rootDirectory,
+    'packages',
+    'verser2-guest-python',
+    'dist',
+    'python',
+  );
+
+  assert.ok(fs.existsSync(pythonDistDirectory), 'Expected Python dist directory to exist');
+
+  const artifacts = fs.readdirSync(pythonDistDirectory).sort();
+  assert.ok(
+    artifacts.some((artifact) => /^verser2_guest_python-.*\.tar\.gz$/.test(artifact)),
+    'Expected Python source distribution artifact',
+  );
+  assert.ok(
+    artifacts.some((artifact) => /^verser2_guest_python-.*-py3-none-any\.whl$/.test(artifact)),
+    'Expected Python wheel artifact',
+  );
+});

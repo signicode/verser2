@@ -53,6 +53,11 @@ npm run package:version-policy -- --version 1.2.3 --main-build --sha abcdef12345
 
 This mutates only generated package manifests under `dist/packages`. It does not mutate source workspace `package.json` files.
 
+The publish workflow also converts the computed npm-style publish version to a
+PEP 440-compatible Python version before building the Python distribution. For
+example, `1.2.3-sha.abcdef123456` becomes
+`1.2.3.dev0+sha.abcdef123456` in the wheel and source distribution metadata.
+
 ## Local staging, packing, and consumer tests
 
 Run the full local package-readiness flow before publishing:
@@ -138,19 +143,27 @@ A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
 Behavior summary:
 
 - Pull requests to `main`: build, stage, pack, run local package-consumer tests, and run automated tarball behavior tests. Pull-request workflow runs must never publish packages to GitHub Packages.
-- Pushes to `main`: run the same validation flow, compute a deterministic main-build version, re-run staged, import-only tarball, and automated tarball behavior tests after applying that version, then publish with `next` dist-tag. Pull-request commits do not publish; only accepted main updates publish SHA-labeled package versions.
-- Pushes for tags matching `v*`: run the same flow, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish using stable/pre-release dist-tags from policy.
+- Pushes to `main`: run the same validation flow, upload the validated build/staging output for reuse by the publish job, compute a deterministic main-build version, re-run staged, import-only tarball, and automated tarball behavior tests after applying that version, then publish with `next` dist-tag. Pull-request commits do not publish; only accepted main updates publish SHA-labeled package versions.
+- Pushes for tags matching `v*`: run the same flow, reuse the validated build/staging output, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish using stable/pre-release dist-tags from policy.
 
 For both publish paths, the workflow:
 
 - Uses `actions/setup-node` with `registry-url: https://npm.pkg.github.com` and `scope: @signicode`.
 - Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for publish.
+- Uploads the validation job's `dist/packages` tree and Python distribution directory, then downloads those artifacts in the publish job instead of running a second full `npm run build` / `npm run stage:packages` cycle.
 - Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
 - Runs automated tarball behavior tests before the pull-request validation job completes.
 - Re-runs staged consumer validation, import-only tarball consumer validation, and automated tarball behavior tests after applying the publish version so internal package dependencies point at the same published version.
 - Runs automated tarball behavior tests before any `npm publish` command executes.
 - Optionally runs GitHub Packages consumer validation with `VERSER_RUN_GITHUB_CONSUMER_TESTS=1`.
 - Avoids `npm publish` to npmjs.org.
+
+The Python Guest package is built as a native Python source distribution and
+pure-Python wheel under `packages/verser2-guest-python/dist/python`. Publish runs
+upload those files as a workflow artifact named for the computed package version.
+Tag publishes also attach the same files to the GitHub Release so Python users
+can install from the release asset URL when the package is not available from a
+Python package index.
 
 Manual validation steps (first-time publish):
 

@@ -57,6 +57,14 @@ test('main-build version strips prerelease and appends sha', () => {
   assert.equal(prerelease, '1.2.3-sha.abcdef123456');
 });
 
+test('semver publish versions are converted to Python package versions', () => {
+  assert.equal(policy.toPythonVersion('1.2.3'), '1.2.3');
+  assert.equal(policy.toPythonVersion('1.2.3-beta.4'), '1.2.3b4');
+  assert.equal(policy.toPythonVersion('1.2.3-rc.2'), '1.2.3rc2');
+  assert.equal(policy.toPythonVersion('1.2.3-next.5'), '1.2.3.dev5');
+  assert.equal(policy.toPythonVersion('1.2.3-sha.abcdef123456'), '1.2.3.dev0+sha.abcdef123456');
+});
+
 test('invalid versions are rejected', () => {
   assert.throws(() => policy.determineDistTag('1.2'), /Invalid semver version/);
   assert.throws(

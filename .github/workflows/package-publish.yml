@@ -41,6 +41,7 @@ jobs:
           node-version: 20
           registry-url: https://npm.pkg.github.com
           scope: '@signicode'
+          cache: npm
 
       - name: Setup Python uv
         uses: astral-sh/setup-uv@v5
@@ -52,6 +53,15 @@ jobs:
         run: |
           npm run build
           npm run stage:packages
+
+      - name: Upload reusable package build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-build-output
+          path: |
+            dist/packages
+            packages/verser2-guest-python/dist/python
+          if-no-files-found: error
 
       - name: Validate consumers from staged and tarball sources
         run: |
@@ -74,7 +84,7 @@ jobs:
     needs: package-validation
     if: github.event_name != 'pull_request' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -87,6 +97,7 @@ jobs:
           node-version: 20
           registry-url: https://npm.pkg.github.com
           scope: '@signicode'
+          cache: npm
 
       - name: Setup Python uv
         uses: astral-sh/setup-uv@v5
@@ -94,10 +105,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build and stage packages
-        run: |
-          npm run build
-          npm run stage:packages
+      - name: Download validated package build output
+        uses: actions/download-artifact@v4
+        with:
+          name: package-build-output
+          path: .
 
       - name: Resolve publish version and dist-tag
         id: publish-metadata
@@ -134,6 +146,7 @@ jobs:
           }
 
           console.log(`publish_version=${publishVersion}`);
+          console.log(`python_version=${policy.toPythonVersion(publishVersion)}`);
           console.log(`dist_tag=${distTag}`);
           NODE
           
@@ -145,6 +158,27 @@ jobs:
       - name: Apply publish version to staged packages
         run: |
           npm run package:version-policy -- --version "${{ steps.publish-metadata.outputs.publish_version }}" --apply-staged
+
+      - name: Apply publish version to Python project
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pyprojectPath = 'packages/verser2-guest-python/pyproject.toml';
+          const version = process.env.PUBLISH_VERSION;
+          const pyproject = fs.readFileSync(pyprojectPath, 'utf8');
+          fs.writeFileSync(
+            pyprojectPath,
+            pyproject.replace(/^version = ".*"$/m, `version = "${version}"`),
+            'utf8',
+          );
+          NODE
+        env:
+          PUBLISH_VERSION: ${{ steps.publish-metadata.outputs.python_version }}
+
+      - name: Build versioned Python distribution
+        run: |
+          rm -rf packages/verser2-guest-python/dist/python
+          uv build --project packages/verser2-guest-python --out-dir packages/verser2-guest-python/dist/python
 
       - name: Validate versioned staged and tarball consumers
         run: |
@@ -160,6 +194,19 @@ jobs:
           do
             (cd "$packageDirectory" && npm publish --access restricted --tag "${{ steps.publish-metadata.outputs.dist_tag }}" --registry https://npm.pkg.github.com)
           done
+
+      - name: Upload Python distribution artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: verser2-guest-python-${{ steps.publish-metadata.outputs.publish_version }}
+          path: packages/verser2-guest-python/dist/python/*
+          if-no-files-found: error
+
+      - name: Attach Python distribution to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/verser2-guest-python/dist/python/*
 
       - name: Validate GitHub Packages installation
         if: github.event_name == 'push'
