@@ -2,25 +2,25 @@
 
 ## Phase 1: Track Setup, PR Setup, and Test-First Coverage
 
-- [~] Task: Create the track review surface required by the workflow
+- [x] Task: Create the track review surface required by the workflow
     - [x] Create a dedicated track branch before implementation work.
-    - [ ] Create a GitHub pull request with a TO-BE title and body describing the final intended test and memory-usage improvement state.
-    - [ ] Record the branch and PR link in this plan.
-- [ ] Task: Confirm affected scripts, docs, and test entrypoints
-    - [ ] Review root `package.json`, `scripts/`, `test/support/`, `docs/development.md`, `docs/common-issues.md`, and CI workflow test commands.
-    - [ ] Review existing common/test support helpers before adding package-local or script-local helpers.
-    - [ ] Record baseline full-test and bounded-test behavior using the narrowest reliable command.
-- [ ] Task: Write failing tests/assertions for bounded test command exposure
-    - [ ] Add or update repository configuration tests to require a first-class bounded-resource npm script.
-    - [ ] Assert the bounded command uses a 512 MiB Node old-space default.
-    - [ ] Assert the bounded command preserves build, stage, and Node test execution semantics.
-- [ ] Task: Write failing tests/assertions for runtime-limit and documentation coverage
-    - [ ] Add or update docs/config tests for full, targeted, bounded, build, lint, and package-validation command guidance.
-    - [ ] Add or update docs/config tests for Node, Bun, and Python/`uv` runtime limit caveats.
-- [ ] Task: Validate Phase 1 narrowly
-    - [ ] Run the focused tests that were intentionally added or updated and confirm they fail for the expected reason before implementation.
-    - [ ] Record expected failures and next implementation targets in this plan.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Track Setup, PR Setup, and Test-First Coverage' (Protocol in workflow.md)
+    - [x] Create a GitHub pull request with a TO-BE title and body describing the final intended test and memory-usage improvement state.
+    - [x] Record the branch and PR link in this plan: branch `track/test-memory-usage-improvements_20260615`, PR https://github.com/signicode/verser2/pull/23.
+- [x] Task: Confirm affected scripts, docs, and test entrypoints
+    - [x] Review root `package.json`, `scripts/`, `test/support/`, `docs/development.md`, `docs/common-issues.md`, and CI workflow test commands.
+    - [x] Review existing common/test support helpers before adding package-local or script-local helpers.
+    - [x] Record baseline full-test and bounded-test behavior using the narrowest reliable command: current `npm test` script builds, stages, and runs `node --test test/*.test.js`; no bounded npm script existed before the added failing assertions.
+- [x] Task: Write failing tests/assertions for bounded test command exposure
+    - [x] Add or update repository configuration tests to require a first-class bounded-resource npm script.
+    - [x] Assert the bounded command uses a 512 MiB Node old-space default.
+    - [x] Assert the bounded command preserves build, stage, and Node test execution semantics.
+- [x] Task: Write failing tests/assertions for runtime-limit and documentation coverage
+    - [x] Add or update docs/config tests for full, targeted, bounded, build, lint, and package-validation command guidance.
+    - [x] Add or update docs/config tests for Node, Bun, and Python/`uv` runtime limit caveats.
+- [x] Task: Validate Phase 1 narrowly
+    - [x] Run the focused tests that were intentionally added or updated and confirm they fail for the expected reason before implementation.
+    - [x] Record expected failures and next implementation targets in this plan: `node --test test/workspace.test.js test/docs.test.js` fails because `test:bounded`, `test:bounded:coverage`, `scripts/run-bounded-tests.js`, and the new development-doc guidance are not implemented yet.
+- [~] Task: Conductor - User Manual Verification 'Phase 1: Track Setup, PR Setup, and Test-First Coverage' (Protocol in workflow.md)
 
 ## Phase 2: Bounded Runner, Low-Risk Speedups, and Guard Tests
 

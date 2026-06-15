@@ -14,6 +14,15 @@ test('development docs document workspace setup commands', () => {
   assert.match(developmentDocs, /npm install/);
   assert.match(developmentDocs, /npm run build/);
   assert.match(developmentDocs, /npm test/);
+  assert.match(developmentDocs, /npm run test:bounded/);
+  assert.match(developmentDocs, /512 MiB/);
+  assert.match(developmentDocs, /--max-old-space-size=512/);
+  assert.match(developmentDocs, /node --test test\/<name>\.test\.js/);
+  assert.match(developmentDocs, /npm run test:package-consumers/);
+  assert.match(developmentDocs, /npm run test:package-tarballs/);
+  assert.match(developmentDocs, /Bun/);
+  assert.match(developmentDocs, /Python\/`uv`|Python and `uv`/);
+  assert.match(developmentDocs, /virtual-memory cap/i);
   assert.match(developmentDocs, /npm run lint/);
   assert.match(developmentDocs, /@signicode\/verser-common/);
   assert.match(developmentDocs, /packages\/verser-common/);
