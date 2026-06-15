@@ -9,6 +9,7 @@ import {
   VERSER_LIFECYCLE_EVENTS,
   type VerserCertificateIdentity,
   type VerserError,
+  type VerserHostFederationHandshake,
   type VerserPeerId,
   type VerserPeerRole,
   type VerserRegistrationAuthorizationContext,
@@ -18,10 +19,12 @@ import {
   createPeerId,
   createRoutedDomainRegistration,
   createVerserError,
+  createVerserHostFederationHandshake,
   decodeHeaderMap,
   encodeVerserEnvelope,
   extractCertificateIdentity,
   flattenVerserHeaders,
+  normalizeClientTlsOptions,
   normalizeHostClientAuthTlsOptions,
   normalizeServerTlsOptions,
   parseLeaseAcquireTimeoutMs,
@@ -49,6 +52,9 @@ import type {
   VerserHostLifecycleEvent,
   VerserHostOptions,
   VerserHostRegistrationRequest,
+  VerserHostUpstreamHandle,
+  VerserHostUpstreamOptions,
+  VerserHostUpstreamStatus,
   VerserLocalBrokerHandle,
   VerserLocalBrokerOptions,
   VerserLocalBrokerRequest,
@@ -83,6 +89,14 @@ interface QueuedLeaseAcquisition {
   readonly reject: (error: VerserError) => void;
 }
 
+interface UpstreamLink {
+  readonly upstreamId: string;
+  readonly session: http2.ClientHttp2Session;
+  closing: boolean;
+}
+
+const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 1000;
+
 /**
  * TLS HTTP/2 server implementation of the {@link VerserHost} interface.
  *
@@ -93,12 +107,13 @@ interface QueuedLeaseAcquisition {
  * @remarks
  * - Creates a Node `http2.createSecureServer` with TLS.
  * - Listens on `127.0.0.1` port `0` (ephemeral) by default.
- * - Handles only the four Verser protocol paths (`/verser/register`,
+ * - Handles only the Verser protocol paths (`/verser/register`,
  *   `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`).
  * - Peer sessions are tracked for lifecycle management; duplicate peer IDs
  *   are rejected at registration time.
  * - Lease streams are managed as an idle pool; when a Broker request arrives,
  *   the Host acquires a lease from the pool (or queues the request waiting for one).
+ * - Handles Host federation handshakes at `/verser/host/federation`.
  * - Route changes are advertised to all connected Brokers via NDJSON control frames.
  *
  * @internal
@@ -121,6 +136,12 @@ export class NodeHttp2VerserHost implements VerserHost {
   private readonly routeRegistry: HostRouteRegistry;
 
   private readonly activeLocalRequests = new Map<VerserPeerId, Set<AbortController>>();
+
+  private readonly upstreamLinks = new Map<string, UpstreamLink>();
+
+  private readonly pendingUpstreamConnections = new Set<string>();
+
+  private readonly inboundFederationHosts = new Map<string, http2.Http2Session>();
 
   private server?: http2.Http2SecureServer;
 
@@ -210,11 +231,17 @@ export class NodeHttp2VerserHost implements VerserHost {
    */
   public async close(reason = 'host-close'): Promise<void> {
     const server = this.server;
-    if (server === undefined) {
-      return;
+    this.server = undefined;
+
+    for (const link of [...this.upstreamLinks.values()]) {
+      await this.closeUpstreamLink(link, reason);
     }
 
-    this.server = undefined;
+    if (server === undefined) {
+      this.routeRegistry.clear();
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.closed, reason });
+      return;
+    }
 
     for (const peer of this.peers.values()) {
       peer.controlStream?.close(http2.constants.NGHTTP2_NO_ERROR);
@@ -232,6 +259,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     this.sessions.clear();
     this.peers.clear();
+    this.inboundFederationHosts.clear();
     this.routeRegistry.clear();
 
     await new Promise<void>((resolve) => {
@@ -270,6 +298,53 @@ export class NodeHttp2VerserHost implements VerserHost {
     domain?: string,
   ): FederatedRouteRegistration[] {
     return this.routeRegistry.getCandidates(targetId, domain);
+  }
+
+  public async connectUpstream(
+    options: VerserHostUpstreamOptions,
+  ): Promise<VerserHostUpstreamHandle> {
+    const upstreamId = createPeerId(options.upstreamId);
+    if (this.upstreamLinks.has(upstreamId) || this.pendingUpstreamConnections.has(upstreamId)) {
+      throw createVerserError('invalid-registration', 'Upstream is already connected', {
+        upstreamId,
+      });
+    }
+    this.pendingUpstreamConnections.add(upstreamId);
+
+    const session = http2.connect(options.url, normalizeClientTlsOptions(options.tls) ?? {});
+    let link: UpstreamLink | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        session.once('connect', resolve);
+        session.once('error', reject);
+      });
+      await this.sendUpstreamHandshake(session, upstreamId);
+      link = { upstreamId, session, closing: false };
+      this.upstreamLinks.set(upstreamId, link);
+      session.once('close', () => this.handleUpstreamSessionClose(upstreamId));
+      session.on('error', (error) => {
+        this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+      });
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId: upstreamId });
+    } catch (error) {
+      session.destroy();
+      throw toVerserError(error);
+    } finally {
+      this.pendingUpstreamConnections.delete(upstreamId);
+    }
+
+    return {
+      upstreamId,
+      close: async (reason = 'upstream-close') =>
+        this.closeUpstreamLink(link as UpstreamLink, reason),
+    };
+  }
+
+  public getUpstreams(): VerserHostUpstreamStatus[] {
+    return [...this.upstreamLinks.values()].map((link) => ({
+      upstreamId: link.upstreamId,
+      connected: !link.session.closed && !link.closing,
+    }));
   }
 
   public async attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle> {
@@ -391,6 +466,11 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
+    if (path === '/verser/host/federation') {
+      await this.handleHostFederationStream(stream);
+      return;
+    }
+
     if (path !== '/verser/register') {
       throw createVerserError('protocol-error', 'Unsupported Host stream path', {
         path,
@@ -507,6 +587,260 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     session.close();
     return false;
+  }
+
+  private async handleHostFederationStream(stream: http2.ServerHttp2Stream): Promise<void> {
+    let handshake: VerserHostFederationHandshake;
+    try {
+      handshake = createVerserHostFederationHandshake(JSON.parse(await readStreamText(stream)));
+    } catch (error) {
+      throw createVerserError('protocol-error', 'Invalid Host federation handshake', {
+        cause: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const authorized = await this.authorizeHostFederation(stream, handshake);
+    if (!authorized) {
+      return;
+    }
+    if (this.inboundFederationHosts.has(handshake.hostId)) {
+      throw createVerserError('invalid-registration', 'Federated Host is already connected', {
+        hostId: handshake.hostId,
+      });
+    }
+
+    const session = stream.session;
+    if (session === undefined) {
+      throw createVerserError('protocol-error', 'Host federation stream has no HTTP/2 session');
+    }
+    this.inboundFederationHosts.set(handshake.hostId, session);
+    session.once('close', () => this.removeInboundFederationHost(handshake.hostId));
+
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId: handshake.hostId });
+    if (!stream.headersSent) {
+      stream.respond({ ':status': 200, 'content-type': 'application/json' });
+    }
+    stream.end(
+      JSON.stringify({ status: 'registered', hostId: this.options.hostId ?? 'host-local' }),
+    );
+  }
+
+  private async authorizeHostFederation(
+    stream: http2.ServerHttp2Stream,
+    handshake: VerserHostFederationHandshake,
+  ): Promise<boolean> {
+    const callback = this.options.tls?.clientAuth?.authorizeFederation;
+    if (callback === undefined) {
+      return true;
+    }
+
+    const session = stream.session;
+    if (session === undefined) {
+      throw createVerserError('protocol-error', 'Host federation stream has no HTTP/2 session');
+    }
+
+    const tlsSocket = session.socket as TLSSocket;
+    const action = await callback({
+      hostId: handshake.hostId,
+      handshake,
+      certificate: this.getCertificateIdentity(tlsSocket),
+      metadata: {
+        authorized: tlsSocket.authorized,
+        authorizationError: tlsSocket.authorizationError?.message,
+      },
+    });
+
+    if (action.action === 'allow') {
+      return true;
+    }
+
+    const reason = action.reason ?? 'Host federation rejected by policy';
+    const error = createVerserError('authorization-denied', reason, { hostId: handshake.hostId });
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, peerId: handshake.hostId, error });
+    if (!stream.headersSent && !stream.closed) {
+      stream.respond({ ':status': 403, 'content-type': 'application/json' });
+    }
+    if (!stream.closed) {
+      stream.end(JSON.stringify({ status: 'closed', reason }));
+    }
+    session.close();
+    return false;
+  }
+
+  private removeInboundFederationHost(hostId: string): void {
+    if (!this.inboundFederationHosts.has(hostId)) {
+      return;
+    }
+    this.inboundFederationHosts.delete(hostId);
+    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected, peerId: hostId });
+  }
+
+  private async sendUpstreamHandshake(
+    session: http2.ClientHttp2Session,
+    upstreamId: string,
+  ): Promise<void> {
+    const stream = session.request({
+      ':method': 'POST',
+      ':path': '/verser/host/federation',
+      'content-type': 'application/json',
+    });
+    const response = this.waitForUpstreamHandshakeResponse(stream, upstreamId);
+    stream.end(
+      JSON.stringify(
+        createVerserHostFederationHandshake({
+          hostId: this.options.hostId ?? 'host-local',
+          protocolVersion: 1,
+          maxHopCount: this.options.maxFederationHopCount,
+          importRoutes: true,
+          exportRoutes: true,
+        }),
+      ),
+    );
+
+    const [headers, body] = await this.withUpstreamHandshakeTimeout(
+      Promise.all([response, readStreamText(stream)]),
+      stream,
+      upstreamId,
+    );
+    const statusCode = Number(headers[':status'] ?? 0);
+    if (statusCode >= 200 && statusCode < 300) {
+      return;
+    }
+
+    throw createVerserError('authorization-denied', this.getUpstreamRejectionReason(body), {
+      upstreamId,
+      statusCode,
+    });
+  }
+
+  private waitForUpstreamHandshakeResponse(
+    stream: http2.ClientHttp2Stream,
+    upstreamId: string,
+  ): Promise<http2.IncomingHttpHeaders> {
+    return new Promise<http2.IncomingHttpHeaders>((resolve, reject) => {
+      let responded = false;
+      const timeout = setTimeout(() => {
+        cleanup();
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+        reject(
+          createVerserError('upstream-unavailable', 'Upstream federation handshake timed out', {
+            upstreamId,
+          }),
+        );
+      }, UPSTREAM_HANDSHAKE_TIMEOUT_MS);
+      const cleanup = (): void => {
+        clearTimeout(timeout);
+        stream.off('response', onResponse);
+        stream.off('error', onError);
+        stream.off('aborted', onAborted);
+        stream.off('close', onClose);
+      };
+      const onResponse = (headers: http2.IncomingHttpHeaders): void => {
+        responded = true;
+        cleanup();
+        resolve(headers);
+      };
+      const onError = (error: Error): void => {
+        cleanup();
+        reject(
+          createVerserError('upstream-unavailable', 'Upstream federation handshake failed', {
+            upstreamId,
+            cause: error.message,
+          }),
+        );
+      };
+      const onAborted = (): void => {
+        cleanup();
+        reject(
+          createVerserError('upstream-unavailable', 'Upstream federation handshake was aborted', {
+            upstreamId,
+          }),
+        );
+      };
+      const onClose = (): void => {
+        if (responded) {
+          return;
+        }
+        cleanup();
+        reject(
+          createVerserError('upstream-unavailable', 'Upstream federation handshake closed early', {
+            upstreamId,
+          }),
+        );
+      };
+
+      stream.once('response', onResponse);
+      stream.once('error', onError);
+      stream.once('aborted', onAborted);
+      stream.once('close', onClose);
+    });
+  }
+
+  private withUpstreamHandshakeTimeout<T>(
+    promise: Promise<T>,
+    stream: http2.ClientHttp2Stream,
+    upstreamId: string,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+        reject(
+          createVerserError('upstream-unavailable', 'Upstream federation handshake timed out', {
+            upstreamId,
+          }),
+        );
+      }, UPSTREAM_HANDSHAKE_TIMEOUT_MS);
+
+      promise.then(
+        (value) => {
+          clearTimeout(timeout);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  private getUpstreamRejectionReason(body: string): string {
+    try {
+      const parsed = JSON.parse(body) as { reason?: string; status?: string };
+      return parsed.reason ?? parsed.status ?? 'Upstream Host federation rejected';
+    } catch {
+      return body.trim() || 'Upstream Host federation rejected';
+    }
+  }
+
+  private handleUpstreamSessionClose(upstreamId: string): void {
+    const link = this.upstreamLinks.get(upstreamId);
+    if (link === undefined) {
+      return;
+    }
+    this.upstreamLinks.delete(upstreamId);
+    this.removeImportedFederatedRoutes(upstreamId);
+    this.emitLifecycle({
+      name: link.closing ? VERSER_LIFECYCLE_EVENTS.closed : VERSER_LIFECYCLE_EVENTS.disconnected,
+      peerId: upstreamId,
+    });
+  }
+
+  private async closeUpstreamLink(link: UpstreamLink, reason: string): Promise<void> {
+    if (!this.upstreamLinks.has(link.upstreamId)) {
+      return;
+    }
+    link.closing = true;
+    this.removeImportedFederatedRoutes(link.upstreamId);
+    link.session.close();
+    await new Promise<void>((resolve) => {
+      if (link.session.closed) {
+        resolve();
+        return;
+      }
+      link.session.once('close', () => resolve());
+    });
+    this.handleUpstreamSessionClose(link.upstreamId);
   }
 
   private getCertificateIdentity(tlsSocket: TLSSocket): VerserCertificateIdentity | undefined {
