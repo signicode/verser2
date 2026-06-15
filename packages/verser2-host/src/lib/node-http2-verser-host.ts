@@ -1372,15 +1372,33 @@ export class NodeHttp2VerserHost implements VerserHost {
       if (candidate.source !== 'upstream') {
         continue;
       }
-      const requestStream = await this.acquireFederatedRequestStream(
+      const requestStream = await this.tryAcquireFederatedRequestStream(
         candidate.nextHopHostId,
         request.leaseAcquireTimeoutMs,
       );
+      if (requestStream === undefined) {
+        continue;
+      }
 
       return this.routeLocalRequestOverFederationStream(request, requestStream);
     }
 
     return undefined;
+  }
+
+  private async tryAcquireFederatedRequestStream(
+    hostId: string,
+    timeoutMs: number,
+  ): Promise<http2.ServerHttp2Stream | undefined> {
+    try {
+      return await this.acquireFederatedRequestStream(hostId, timeoutMs);
+    } catch (error) {
+      const verserError = toVerserError(error);
+      if (verserError.code === 'upstream-unavailable') {
+        return undefined;
+      }
+      throw verserError;
+    }
   }
 
   private acquireFederatedRequestStream(
@@ -1712,10 +1730,13 @@ export class NodeHttp2VerserHost implements VerserHost {
       if (candidate.source !== 'upstream') {
         continue;
       }
-      const requestStream = await this.acquireFederatedRequestStream(
+      const requestStream = await this.tryAcquireFederatedRequestStream(
         candidate.nextHopHostId,
         parseLeaseAcquireTimeoutMs(headers),
       );
+      if (requestStream === undefined) {
+        continue;
+      }
 
       await this.routeH2BrokerRequestOverFederationStream(
         stream,

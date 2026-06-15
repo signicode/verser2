@@ -188,28 +188,37 @@
 
 ## Phase 6: HA Candidate Selection and Safe Retry
 
-- [ ] Task: Write failing HA behavior tests
-    - [ ] Test multiple route candidates for the same domain/target across Host nodes.
-    - [ ] Test new-request failover to another healthy candidate when the selected upstream is unavailable before response headers.
-    - [ ] Test non-replayable or active streaming requests are not transparently retried or migrated.
-    - [ ] Test route-table updates after upstream loss and recovery.
-- [ ] Task: Implement route candidate health and selection
-    - [ ] Track upstream readiness based on session state, handshake success, authorization success, and route availability.
-    - [ ] Select eligible route candidates with local-first behavior, hop-distance preference, and deterministic fallback.
-    - [ ] Avoid consensus, leader election, or durable cluster state.
-- [ ] Task: Implement safe retry controls
-    - [ ] Retry only before response headers and only when the request is replayable/idempotent or caller policy explicitly allows it.
-    - [ ] Fail non-replayable streaming requests clearly when the selected path fails.
-    - [ ] Document retry decisions through errors or lifecycle events where useful.
-- [ ] Task: Validate HA phase
-    - [ ] Run focused HA and route withdrawal tests.
-    - [ ] Run relevant Broker Agent/Dispatcher/fetch tests if route selection affects them.
-    - [ ] Record limitations: eventual consistency, no active migration, no exactly-once delivery.
+- [x] Task: Write failing HA behavior tests
+    - [x] Test multiple route candidates for the same domain/target across Host nodes.
+    - [x] Test new-request failover to another healthy candidate when the selected upstream is unavailable before response headers.
+    - [x] Test non-replayable or active streaming requests are not transparently retried or migrated.
+    - [x] Test route-table updates after upstream loss and recovery.
+- [x] Task: Implement route candidate health and selection
+    - [x] Track upstream readiness based on session state, handshake success, authorization success, and route availability.
+    - [x] Select eligible route candidates with local-first behavior, hop-distance preference, and deterministic fallback.
+    - [x] Avoid consensus, leader election, or durable cluster state.
+- [x] Task: Implement safe retry controls
+    - [x] Retry only before response headers and only when the request is replayable/idempotent or caller policy explicitly allows it.
+    - [x] Fail non-replayable streaming requests clearly when the selected path fails.
+    - [x] Document retry decisions through errors or lifecycle events where useful.
+- [x] Task: Validate HA phase
+    - [x] Run focused HA and route withdrawal tests.
+    - [x] Run relevant Broker Agent/Dispatcher/fetch tests if route selection affects them.
+    - [x] Record limitations: eventual consistency, no active migration, no exactly-once delivery.
 - [ ] Task: Push phase checkpoint for GitHub-visible manual verification
     - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
     - [ ] Push the track branch to the remote branch before requesting manual verification.
     - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 6: HA Candidate Selection and Safe Retry' (Protocol in workflow.md)
+
+### Phase 6 notes
+
+- HA route selection uses the route registry’s deterministic ordering: local candidates first, then shorter federated hop count, then stable target/domain/next-hop/owner ordering.
+- Route health is represented by imported-route availability plus live inbound request-stream readiness. Unavailable preferred candidates are skipped before a request envelope/body is sent for both local Broker and HTTP/2 Broker request paths, so a new request can fall back to the next healthy candidate without replaying bytes.
+- Route withdrawal after upstream/downstream loss removes unavailable candidates and updates Broker route tables; multiple candidates for the same target/domain remain available for fallback while at least one path is healthy.
+- Safe retry scope is intentionally narrow: fallback happens only before forwarding starts. Active in-flight requests and mid-stream failures are not transparently migrated or replayed, preserving the documented no active migration / no exactly-once guarantee.
+- Validation passed: `npm run lint`; `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-host && node --test test/host-upstreams.test.js test/host-route-registry.test.js test/host.test.js test/broker-routing.test.js test/packages.test.js`; `node --test --experimental-test-coverage test/host-upstreams.test.js`.
+- Coverage/review: focused HA assertions cover closest healthy candidate selection, fallback after route withdrawal, and stale-preferred candidate fallback before request forwarding starts. `@oracle` re-review found no blockers and confirmed there is no retry around the route-over-stream methods after forwarding begins; non-blocking notes were preserving `upstream-unavailable` when every candidate acquisition fails and adding an explicit stale-first HTTP/2 Broker regression later.
 
 ## Phase 7: Documentation, Examples, and Final Compatibility Validation
 

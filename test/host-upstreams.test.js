@@ -688,6 +688,128 @@ test('Federated forwarding streams request and response bodies', async () => {
   }
 });
 
+test('Federated HA selects the closest healthy route candidate and falls back after upstream loss', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const nearRunner = createVerserHost({ hostId: 'host-near-runner', tls: tlsOptions() });
+  const farHub = createVerserHost({ hostId: 'host-far-hub', tls: tlsOptions() });
+  const farRunner = createVerserHost({ hostId: 'host-far-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  await farHub.start();
+  try {
+    await nearRunner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await farHub.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await farRunner.connectUpstream({
+      upstreamId: 'far-hub',
+      url: hostUrl(farHub),
+      tls: { ca: trusted.certificate },
+    });
+    await nearRunner.attachLocalGuest({
+      guestId: 'guest-ha',
+      routedDomains: ['ha.verser.test'],
+      listener: (_request, response) => response.end('near'),
+    });
+    await farRunner.attachLocalGuest({
+      guestId: 'guest-ha',
+      routedDomains: ['ha.verser.test'],
+      listener: (_request, response) => response.end('far'),
+    });
+    await assertEventually(() =>
+      assert.equal(manager.getFederatedRouteCandidates('guest-ha', 'ha.verser.test').length, 2),
+    );
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-ha' });
+
+    const first = await broker.request({
+      targetId: 'guest-ha',
+      method: 'GET',
+      path: '/ha',
+      headers: { host: 'ha.verser.test' },
+    });
+    assert.equal(await text(first.body), 'near');
+
+    await nearRunner.close('near-loss');
+    await assertEventually(() => {
+      const candidates = manager.getFederatedRouteCandidates('guest-ha', 'ha.verser.test');
+      assert.equal(candidates.length, 1);
+      assert.equal(candidates[0].originHostId, 'host-far-runner');
+    });
+    const second = await broker.request({
+      targetId: 'guest-ha',
+      method: 'GET',
+      path: '/ha',
+      headers: { host: 'ha.verser.test' },
+    });
+    assert.equal(await text(second.body), 'far');
+  } finally {
+    await broker?.close();
+    await farRunner.close();
+    await farHub.close();
+    await nearRunner.close();
+    await manager.close();
+  }
+});
+
+test('Federated HA falls back when a preferred imported candidate has no request stream', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const farRunner = createVerserHost({ hostId: 'host-far-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await farRunner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await farRunner.attachLocalGuest({
+      guestId: 'guest-ha-stale',
+      routedDomains: ['ha-stale.verser.test'],
+      listener: (_request, response) => response.end('far'),
+    });
+    manager.setImportedFederatedRoutes('stale-near', [
+      {
+        targetId: 'guest-ha-stale',
+        domain: 'ha-stale.verser.test',
+        originHostId: 'host-a-stale-near',
+        nextHopHostId: 'host-a-stale-near',
+        hopCount: 1,
+        viaHostIds: ['host-a-stale-near'],
+        source: 'upstream',
+      },
+    ]);
+    await assertEventually(() => {
+      const candidates = manager.getFederatedRouteCandidates(
+        'guest-ha-stale',
+        'ha-stale.verser.test',
+      );
+      assert.equal(candidates.length, 2);
+      assert.equal(candidates[0].originHostId, 'host-a-stale-near');
+    });
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-ha-stale' });
+
+    const response = await broker.request({
+      targetId: 'guest-ha-stale',
+      method: 'GET',
+      path: '/ha-stale',
+      headers: { host: 'ha-stale.verser.test' },
+      leaseAcquireTimeoutMs: 20,
+    });
+
+    assert.equal(await text(response.body), 'far');
+  } finally {
+    await broker?.close();
+    await farRunner.close();
+    await manager.close();
+  }
+});
+
 async function assertEventually(assertion) {
   let lastError;
   for (let attempt = 0; attempt < 50; attempt += 1) {
