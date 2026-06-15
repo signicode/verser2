@@ -136,7 +136,7 @@
     - [x] Push the track branch to the remote branch before requesting manual verification.
     - [x] Record the pushed commit SHA in this plan.
         - Checkpoint commit: `56cda1e`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Route Import and Export Across Hosts' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Route Import and Export Across Hosts' (Protocol in workflow.md)
 
 ### Phase 4 notes
 
