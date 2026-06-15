@@ -174,7 +174,7 @@
     - [x] Push the track branch to the remote branch before requesting manual verification.
     - [x] Record the pushed commit SHA in this plan.
         - Checkpoint commit: `6fd5d4d`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Federated Request Forwarding' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Federated Request Forwarding' (Protocol in workflow.md)
 
 ### Phase 5 notes
 
