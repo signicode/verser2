@@ -650,6 +650,11 @@ export type VerserHostClientAuthTlsOptions = {
    * Called after TLS verification succeeds; returning `'close'` rejects the peer.
    */
   readonly authorizeRegistration?: VerserRegistrationAuthorizationCallback;
+  /**
+   * Host federation link authorization callback.
+   * Called for Host-to-Host upstream handshakes; returning `'close'` rejects the link.
+   */
+  readonly authorizeFederation?: VerserHostFederationAuthorizationCallback;
 };
 
 /**

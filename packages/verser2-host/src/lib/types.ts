@@ -6,6 +6,7 @@ import type {
   VerserPeerRole as CommonVerserPeerRole,
   FederatedRouteRegistration,
   RoutedDomainRegistration,
+  VerserClientTlsOptions,
   VerserError,
   VerserHostTlsOptions,
   VerserRegistrationRequest,
@@ -111,6 +112,37 @@ export interface VerserLocalBrokerOptions {
 }
 
 /**
+ * Options for connecting a Host outbound to an upstream Verser Host.
+ *
+ * @public
+ */
+export interface VerserHostUpstreamOptions {
+  readonly upstreamId: string;
+  readonly url: string;
+  readonly tls?: VerserClientTlsOptions;
+}
+
+/**
+ * Current state summary for an upstream Host link.
+ *
+ * @public
+ */
+export interface VerserHostUpstreamStatus {
+  readonly upstreamId: string;
+  readonly connected: boolean;
+}
+
+/**
+ * Handle returned for an outbound upstream Host link.
+ *
+ * @public
+ */
+export interface VerserHostUpstreamHandle {
+  readonly upstreamId: string;
+  close(reason?: string): Promise<void>;
+}
+
+/**
  * Request shape accepted by an in-process Broker handle.
  *
  * @public
@@ -198,7 +230,8 @@ export interface VerserHostLifecycleEvent {
  *   TLS HTTP/2 peer connection.
  *
  * **Only protocol paths** `/verser/register`, `/verser/guest/control`,
- * `/verser/guest/lease`, and `/verser/request` are supported.
+ * `/verser/guest/lease`, `/verser/request`, and `/verser/host/federation`
+ * are supported.
  *
  * @remarks
  * - The Host requires TLS for remote peer connections. Local peers bypass TLS
@@ -270,6 +303,10 @@ export interface VerserHost {
    * @internal Foundation seam used by Host federation route selection tests and later forwarding phases.
    */
   getFederatedRouteCandidates(targetId?: string, domain?: string): FederatedRouteRegistration[];
+  /** Connects this Host outbound to an upstream Verser Host. */
+  connectUpstream(options: VerserHostUpstreamOptions): Promise<VerserHostUpstreamHandle>;
+  /** Returns currently connected upstream Host links. */
+  getUpstreams(): VerserHostUpstreamStatus[];
   /** Attaches an in-process local Guest without opening a TLS HTTP/2 connection. */
   attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle>;
   /** Attaches an in-process local Broker without opening a TLS HTTP/2 connection. */

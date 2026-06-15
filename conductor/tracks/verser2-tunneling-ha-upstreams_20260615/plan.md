@@ -76,28 +76,39 @@
 
 ## Phase 3: Upstream Host Link Lifecycle and Authorization
 
-- [ ] Task: Write failing upstream lifecycle and authorization tests
-    - [ ] Test downstream Host connecting outbound to upstream Host over TLS HTTP/2.
-    - [ ] Test upstream authorization callback accepts and rejects Host links based on declared Host ID and TLS identity.
-    - [ ] Test mTLS Root CA -> Intermediate/Leaf CA -> client certificate trust where existing test utilities support it.
-    - [ ] Test reconnect behavior, close behavior, and lifecycle event emission.
-- [ ] Task: Implement upstream Host connection APIs
-    - [ ] Add Host `hostId` and upstream configuration options.
-    - [ ] Add dynamic connect/disconnect upstream methods if selected by API design.
-    - [ ] Reuse existing TLS normalization where possible and centralize shared additions in common helpers.
-- [ ] Task: Implement upstream handshake and authorization
-    - [ ] Define versioned Host federation handshake over HTTP/2.
-    - [ ] Populate authorization context with Host ID, upstream identity, TLS authorization state, and certificate identity details.
-    - [ ] Reject unauthorized upstream links predictably with structured errors and lifecycle events.
-- [ ] Task: Validate upstream lifecycle phase
-    - [ ] Run focused TLS/configuration and Host lifecycle tests.
-    - [ ] Run build for affected TypeScript packages.
-    - [ ] Record coverage and certificate-chain limitations if any Node TLS details cannot be exposed safely.
-- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+- [x] Task: Write failing upstream lifecycle and authorization tests
+    - [x] Test downstream Host connecting outbound to upstream Host over TLS HTTP/2.
+    - [x] Test upstream authorization callback accepts and rejects Host links based on declared Host ID and TLS identity.
+    - [x] Test mTLS Root CA -> Intermediate/Leaf CA -> client certificate trust where existing test utilities support it.
+    - [x] Test reconnect behavior, close behavior, and lifecycle event emission.
+- [x] Task: Implement upstream Host connection APIs
+    - [x] Add Host `hostId` and upstream configuration options.
+    - [x] Add dynamic connect/disconnect upstream methods if selected by API design.
+    - [x] Reuse existing TLS normalization where possible and centralize shared additions in common helpers.
+- [x] Task: Implement upstream handshake and authorization
+    - [x] Define versioned Host federation handshake over HTTP/2.
+    - [x] Populate authorization context with Host ID, upstream identity, TLS authorization state, and certificate identity details.
+    - [x] Reject unauthorized upstream links predictably with structured errors and lifecycle events.
+- [x] Task: Validate upstream lifecycle phase
+    - [x] Run focused TLS/configuration and Host lifecycle tests.
+    - [x] Run build for affected TypeScript packages.
+    - [x] Record coverage and certificate-chain limitations if any Node TLS details cannot be exposed safely.
+- [~] Task: Push phase checkpoint for GitHub-visible manual verification
     - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
     - [ ] Push the track branch to the remote branch before requesting manual verification.
     - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Upstream Host Link Lifecycle and Authorization' (Protocol in workflow.md)
+
+### Phase 3 notes
+
+- Added dynamic outbound Host upstream links via `connectUpstream()`, `getUpstreams()`, and `VerserHostUpstreamHandle.close()`; `upstreamId` is the local link identifier.
+- Added `/verser/host/federation` handshake handling with versioned common federation handshake metadata and application authorization via `tls.clientAuth.authorizeFederation`.
+- Upstream outbound TLS reuses `normalizeClientTlsOptions`, including CA trust and PEM/PFX client identity support; receiving authorization context exposes TLS authorization metadata and extracted certificate identity when mTLS is configured.
+- Lifecycle/cleanup semantics: explicit close removes upstream links and imported routes even when the downstream Host never listened; unexpected upstream disconnect removes imported routes and emits `disconnected`; inbound federated Host links are tracked and emit `disconnected` on session close. Automatic reconnect is not enabled yet because no route import/export policy or reconnect configuration exists; current tested behavior is deterministic disconnect cleanup.
+- Validation passed: `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-host && node --test test/host-upstreams.test.js test/host-route-registry.test.js test/host.test.js test/tls-configuration.test.js`; `npm run lint`; `node --test --experimental-test-coverage test/host-upstreams.test.js`.
+- Coverage: focused upstream tests cover outbound connect/close, close before listener start, inbound lifecycle disconnect, unexpected disconnect cleanup, duplicate and concurrent duplicate upstream IDs, handshake stream-close and no-body timeout failures, mTLS authorization allow, and authorization rejection. Node experimental coverage remains bundle-wide rather than a per-feature threshold report.
+- Certificate-chain limitation: current fixtures validate trusted client certificates signed by the configured client CA; no separate intermediate-chain fixture exists in the repository.
+- Code review: `@oracle` found close leaks, handshake hang, inbound lifecycle gaps, duplicate races, and documentation nits; follow-up review confirmed blocker fixes.
 
 ## Phase 4: Route Import and Export Across Hosts
 
