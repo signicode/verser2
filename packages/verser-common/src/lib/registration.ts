@@ -76,6 +76,9 @@ export function createBrokerRoutesControlFrame(
 ): VerserBrokerRoutesControlFrame {
   return {
     type: 'routes',
-    routes: [...routes],
+    routes: routes.map((route) => ({
+      targetId: route.targetId,
+      domain: route.domain,
+    })),
   };
 }

@@ -9,6 +9,17 @@
 export type VerserPeerId = string;
 
 /**
+ * A stable identifier for a Verser Host participating in federation.
+ *
+ * Host IDs are distinct from Guest and Broker peer IDs. Federated route metadata
+ * uses them to identify route origin, next hop, and visited Hosts for loop
+ * prevention.
+ *
+ * @public
+ */
+export type VerserHostId = string;
+
+/**
  * The role of a Peer in the Verser protocol.
  *
  * - `'guest'` — a Guest that registers route domains and receives forwarded requests.
@@ -51,6 +62,89 @@ export interface RoutedDomainRegistration {
   /** The exact hostname this route handles (e.g. `"api.example.com"`). */
   readonly domain: string;
 }
+
+/**
+ * Source classification for a route candidate known by a Host.
+ *
+ * @public
+ */
+export type VerserFederatedRouteSource = 'local' | 'upstream';
+
+/**
+ * A route advertisement carrying Host federation metadata.
+ *
+ * This extends the legacy Broker route shape with protocol-neutral next-hop
+ * metadata. Legacy Broker frames should strip these fields and continue to
+ * advertise only `{ targetId, domain }` records.
+ *
+ * @public
+ */
+export interface FederatedRouteRegistration extends RoutedDomainRegistration {
+  /** Host where the route originally became available. */
+  readonly originHostId: VerserHostId;
+  /** Host to contact as the next hop from the current Host. */
+  readonly nextHopHostId: VerserHostId;
+  /** Number of Host-to-Host hops from the route origin. */
+  readonly hopCount: number;
+  /** Host IDs already visited by this advertisement. */
+  readonly viaHostIds: readonly VerserHostId[];
+  /** Whether this candidate is local to the advertising Host or imported upstream. */
+  readonly source: VerserFederatedRouteSource;
+}
+
+/**
+ * Versioned handshake payload exchanged when one Host opens a federated link to another.
+ *
+ * @public
+ */
+export interface VerserHostFederationHandshake {
+  /** Discriminant for Host federation handshake payloads. */
+  readonly type: 'verser-host-federation-handshake';
+  /** Federation protocol version. */
+  readonly protocolVersion: number;
+  /** Stable ID of the connecting Host. */
+  readonly hostId: VerserHostId;
+  /** Maximum allowed Host-to-Host hops for forwarded routes/requests. */
+  readonly maxHopCount?: number;
+  /** Whether the connecting Host wants to import routes from the peer. */
+  readonly importRoutes?: boolean;
+  /** Whether the connecting Host wants to export routes to the peer. */
+  readonly exportRoutes?: boolean;
+}
+
+/**
+ * Application authorization context for a Host federation link.
+ *
+ * @public
+ */
+export interface VerserHostFederationAuthorizationContext {
+  /** Stable ID declared by the connecting Host. */
+  readonly hostId: VerserHostId;
+  /** Parsed federation handshake. */
+  readonly handshake: VerserHostFederationHandshake;
+  /** Parsed TLS client certificate identity, if mTLS is configured. */
+  readonly certificate?: VerserCertificateIdentity;
+  /** Socket-level TLS authorization metadata and implementation-specific context. */
+  readonly metadata: Readonly<Record<string, string | number | boolean | undefined>>;
+}
+
+/**
+ * Host federation link authorization callback result.
+ *
+ * @public
+ */
+export type VerserHostFederationAuthorizationAction =
+  | { readonly action: 'allow' }
+  | { readonly action: 'close'; readonly reason?: string };
+
+/**
+ * Callback for authorizing Host-to-Host federation links.
+ *
+ * @public
+ */
+export type VerserHostFederationAuthorizationCallback = (
+  context: VerserHostFederationAuthorizationContext,
+) => VerserHostFederationAuthorizationAction | Promise<VerserHostFederationAuthorizationAction>;
 
 /**
  * A request envelope routed from a Broker to a Guest through the Host.
@@ -520,6 +614,18 @@ export interface VerserBrokerRoutesControlFrame {
 }
 
 /**
+ * A route-control frame exchanged between federated Hosts.
+ *
+ * @public
+ */
+export interface VerserFederatedRoutesControlFrame {
+  /** Discriminant — always `'federated-routes'`. */
+  readonly type: 'federated-routes';
+  /** Full federated route table from the advertising Host. */
+  readonly routes: readonly FederatedRouteRegistration[];
+}
+
+/**
  * Options for enabling mTLS client certificate authentication on the Host.
  *
  * When `ca` or `caFile` is provided, the Host sets `requestCert` and `rejectUnauthorized`
@@ -679,6 +785,10 @@ export type VerserBrokerControlFrame = VerserBrokerRoutesControlFrame;
  * - `'local-handler-failure'` — local Guest handler threw or returned an error.
  * - `'invalid-registration'` — peer registration rejected (duplicate ID, bad role, etc.).
  * - `'certificate-verification-failure'` — TLS certificate validation failed.
+ * - `'upstream-unavailable'` — selected upstream Host is not reachable.
+ * - `'route-loop'` — federated route/request metadata would revisit a Host or exceed hop limits.
+ * - `'authorization-denied'` — application authorization rejected a peer/upstream action.
+ * - `'unsafe-retry'` — automatic retry would be unsafe for the request/body policy.
  *
  * @public
  */
@@ -690,7 +800,11 @@ export type VerserErrorCode =
   | 'protocol-error'
   | 'local-handler-failure'
   | 'invalid-registration'
-  | 'certificate-verification-failure';
+  | 'certificate-verification-failure'
+  | 'upstream-unavailable'
+  | 'route-loop'
+  | 'authorization-denied'
+  | 'unsafe-retry';
 
 /**
  * A read-only record of key-value pairs providing structured context for an error.

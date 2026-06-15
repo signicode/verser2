@@ -2,27 +2,38 @@
 
 ## Phase 1: Protocol and API Design Foundations
 
-- [ ] Task: Confirm affected packages, entrypoints, protocol behavior, and expected outcomes
-    - [ ] Inventory current Host registration, route advertisement, lease forwarding, TLS authorization, lifecycle, and Broker route-table code paths.
-    - [ ] Record source references for reusable common types/helpers before adding new protocol shapes.
-    - [ ] Confirm no changes are needed to `tech-stack.md` unless implementation requires a new runtime dependency.
-- [ ] Task: Write failing common protocol tests for federation metadata
-    - [ ] Add tests for Host IDs, upstream/federation handshake shapes, federated route metadata, hop counts, via chains, and loop-prevention validation.
-    - [ ] Add tests proving legacy Broker route-control frames remain backward compatible.
-    - [ ] Add tests for new structured error codes such as upstream unavailable, route loop, authorization denied, and unsafe retry where applicable.
-- [ ] Task: Implement shared protocol foundations in `@signicode/verser-common`
-    - [ ] Add runtime-neutral Host federation types, route metadata types, authorization context types, constants, and validation helpers.
-    - [ ] Extend TLS certificate identity helpers only as needed for safe certificate-chain authorization context.
-    - [ ] Export common APIs without coupling them to Node Host implementation details.
-- [ ] Task: Validate protocol foundation phase
-    - [ ] Run the narrowest common protocol tests.
-    - [ ] Run TypeScript build for affected packages if type exports changed.
-    - [ ] Record coverage applicability and common-library reuse notes.
-- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+- [x] Task: Confirm affected packages, entrypoints, protocol behavior, and expected outcomes
+    - [x] Inventory current Host registration, route advertisement, lease forwarding, TLS authorization, lifecycle, and Broker route-table code paths.
+    - [x] Record source references for reusable common types/helpers before adding new protocol shapes.
+    - [x] Confirm no changes are needed to `tech-stack.md` unless implementation requires a new runtime dependency.
+- [x] Task: Write failing common protocol tests for federation metadata
+    - [x] Add tests for Host IDs, upstream/federation handshake shapes, federated route metadata, hop counts, via chains, and loop-prevention validation.
+    - [x] Add tests proving legacy Broker route-control frames remain backward compatible.
+    - [x] Add tests for new structured error codes such as upstream unavailable, route loop, authorization denied, and unsafe retry where applicable.
+- [x] Task: Implement shared protocol foundations in `@signicode/verser-common`
+    - [x] Add runtime-neutral Host federation types, route metadata types, authorization context types, constants, and validation helpers.
+    - [x] Extend TLS certificate identity helpers only as needed for safe certificate-chain authorization context.
+    - [x] Export common APIs without coupling them to Node Host implementation details.
+- [x] Task: Validate protocol foundation phase
+    - [x] Run the narrowest common protocol tests.
+    - [x] Run TypeScript build for affected packages if type exports changed.
+    - [x] Record coverage applicability and common-library reuse notes.
+- [~] Task: Push phase checkpoint for GitHub-visible manual verification
     - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
     - [ ] Push the track branch to the remote branch before requesting manual verification.
     - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Protocol and API Design Foundations' (Protocol in workflow.md)
+
+### Phase 1 notes
+
+- Affected package: `@signicode/verser-common`; public entrypoint `packages/verser-common/src/index.ts` now exports runtime-neutral Host federation protocol foundations.
+- Source inventory references: Host registration/route advertisement/lease routing in `packages/verser2-host/src/lib/node-http2-verser-host.ts`; Broker route table in `packages/verser2-guest-node/src/lib/http2-verser-broker.ts`; reusable common route, registration, TLS identity, error, and envelope helpers in `packages/verser-common/src/lib/`.
+- No new runtime dependency was added; `tech-stack.md` does not require a Phase 1 update.
+- TDD failure confirmed with `npm run build --workspace=@signicode/verser-common && node --test test/common-protocol.test.js`: new federation helper/error-code tests failed before implementation because APIs/error codes were missing.
+- Validation passed: `npm run build --workspace=@signicode/verser-common && node --test test/common-protocol.test.js`; `npm run lint`; `node --test --experimental-test-coverage test/common-protocol.test.js`.
+- Coverage: changed federation helper behavior has meaningful focused assertions for success, malformed handshake metadata, malformed route metadata, loop/hop checks, legacy route-frame compatibility, and error-code recognition. The experimental Node coverage report is package-bundle-wide for `@signicode/verser-common` (`dist/index.js` 58.93%) because the focused protocol test loads the entire built common package; no repository threshold command is configured for per-helper coverage.
+- Deduplication/common reuse: all new runtime-neutral federation protocol shapes and validators live in `@signicode/verser-common`; existing route registration validation, `VerserError`, TLS certificate identity shape, and legacy Broker route-control helper are reused/adapted. No package-local duplicate was added.
+- Code review: `@oracle` found malformed wire metadata validation gaps; review-driven failing tests were added and the helpers now reject bad discriminants, non-boolean flags, invalid `viaHostIds`, invalid sources, and bad hop counts predictably with `VerserError` protocol errors.
 
 ## Phase 2: Host Route Registry and Local-First Resolution
 

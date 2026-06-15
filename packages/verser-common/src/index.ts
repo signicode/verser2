@@ -37,6 +37,11 @@ export { DEFAULT_MAX_ENVELOPE_METADATA_BYTES, VERSER_LIFECYCLE_EVENTS } from './
 
 export type {
   VerserPeerRole,
+  VerserHostId,
+  VerserHostFederationAuthorizationAction,
+  VerserHostFederationAuthorizationCallback,
+  VerserHostFederationAuthorizationContext,
+  VerserHostFederationHandshake,
   VerserRegistrationRequest,
   VerserRegistrationAuthorizationAction,
   VerserRegistrationAuthorizationCallback,
@@ -50,6 +55,7 @@ export type {
   VerserHostTlsOptions,
   LeaseRequestMetadataReadOptions,
   LeaseResponseMetadataReadOptions,
+  FederatedRouteRegistration,
   ParsedVerserEnvelope,
   RoutedDomainRegistration,
   RoutedRequestEnvelope,
@@ -73,8 +79,19 @@ export type {
   VerserResponseEnvelopeMetadata,
   VerserStreamReadContext,
   VerserEnvelopeTypeName,
+  VerserFederatedRoutesControlFrame,
+  VerserFederatedRouteSource,
   VerserGuestId,
 } from './lib/types';
+
+export {
+  createFederatedRouteRegistration,
+  createFederatedRoutesControlFrame,
+  createVerserHostFederationHandshake,
+  createVerserHostId,
+  exceedsFederatedRouteHopLimit,
+  isFederatedRouteLoop,
+} from './lib/federation';
 
 export {
   createGuestId,
