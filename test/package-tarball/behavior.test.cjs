@@ -8,6 +8,7 @@ const packageNames = [
   '@signicode/verser2-guest-js-common',
   '@signicode/verser2-host',
   '@signicode/verser2-guest-node',
+  '@signicode/verser2-guest-bun',
   '@signicode/verser2-guest-python',
 ];
 
@@ -94,6 +95,16 @@ test('host-guest-broker-smoke: installed packages route a lightweight request', 
     assert.equal(response.statusCode, 202);
     assert.equal(response.headers['x-tarball'], 'yes');
     assert.deepEqual(Buffer.concat(bodyChunks), Buffer.from('tarball-body'));
+
+    const fetch = broker.createFetch();
+    const fetchResponse = await fetch('http://tarball.local.test/fetch-smoke', {
+      method: 'POST',
+      body: 'fetch-tarball-body',
+    });
+
+    assert.equal(fetchResponse.status, 202);
+    assert.equal(fetchResponse.headers.get('x-tarball'), 'yes');
+    assert.equal(await fetchResponse.text(), 'fetch-tarball-body');
   } finally {
     if (broker !== undefined) await broker.close('test-complete');
     if (guest !== undefined) await guest.close('test-complete');

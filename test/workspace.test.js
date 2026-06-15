@@ -22,7 +22,10 @@ test('root package declares npm workspace commands', () => {
     'npm run build && npm run stage:packages && node --test test/*.test.js',
   );
   assert.equal(packageManifest.scripts['test:bounded'], 'node ./scripts/run-bounded-tests.js');
-  assert.equal(packageManifest.scripts['test:bounded:coverage'], 'node ./scripts/run-bounded-tests.js --coverage');
+  assert.equal(
+    packageManifest.scripts['test:bounded:coverage'],
+    'node ./scripts/run-bounded-tests.js --coverage',
+  );
   assert.equal(packageManifest.scripts.lint, 'biome check .');
 });
 
@@ -37,7 +40,9 @@ test('bounded test runner preserves full validation flow with default heap limit
   assert.match(runnerSource, /--max-old-space-size=\$\{oldSpaceSizeMb\}/);
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*build/);
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*stage:packages/);
-  assert.match(runnerSource, /node[\s\S]*--test[\s\S]*test\/\*\.test\.js/);
+  assert.match(runnerSource, /DEFAULT_TEST_FILES\s*=\s*\['test\/\*\.test\.js'\]/);
+  assert.match(runnerSource, /testArgs\s*=\s*\['--test'\]/);
+  assert.match(runnerSource, /runCommand\(process\.execPath, testArgs/);
 });
 
 test('root TypeScript configuration targets strict CommonJS ES2019 declarations', () => {

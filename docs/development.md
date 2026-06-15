@@ -25,12 +25,44 @@ Use npm for repository commands. Node.js `>=20` is required.
 npm install
 npm run build
 npm test
+npm run test:bounded
 npm run test:coverage
 npm run lint
 ```
 
 `npm test` builds all packages, stages publish-ready packages under
 `dist/packages`, then runs the Node test suite.
+
+`npm run test:bounded` preserves the same full validation flow while running the
+Node-based build, staging, and test commands with a default 512 MiB V8 old-space
+heap limit (`--max-old-space-size=512`) and an explicit semi-space size. Use it
+when diagnosing memory growth, validating suspected OOM fixes, or running the
+full suite on memory-constrained developer machines. It intentionally avoids a
+low virtual-memory cap because Node and npm wrappers may reserve more address
+space than they actively use.
+
+Run a focused repository test file after building and staging when package
+artifacts are needed:
+
+```sh
+npm run build
+npm run stage:packages
+node --test test/<name>.test.js
+```
+
+The bounded runner also accepts focused test files after `--`:
+
+```sh
+npm run test:bounded -- -- test/<name>.test.js
+npm run test:bounded:coverage
+```
+
+Node heap limits apply to Node subprocesses started by the bounded runner through
+`NODE_OPTIONS`. Bun and Python/`uv` integration tests run in their own runtimes;
+they should use runtime-specific timeouts and cleanup behavior rather than an
+unsafe inherited virtual-memory cap. Prefer focused Bun or Python validation when
+diagnosing those paths, and keep output/timeouts bounded so failed subprocesses do
+not leak handles or accumulate unbounded logs.
 
 ## Package staging
 

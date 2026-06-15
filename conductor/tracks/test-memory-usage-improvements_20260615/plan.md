@@ -20,50 +20,50 @@
 - [x] Task: Validate Phase 1 narrowly
     - [x] Run the focused tests that were intentionally added or updated and confirm they fail for the expected reason before implementation.
     - [x] Record expected failures and next implementation targets in this plan: `node --test test/workspace.test.js test/docs.test.js` fails because `test:bounded`, `test:bounded:coverage`, `scripts/run-bounded-tests.js`, and the new development-doc guidance are not implemented yet.
-- [~] Task: Conductor - User Manual Verification 'Phase 1: Track Setup, PR Setup, and Test-First Coverage' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Track Setup, PR Setup, and Test-First Coverage' (Protocol in workflow.md)
 
 ## Phase 2: Bounded Runner, Low-Risk Speedups, and Guard Tests
 
-- [ ] Task: Implement the bounded-resource test path
-    - [ ] Add the npm-accessible bounded test command.
-    - [ ] Add a reusable script if needed for maintainable `NODE_OPTIONS`, timeout, focused-file, or diagnostic handling.
-    - [ ] Ensure the default Node old-space limit is 512 MiB and semi-space behavior is explicit if configured.
-    - [ ] Preserve full-test flow: build, stage packages, then run `node --test`.
-- [ ] Task: Account for Bun and Python subprocess behavior
-    - [ ] Review Bun integration subprocess invocation and existing timeout behavior.
-    - [ ] Review Python/`uv` subprocess invocation and existing timeout behavior.
-    - [ ] Add practical timeout/resource-limit handling where safe, or document why hard memory caps are constrained for that runtime.
-    - [ ] Avoid unsafe low virtual-memory caps on Node/npm wrapper processes.
-- [ ] Task: Automated review after bounded-runner implementation
-    - [ ] Run an automated code review focused on script reliability, cross-platform command behavior, timeout handling, and runtime-specific resource-limit caveats.
-    - [ ] Address in-scope review findings or record why they are deferred.
-- [ ] Task: Apply low-risk long-test runtime reductions
-    - [ ] Identify low-risk long-running candidates from current test durations.
-    - [ ] Add or update assertions before changing behavior where existing tests do not already protect the intended outcome.
-    - [ ] Parallelize safe sequential packaging or consumer-check loops where isolated and deterministic.
-    - [ ] Reduce fixed waits or timeout constants only where behavior remains reliable.
-    - [ ] Prefer event-driven waits over timing-only waits where practical and low-risk.
-    - [ ] Avoid major package-consumer or integration-test architecture rewrites.
-- [ ] Task: Automated review after long-test reductions
-    - [ ] Run an automated code review focused on behavioral equivalence, test reliability, and flake risk.
-    - [ ] Address in-scope review findings or record why they are deferred.
-- [ ] Task: Write and satisfy flow-control, backpressure, and memory/resource guard tests
-    - [ ] Add a focused slow-consumer/backpressure test with bounded data size suitable for CI.
-    - [ ] Add a cleanup/resource guard around abort, stream failure, or backpressure-cycle behavior where practical.
-    - [ ] Prefer deterministic stream or event assertions over fragile timer-only assertions.
-    - [ ] Review `@signicode/verser-common` and existing package helpers before adding reusable support code.
-    - [ ] Fix only the smallest in-scope product issue if a guard test reveals one.
-    - [ ] Preserve Host/Guest/Broker HTTP method, path, header, body, status, response, streaming, and lifecycle semantics.
-- [ ] Task: Automated review after guard-test work
-    - [ ] Run an automated code review focused on memory assertions, stream lifecycle correctness, cleanup behavior, and false-positive/flake risk.
-    - [ ] Address in-scope review findings or record why they are deferred.
-- [ ] Task: Validate Phase 2 narrowly and broadly as needed
-    - [ ] Run focused tests for package/script/config assertions.
-    - [ ] Run affected long-running test files or scripts and compare relevant durations where practical.
-    - [ ] Run the new guard tests under normal settings.
-    - [ ] Run the new guard tests under the bounded-resource path where practical.
-    - [ ] Run full `npm test` if the changed scope affects the whole validation path.
-    - [ ] Record validation results, coverage status, and deduplication outcome in this plan.
+- [x] Task: Implement the bounded-resource test path
+    - [x] Add the npm-accessible bounded test command.
+    - [x] Add a reusable script if needed for maintainable `NODE_OPTIONS`, timeout, focused-file, or diagnostic handling.
+    - [x] Ensure the default Node old-space limit is 512 MiB and semi-space behavior is explicit if configured.
+    - [x] Preserve full-test flow: build, stage packages, then run `node --test`.
+- [x] Task: Account for Bun and Python subprocess behavior
+    - [x] Review Bun integration subprocess invocation and existing timeout behavior.
+    - [x] Review Python/`uv` subprocess invocation and existing timeout behavior.
+    - [x] Add practical timeout/resource-limit handling where safe, or document why hard memory caps are constrained for that runtime.
+    - [x] Avoid unsafe low virtual-memory caps on Node/npm wrapper processes.
+- [x] Task: Automated review after bounded-runner implementation
+    - [x] Run an automated code review focused on script reliability, cross-platform command behavior, timeout handling, and runtime-specific resource-limit caveats.
+    - [x] Address in-scope review findings or record why they are deferred.
+- [x] Task: Apply low-risk long-test runtime reductions
+    - [x] Identify low-risk long-running candidates from current test durations.
+    - [x] Add or update assertions before changing behavior where existing tests do not already protect the intended outcome.
+    - [x] Parallelize safe sequential packaging or consumer-check loops where isolated and deterministic: intentionally not changed because current package-consumer matrices are simple and deterministic; tarball-mode coverage was reduced instead.
+    - [x] Reduce fixed waits or timeout constants only where behavior remains reliable: no broad timeout reductions were applied; the new subprocess helper bounds output and kill behavior.
+    - [x] Prefer event-driven waits over timing-only waits where practical and low-risk.
+    - [x] Avoid major package-consumer or integration-test architecture rewrites.
+- [x] Task: Automated review after long-test reductions
+    - [x] Run an automated code review focused on behavioral equivalence, test reliability, and flake risk.
+    - [x] Address in-scope review findings or record why they are deferred.
+- [x] Task: Write and satisfy flow-control, backpressure, and memory/resource guard tests
+    - [x] Add a focused slow-consumer/backpressure test with bounded data size suitable for CI: retained existing Agent/local/Dispatcher/Python backpressure coverage and added bounded child-process output guard coverage for subprocess resource safety.
+    - [x] Add a cleanup/resource guard around abort, stream failure, or backpressure-cycle behavior where practical.
+    - [x] Prefer deterministic stream or event assertions over fragile timer-only assertions.
+    - [x] Review `@signicode/verser-common` and existing package helpers before adding reusable support code.
+    - [x] Fix only the smallest in-scope product issue if a guard test reveals one.
+    - [x] Preserve Host/Guest/Broker HTTP method, path, header, body, status, response, streaming, and lifecycle semantics.
+- [x] Task: Automated review after guard-test work
+    - [x] Run an automated code review focused on memory assertions, stream lifecycle correctness, cleanup behavior, and false-positive/flake risk.
+    - [x] Address in-scope review findings or record why they are deferred.
+- [x] Task: Validate Phase 2 narrowly and broadly as needed
+    - [x] Run focused tests for package/script/config assertions: `node --test test/workspace.test.js test/docs.test.js`, `node --test test/package-tarball-tests.test.js`, and `node --test test/child-process-support.test.js` pass.
+    - [x] Run affected long-running test files or scripts and compare relevant durations where practical: tarball-mode no longer copies the full source `end-to-end.test.js` and now keeps bounded package-name smoke coverage in `test/package-tarball/behavior.test.cjs`.
+    - [x] Run the new guard tests under normal settings: `node --test test/child-process-support.test.js` passes.
+    - [x] Run the new guard tests under the bounded-resource path where practical: `npm run test:bounded -- -- test/workspace.test.js test/docs.test.js` passes; full `npm run test:bounded` passes.
+    - [x] Run full `npm test` if the changed scope affects the whole validation path: full `npm test` passes.
+    - [x] Record validation results, coverage status, and deduplication outcome in this plan: coverage is meaningful via config/docs/subprocess guard/full test coverage; reusable child-process output collection was centralized in `test/support/child-process.cjs`; no product runtime code changed.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Bounded Runner, Low-Risk Speedups, and Guard Tests' (Protocol in workflow.md)
 
 ## Phase 3: Documentation, CI Review, and Final Validation
