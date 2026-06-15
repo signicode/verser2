@@ -93,10 +93,11 @@
     - [x] Run focused TLS/configuration and Host lifecycle tests.
     - [x] Run build for affected TypeScript packages.
     - [x] Record coverage and certificate-chain limitations if any Node TLS details cannot be exposed safely.
-- [~] Task: Push phase checkpoint for GitHub-visible manual verification
-    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
-    - [ ] Push the track branch to the remote branch before requesting manual verification.
-    - [ ] Record the pushed commit SHA in this plan.
+- [x] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [x] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [x] Push the track branch to the remote branch before requesting manual verification.
+    - [x] Record the pushed commit SHA in this plan.
+        - Checkpoint commit: `8801028`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Upstream Host Link Lifecycle and Authorization' (Protocol in workflow.md)
 
 ### Phase 3 notes
