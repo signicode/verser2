@@ -25,12 +25,47 @@ Use npm for repository commands. Node.js `>=20` is required.
 npm install
 npm run build
 npm test
+npm run test:bounded
 npm run test:coverage
 npm run lint
 ```
 
 `npm test` builds all packages, stages publish-ready packages under
-`dist/packages`, then runs the Node test suite.
+`dist/packages`, then runs the Node source test suite. The default source suite
+skips redundant package-consumer matrix wrappers and pack dry-runs that are
+covered by the explicit package-validation commands below; this keeps ordinary
+test iteration focused while preserving package validation as a first-class path.
+
+`npm run test:bounded` preserves the same full validation flow while running the
+Node-based build, staging, and test commands with a default 512 MiB V8 old-space
+heap limit (`--max-old-space-size=512`) and an explicit semi-space size. Use it
+when diagnosing memory growth, validating suspected OOM fixes, or running the
+full suite on memory-constrained developer machines. It intentionally avoids a
+low virtual-memory cap because Node and npm wrappers may reserve more address
+space than they actively use.
+
+Run a focused repository test file after building and staging when package
+artifacts are needed:
+
+```sh
+npm run build
+npm run stage:packages
+node --test test/<name>.test.js
+```
+
+The bounded runner also accepts focused test files after `--`:
+
+```sh
+npm run test:bounded -- -- test/<name>.test.js
+npm run test:bounded:coverage
+```
+
+Node heap limits apply to Node subprocesses started by the bounded runner through
+`NODE_OPTIONS`. Bun and Python/`uv` integration tests run in their own runtimes;
+they should use runtime-specific timeouts and cleanup behavior rather than an
+unsafe inherited virtual-memory cap. Prefer focused Bun or Python validation when
+diagnosing those paths, and keep output/timeouts bounded so failed subprocesses do
+not leak handles or accumulate unbounded logs.
 
 ## Package staging
 
@@ -64,6 +99,12 @@ npm run test:package-consumers -- --source=staging
 npm run test:package-consumers -- --source=tarball
 npm run test:package-tarballs
 ```
+
+To include the package-consumer matrix wrapper tests inside `node --test`, set
+`VERSER_RUN_PACKAGE_CONSUMER_MATRIX=1`. To force the redundant staged-package
+`npm pack --dry-run` assertions, set `VERSER_RUN_PACK_DRY_RUN_TESTS=1`. The
+regular package-validation scripts above are preferred because they exercise the
+same package-consumer and tarball behavior directly.
 
 See [Package publishing](./package-publishing.md) for the GitHub Packages runbook
 and version/dist-tag policy.

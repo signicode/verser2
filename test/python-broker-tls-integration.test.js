@@ -5,6 +5,7 @@ const test = require('node:test');
 
 const { loadVerserHost } = require('./support/verser-package-imports.cjs');
 const { trusted, clientCa, trustedClient, untrustedClient } = require('./support/tls-fixtures.cjs');
+const { collectChildProcessResult } = require('./support/child-process.cjs');
 
 const { createVerserHost } = loadVerserHost();
 
@@ -48,37 +49,16 @@ async def main():
 asyncio.run(main())
 `;
 
-  return new Promise((resolve) => {
-    const child = spawn(
-      'uv',
-      ['run', '--project', pythonPackageDirectory, 'python', '-c', script],
-      {
-        cwd: rootDirectory,
-        env: {
-          ...process.env,
-          PYTHONPATH: pythonSourceDirectory,
-          ...options.env,
-        },
-      },
-    );
-    let stdout = '';
-    let stderr = '';
-    const timeout = setTimeout(
-      () => {
-        child.kill('SIGKILL');
-      },
-      Number(options.env?.VERSER_PROCESS_TIMEOUT_MS || options.timeout || 20_000),
-    );
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString('utf8');
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString('utf8');
-    });
-    child.once('exit', (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal, stdout, stderr });
-    });
+  const child = spawn('uv', ['run', '--project', pythonPackageDirectory, 'python', '-c', script], {
+    cwd: rootDirectory,
+    env: {
+      ...process.env,
+      PYTHONPATH: pythonSourceDirectory,
+      ...options.env,
+    },
+  });
+  return collectChildProcessResult(child, {
+    timeoutMs: Number(options.env?.VERSER_PROCESS_TIMEOUT_MS || options.timeout || 20_000),
   });
 }
 

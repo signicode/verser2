@@ -15,6 +15,7 @@ const packageDirectories = [
   'packages/verser2-guest-python',
 ];
 const forbiddenPublishFields = ['private', 'scripts', 'devDependencies', 'workspaces'];
+const runPackDryRunTests = process.env.VERSER_RUN_PACK_DRY_RUN_TESTS === '1';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -106,31 +107,39 @@ test('staged package manifests are publish-only consumer metadata', () => {
   }
 });
 
-test('staged packages are packable with npm pack dry-run', () => {
-  for (const packageDirectory of packageDirectories) {
-    const packageName = getPackageName(packageDirectory);
-    const stagedPackageDirectory = getStagedPackageDirectory(packageName);
-    assertStagedPackageArtifacts(packageName);
+test(
+  'staged packages are packable with npm pack dry-run',
+  {
+    skip: runPackDryRunTests
+      ? false
+      : 'Skipping redundant pack dry-run in default source tests; run npm run test:package-tarballs for package packing validation.',
+  },
+  () => {
+    for (const packageDirectory of packageDirectories) {
+      const packageName = getPackageName(packageDirectory);
+      const stagedPackageDirectory = getStagedPackageDirectory(packageName);
+      assertStagedPackageArtifacts(packageName);
 
-    const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-      cwd: stagedPackageDirectory,
-      encoding: 'utf8',
-    });
-    const [packResult] = JSON.parse(output);
-    const packedFiles = packResult.files.map((file) => file.path).sort();
+      const output = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+        cwd: stagedPackageDirectory,
+        encoding: 'utf8',
+      });
+      const [packResult] = JSON.parse(output);
+      const packedFiles = packResult.files.map((file) => file.path).sort();
 
-    assert.ok(packedFiles.includes('package.json'));
-    assert.ok(packedFiles.includes('LICENSE'));
-    assert.ok(packedFiles.includes('README.md'));
-    assert.ok(packedFiles.includes('dist/index.js'));
-    assert.ok(packedFiles.includes('dist/index.d.ts'));
-    assert.equal(
-      packedFiles.some((filePath) => filePath.startsWith('src/') || filePath.startsWith('test/')),
-      false,
-      `Expected ${packageName} pack dry-run to exclude source and tests`,
-    );
-  }
-});
+      assert.ok(packedFiles.includes('package.json'));
+      assert.ok(packedFiles.includes('LICENSE'));
+      assert.ok(packedFiles.includes('README.md'));
+      assert.ok(packedFiles.includes('dist/index.js'));
+      assert.ok(packedFiles.includes('dist/index.d.ts'));
+      assert.equal(
+        packedFiles.some((filePath) => filePath.startsWith('src/') || filePath.startsWith('test/')),
+        false,
+        `Expected ${packageName} pack dry-run to exclude source and tests`,
+      );
+    }
+  },
+);
 
 test('Python Guest build emits native Python distribution artifacts', () => {
   const pythonDistDirectory = path.join(
