@@ -210,7 +210,7 @@
     - [x] Push the track branch to the remote branch before requesting manual verification.
     - [x] Record the pushed commit SHA in this plan.
         - Checkpoint commit: `4988552`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 6: HA Candidate Selection and Safe Retry' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 6: HA Candidate Selection and Safe Retry' (Protocol in workflow.md)
 
 ### Phase 6 notes
 
@@ -220,6 +220,7 @@
 - Safe retry scope is intentionally narrow: fallback happens only before forwarding starts. Active in-flight requests and mid-stream failures are not transparently migrated or replayed, preserving the documented no active migration / no exactly-once guarantee.
 - Validation passed: `npm run lint`; `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-host && node --test test/host-upstreams.test.js test/host-route-registry.test.js test/host.test.js test/broker-routing.test.js test/packages.test.js`; `node --test --experimental-test-coverage test/host-upstreams.test.js`.
 - Coverage/review: focused HA assertions cover closest healthy candidate selection, fallback after route withdrawal, and stale-preferred candidate fallback before request forwarding starts. `@oracle` re-review found no blockers and confirmed there is no retry around the route-over-stream methods after forwarding begins; non-blocking notes were preserving `upstream-unavailable` when every candidate acquisition fails and adding an explicit stale-first HTTP/2 Broker regression later.
+- Manual verification: approved by user after confirming PR #22 remote head `e75a49820433c7ea966ad2c0a9d7fae8b9e2ad13` was pushed.
 
 ## Phase 7: Documentation, Examples, and Final Compatibility Validation
 
