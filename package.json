@@ -13,7 +13,9 @@
     "test:package-consumers": "node ./scripts/test-package-consumers.js",
     "test:package-tarballs": "node ./scripts/test-package-tarballs.js",
     "test": "npm run build && npm run stage:packages && node --test test/*.test.js",
+    "test:bounded": "node ./scripts/run-bounded-tests.js",
     "test:coverage": "npm run build && npm run stage:packages && node --test --experimental-test-coverage test/*.test.js",
+    "test:bounded:coverage": "node ./scripts/run-bounded-tests.js --coverage",
     "lint": "biome check ."
   },
   "devDependencies": {

@@ -28,15 +28,18 @@ test('package tarball automated test runner documents behavior test groups', () 
   assert.match(script, /excludedGroups/);
   assert.match(script, /consumer-imports/);
   assert.match(script, /existing-common-protocol-envelope/);
-  assert.match(script, /existing-end-to-end/);
-  assert.match(script, /end-to-end\.test\.js/);
+  assert.doesNotMatch(script, /existing-end-to-end/);
+  assert.doesNotMatch(script, /end-to-end\.test\.js/);
+  assert.match(script, /source-end-to-end-coverage/);
 });
 
 test('package tarball automated test runner installs tarballs into a temp consumer', () => {
   const script = fs.readFileSync(scriptPath, 'utf8');
 
-  assert.match(script, /npm['"], \[['"]pack/);
-  assert.match(script, /npm['"],[\s\S]*?['"]install/);
+  assert.match(script, /function npmCommand/);
+  assert.match(script, /npm\.cmd/);
+  assert.match(script, /npmCommand\(\), \[['"]pack/);
+  assert.match(script, /npmCommand\(\),[\s\S]*?['"]install/);
   assert.match(script, /mkdtempSync/);
   assert.match(script, /node_modules/);
   assert.match(script, /behavior\.test\.cjs/);

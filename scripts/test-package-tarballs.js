@@ -16,7 +16,6 @@ const behaviorTestSourcePath = path.join(
 const reusableTestRelativePaths = [
   path.join('test', 'common-envelope.test.js'),
   path.join('test', 'common-protocol.test.js'),
-  path.join('test', 'end-to-end.test.js'),
 ];
 const supportFileRelativePaths = [
   path.join('test', 'support', 'verser-package-imports.cjs'),
@@ -61,11 +60,6 @@ const includedGroups = [
     name: 'existing-common-protocol-envelope',
     description: 'Existing common protocol and envelope tests run from installed tarballs.',
   },
-  {
-    name: 'existing-end-to-end',
-    description:
-      'Existing Host, Node Guest, Broker, Agent, and fetch end-to-end tests run from installed tarballs.',
-  },
 ];
 
 const excludedGroups = [
@@ -77,6 +71,11 @@ const excludedGroups = [
     name: 'remaining-source-internal-and-streaming',
     reason:
       'Remaining source suites include repository metadata, workflow assertions, package staging internals, or broader timing-heavy streaming cases already covered by source tests.',
+  },
+  {
+    name: 'source-end-to-end-coverage',
+    reason:
+      'End-to-end Host, Node Guest, Broker, Agent, and fetch behavior remains covered by source tests; tarball mode keeps package-name import and common protocol smoke coverage bounded.',
   },
 ];
 
@@ -116,6 +115,10 @@ function runCommand(command, args, options = {}) {
     stdio: ['ignore', 'pipe', 'pipe'],
     ...options,
   });
+}
+
+function npmCommand() {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
 function ensureDirectory(directory) {
@@ -172,7 +175,7 @@ function packStagedPackages(tarballDirectory) {
       .readdirSync(tarballDirectory)
       .filter((entry) => entry.endsWith('.tgz'))
       .sort();
-    runCommand('npm', ['pack', '--silent', '--pack-destination', tarballDirectory], {
+    runCommand(npmCommand(), ['pack', '--silent', '--pack-destination', tarballDirectory], {
       cwd: stagedDirectory,
     });
     const afterPack = fs
@@ -199,7 +202,7 @@ function installTarballs(projectRoot, tarballPaths) {
   }
 
   runCommand(
-    'npm',
+    npmCommand(),
     [
       'install',
       '--ignore-scripts',

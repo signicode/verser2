@@ -119,21 +119,17 @@ Node package example:
 NODE_OPTIONS=--max-old-space-size=512 timeout 20s node --test test/specific.test.js
 ```
 
-For npm-wrapped workspace commands, constrain Node's heap while allowing V8 to
-reserve virtual address space:
+For full repository validation, use the first-class bounded test command. It
+builds, stages, and runs the Node test suite with a 512 MiB default old-space
+heap while allowing V8 to reserve virtual address space:
 
 ```sh
-NODE_OPTIONS="--max-old-space-size=512 --max-semi-space-size=16" timeout 30s npm test --workspace=@signicode/verser2-guest-python
+npm run test:bounded
 ```
 
 This does not replace fixing the leak or unbounded aggregation. It is a safer
 way to verify whether a suspected OOM reproduces under bounded heap conditions.
 If the command passes under this limit, continue investigating protocol or test
 runner memory behavior only if there is other evidence of growth.
-
-Future follow-up: review the repository test runners after the current track is
-complete. Useful improvements would include first-class timeout support, optional
-heap limits for Node-based wrappers, focused Python test targets that do not need
-to start npm, and consistent diagnostics for active handles/tasks after timeout.
 
 Then widen validation only after the focused test exits safely.

@@ -21,7 +21,28 @@ test('root package declares npm workspace commands', () => {
     packageManifest.scripts.test,
     'npm run build && npm run stage:packages && node --test test/*.test.js',
   );
+  assert.equal(packageManifest.scripts['test:bounded'], 'node ./scripts/run-bounded-tests.js');
+  assert.equal(
+    packageManifest.scripts['test:bounded:coverage'],
+    'node ./scripts/run-bounded-tests.js --coverage',
+  );
   assert.equal(packageManifest.scripts.lint, 'biome check .');
+});
+
+test('bounded test runner preserves full validation flow with default heap limits', () => {
+  const runnerPath = path.join(rootDirectory, 'scripts/run-bounded-tests.js');
+
+  assert.ok(fs.existsSync(runnerPath), 'Expected scripts/run-bounded-tests.js to exist.');
+
+  const runnerSource = fs.readFileSync(runnerPath, 'utf8');
+
+  assert.match(runnerSource, /DEFAULT_OLD_SPACE_SIZE_MB\s*=\s*512/);
+  assert.match(runnerSource, /--max-old-space-size=\$\{oldSpaceSizeMb\}/);
+  assert.match(runnerSource, /npm[\s\S]*run[\s\S]*build/);
+  assert.match(runnerSource, /npm[\s\S]*run[\s\S]*stage:packages/);
+  assert.match(runnerSource, /DEFAULT_TEST_FILES\s*=\s*\['test\/\*\.test\.js'\]/);
+  assert.match(runnerSource, /testArgs\s*=\s*\['--test'\]/);
+  assert.match(runnerSource, /runCommand\(process\.execPath, testArgs/);
 });
 
 test('root TypeScript configuration targets strict CommonJS ES2019 declarations', () => {

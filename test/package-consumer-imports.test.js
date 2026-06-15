@@ -6,6 +6,7 @@ const test = require('node:test');
 const rootDirectory = path.resolve(__dirname, '..');
 const scriptPath = path.join(rootDirectory, 'scripts', 'test-package-consumers.js');
 const runAuthenticatedGithubConsumers = process.env.VERSER_RUN_GITHUB_CONSUMER_TESTS === '1';
+const runPackageConsumerMatrix = process.env.VERSER_RUN_PACKAGE_CONSUMER_MATRIX === '1';
 const expectedPackageCount = 6;
 const expectedPackageNames = new Set([
   '@signicode/verser-common',
@@ -81,59 +82,83 @@ function runConsumerChecks(sourceMode) {
   return JSON.parse(output);
 }
 
-test('consumer matrix validates cjs, esm, and typescript imports from source packages', () => {
-  const report = runConsumerChecks('source');
+test(
+  'consumer matrix validates cjs, esm, and typescript imports from source packages',
+  {
+    skip: runPackageConsumerMatrix
+      ? false
+      : 'Skipping package consumer matrix in default source tests; run npm run test:package-consumers -- --source=source.',
+  },
+  () => {
+    const report = runConsumerChecks('source');
 
-  assert.equal(report.source, 'source');
-  assert.equal(report.skipped, false);
-  assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, expectedPackageCount);
-  assertPackageSet(report);
+    assert.equal(report.source, 'source');
+    assert.equal(report.skipped, false);
+    assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
+    assert.equal(report.packages.length, expectedPackageCount);
+    assertPackageSet(report);
 
-  for (const packageReport of report.packages) {
-    assert.equal(packageReport.cjs, true);
-    assert.equal(packageReport.mjs, true);
-    assert.equal(packageReport.typescript, true);
-    assertRequiredExportsForMode(packageReport);
-    assertForbiddenExportsForMode(packageReport);
-  }
-});
+    for (const packageReport of report.packages) {
+      assert.equal(packageReport.cjs, true);
+      assert.equal(packageReport.mjs, true);
+      assert.equal(packageReport.typescript, true);
+      assertRequiredExportsForMode(packageReport);
+      assertForbiddenExportsForMode(packageReport);
+    }
+  },
+);
 
-test('consumer matrix validates cjs, esm, and typescript imports from staged packages', () => {
-  const report = runConsumerChecks('staging');
+test(
+  'consumer matrix validates cjs, esm, and typescript imports from staged packages',
+  {
+    skip: runPackageConsumerMatrix
+      ? false
+      : 'Skipping package consumer matrix in default source tests; run npm run test:package-consumers -- --source=staging.',
+  },
+  () => {
+    const report = runConsumerChecks('staging');
 
-  assert.equal(report.source, 'staging');
-  assert.equal(report.skipped, false);
-  assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, expectedPackageCount);
-  assertPackageSet(report);
+    assert.equal(report.source, 'staging');
+    assert.equal(report.skipped, false);
+    assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
+    assert.equal(report.packages.length, expectedPackageCount);
+    assertPackageSet(report);
 
-  for (const packageReport of report.packages) {
-    assert.equal(packageReport.cjs, true);
-    assert.equal(packageReport.mjs, true);
-    assert.equal(packageReport.typescript, true);
-    assertRequiredExportsForMode(packageReport);
-    assertForbiddenExportsForMode(packageReport);
-  }
-});
+    for (const packageReport of report.packages) {
+      assert.equal(packageReport.cjs, true);
+      assert.equal(packageReport.mjs, true);
+      assert.equal(packageReport.typescript, true);
+      assertRequiredExportsForMode(packageReport);
+      assertForbiddenExportsForMode(packageReport);
+    }
+  },
+);
 
-test('consumer matrix validates cjs, esm, and typescript imports from tarball packages', () => {
-  const report = runConsumerChecks('tarball');
+test(
+  'consumer matrix validates cjs, esm, and typescript imports from tarball packages',
+  {
+    skip: runPackageConsumerMatrix
+      ? false
+      : 'Skipping package consumer matrix in default source tests; run npm run test:package-consumers -- --source=tarball.',
+  },
+  () => {
+    const report = runConsumerChecks('tarball');
 
-  assert.equal(report.source, 'tarball');
-  assert.equal(report.skipped, false);
-  assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
-  assert.equal(report.packages.length, expectedPackageCount);
-  assertPackageSet(report);
+    assert.equal(report.source, 'tarball');
+    assert.equal(report.skipped, false);
+    assert.ok(Array.isArray(report.packages), 'Expected array of package reports');
+    assert.equal(report.packages.length, expectedPackageCount);
+    assertPackageSet(report);
 
-  for (const packageReport of report.packages) {
-    assert.equal(packageReport.cjs, true);
-    assert.equal(packageReport.mjs, true);
-    assert.equal(packageReport.typescript, true);
-    assertRequiredExportsForMode(packageReport);
-    assertForbiddenExportsForMode(packageReport);
-  }
-});
+    for (const packageReport of report.packages) {
+      assert.equal(packageReport.cjs, true);
+      assert.equal(packageReport.mjs, true);
+      assert.equal(packageReport.typescript, true);
+      assertRequiredExportsForMode(packageReport);
+      assertForbiddenExportsForMode(packageReport);
+    }
+  },
+);
 
 test('github mode does not fail when authentication token is absent', () => {
   const report = runConsumerChecks('github');
