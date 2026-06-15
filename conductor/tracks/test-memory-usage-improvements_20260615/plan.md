@@ -64,26 +64,26 @@
     - [x] Run the new guard tests under the bounded-resource path where practical: `npm run test:bounded -- -- test/workspace.test.js test/docs.test.js` passes; full `npm run test:bounded` passes.
     - [x] Run full `npm test` if the changed scope affects the whole validation path: full `npm test` passes.
     - [x] Record validation results, coverage status, and deduplication outcome in this plan: coverage is meaningful via config/docs/subprocess guard/full test coverage; reusable child-process output collection was centralized in `test/support/child-process.cjs`; no product runtime code changed.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Bounded Runner, Low-Risk Speedups, and Guard Tests' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Bounded Runner, Low-Risk Speedups, and Guard Tests' (Protocol in workflow.md)
 
 ## Phase 3: Documentation, CI Review, and Final Validation
 
-- [ ] Task: Update development documentation
-    - [ ] Document full build/test/lint commands.
-    - [ ] Document targeted test-file commands after build/stage.
-    - [ ] Document bounded-resource test commands and 512 MiB Node old-space default.
-    - [ ] Document Bun and Python/`uv` limit behavior and practical constraints.
-    - [ ] Document package consumer/tarball validation commands.
-    - [ ] Document when to use full, focused, bounded, and package-validation commands.
-- [ ] Task: Review CI integration
-    - [ ] Confirm GitHub Actions validation remains at least as strong as before.
-    - [ ] Decide whether CI should call the bounded path or only document it for developer/OOM validation.
-    - [ ] Keep Node 20, Bun integration tests, and `uv` setup compatibility intact.
-- [ ] Task: Final validation
-    - [ ] Run focused docs/config tests.
-    - [ ] Run `npm run build` if not already covered by bounded/full validation.
-    - [ ] Run bounded-resource full test command.
-    - [ ] Run full `npm test`.
-    - [ ] Run `npm run lint`.
-    - [ ] Record validation results, skipped checks, coverage status, and deduplication outcome.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Documentation, CI Review, and Final Validation' (Protocol in workflow.md)
+- [x] Task: Update development documentation
+    - [x] Document full build/test/lint commands.
+    - [x] Document targeted test-file commands after build/stage.
+    - [x] Document bounded-resource test commands and 512 MiB Node old-space default.
+    - [x] Document Bun and Python/`uv` limit behavior and practical constraints.
+    - [x] Document package consumer/tarball validation commands.
+    - [x] Document when to use full, focused, bounded, and package-validation commands.
+- [x] Task: Review CI integration
+    - [x] Confirm GitHub Actions validation remains at least as strong as before.
+    - [x] Decide whether CI should call the bounded path or only document it for developer/OOM validation: CI continues using the existing full validation path; the bounded path is documented for developer/OOM validation and can be adopted by CI later if needed.
+    - [x] Keep Node 20, Bun integration tests, and `uv` setup compatibility intact.
+- [x] Task: Final validation
+    - [x] Run focused docs/config tests: `node --test test/workspace.test.js test/docs.test.js test/package-tarball-tests.test.js test/child-process-support.test.js` passes.
+    - [x] Run `npm run build` if not already covered by bounded/full validation: covered by `npm run test:bounded` and `npm test`.
+    - [x] Run bounded-resource full test command: `npm run test:bounded` passes.
+    - [x] Run full `npm test`: passes.
+    - [x] Run `npm run lint`: passes.
+    - [x] Record validation results, skipped checks, coverage status, and deduplication outcome: no skipped checks; behavior changes are covered by focused tests and full validation; reusable subprocess output/timeout code is centralized in `test/support/child-process.cjs`; CI remains on the existing full path while bounded validation is documented for developer/OOM workflows.
+- [~] Task: Conductor - User Manual Verification 'Phase 3: Documentation, CI Review, and Final Validation' (Protocol in workflow.md)
