@@ -56,10 +56,11 @@
     - [x] Run focused Host and common protocol tests.
     - [x] Confirm existing Broker/Guest routing tests still pass for unchanged behavior.
     - [x] Record deduplication result and route conflict semantics.
-- [~] Task: Push phase checkpoint for GitHub-visible manual verification
-    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
-    - [ ] Push the track branch to the remote branch before requesting manual verification.
-    - [ ] Record the pushed commit SHA in this plan.
+- [x] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [x] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [x] Push the track branch to the remote branch before requesting manual verification.
+    - [x] Record the pushed commit SHA in this plan.
+        - Checkpoint commit: `353d41a`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Host Route Registry and Local-First Resolution' (Protocol in workflow.md)
 
 ### Phase 2 notes
