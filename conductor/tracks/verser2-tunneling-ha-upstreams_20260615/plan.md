@@ -224,26 +224,35 @@
 
 ## Phase 7: Documentation, Examples, and Final Compatibility Validation
 
-- [ ] Task: Write or update documentation from source-verified behavior
-    - [ ] Document Host federation concepts, Host IDs, upstream configuration, route import/export, and local-first routing.
-    - [ ] Document runner -> hub -> manager topology and basic multi-node HA examples.
-    - [ ] Document TLS/mTLS CA-chain setup, authorization callbacks, retry limits, and failure modes.
-    - [ ] Document explicit non-goals including CONNECT tunneling, active migration, consensus, and HTTP/3.
-- [ ] Task: Add usage examples or test fixtures where appropriate
-    - [ ] Add minimal Host upstream setup examples.
-    - [ ] Add an example showing a Broker reaching a Guest through a federated Host path.
-    - [ ] Keep examples aligned with package entrypoints and current terminology.
-- [ ] Task: Final validation
-    - [ ] Run `npm run build`.
-    - [ ] Run `npm run lint`.
-    - [ ] Run `npm test` or document any narrower validated substitute if full tests are impractical.
-    - [ ] Confirm changed behavior has at least 95% meaningful coverage or record justified exceptions.
-- [ ] Task: Final review and checkpoint
-    - [ ] Confirm the implementation matches `spec.md` acceptance criteria.
-    - [ ] Confirm common-library reuse/deduplication was completed or intentionally deferred with reasons.
-    - [ ] Confirm docs, tests, and code are aligned.
+- [x] Task: Write or update documentation from source-verified behavior
+    - [x] Document Host federation concepts, Host IDs, upstream configuration, route import/export, and local-first routing.
+    - [x] Document runner -> hub -> manager topology and basic multi-node HA examples.
+    - [x] Document TLS/mTLS CA-chain setup, authorization callbacks, retry limits, and failure modes.
+    - [x] Document explicit non-goals including CONNECT tunneling, active migration, consensus, and HTTP/3.
+- [x] Task: Add usage examples or test fixtures where appropriate
+    - [x] Add minimal Host upstream setup examples.
+    - [x] Add an example showing a Broker reaching a Guest through a federated Host path.
+    - [x] Keep examples aligned with package entrypoints and current terminology.
+- [x] Task: Final validation
+    - [x] Run `npm run build`.
+    - [x] Run `npm run lint`.
+    - [x] Run `npm test` or document any narrower validated substitute if full tests are impractical.
+    - [x] Confirm changed behavior has at least 95% meaningful coverage or record justified exceptions.
+- [x] Task: Final review and checkpoint
+    - [x] Confirm the implementation matches `spec.md` acceptance criteria.
+    - [x] Confirm common-library reuse/deduplication was completed or intentionally deferred with reasons.
+    - [x] Confirm docs, tests, and code are aligned.
 - [ ] Task: Push phase checkpoint for GitHub-visible manual verification
     - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
     - [ ] Push the track branch to the remote branch before requesting manual verification.
     - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 7: Documentation, Examples, and Final Compatibility Validation' (Protocol in workflow.md)
+
+### Phase 7 notes
+
+- Source inventory before documentation: public Host upstream API from `packages/verser2-host/src/lib/types.ts`; common federation exports from `packages/verser-common/src/index.ts`; implemented behavior validated by `test/host-upstreams.test.js`; doc target inventory from `docs/codemap.md`, `packages/verser2-host/codemap.md`, and `@explorer` docs inventory.
+- Added `docs/host-federation.md` covering Host IDs, `connectUpstream()`, `getUpstreams()`, route import/export, local-first/closest-candidate selection, runner -> hub -> manager topology, TLS/mTLS `authorizeFederation`, HA fallback scope, failure modes, and non-goals.
+- Updated root docs, package READMEs, gateway example notes, certificates, authorization, routes, lifecycle/errors, and `conductor/tech-stack.md` to align with implemented federation behavior and avoid overclaiming automatic reconnect, consensus, active migration, or CONNECT tunneling.
+- Added focused documentation assertions in `test/docs.test.js`; docs-only coverage is covered by source-verified documentation assertions rather than behavior coverage thresholds.
+- Validation passed: `node --test test/docs.test.js`; `npm run lint`; `npm run build`; `node --test test/docs.test.js test/packages.test.js`; `npm test` (256 tests: 252 passed, 4 skipped).
+- Code/documentation review: `@oracle` initially found blockers in the federated example and error-code wording; fixes were applied and re-review found no blockers and confirmed the docs respect Host/Guest/Broker boundaries and implementation limits.

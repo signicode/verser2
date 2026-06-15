@@ -20,6 +20,11 @@ Verser Host
     └── Python Guest: python-api.internal
 ```
 
+For route-aware multi-Host deployments, a runner Host can connect outbound to a
+hub or manager Host and export its Guest routes upstream. See
+[Host federation and upstreams](../host-federation.md) for runner → hub →
+manager and HA examples.
+
 ## Host container
 
 ```ts
@@ -172,7 +177,8 @@ Add these at the application boundary as needed:
 - rate limiting and request size limits;
 - access logs, metrics, tracing, and audit events;
 - fallback behavior when `broker.waitForRoute()` has not observed a route;
-- deployment topology for one or more Hosts. Route state is per Host instance.
+- deployment topology for one or more Hosts. Host federation can share route
+  availability across upstream links, but route state is eventually consistent.
 
 Future `verser2` tracks may add gateway helpers, per-request Broker target
-authorization, and Host HA/shared route-state patterns.
+authorization, and more advanced reconnect or cluster-state patterns.

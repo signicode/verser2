@@ -1,9 +1,9 @@
 # Certificates
 
-TLS applies to the remote Host/Guest/Broker HTTP/2 transport only. Guest-attached
-local handlers remain plain in-process handlers: Node HTTP handlers, Bun
-Fetch-style handlers, and Python ASGI apps do not need HTTPS certificates or
-listening ports for this routing path.
+TLS applies to remote Host/Guest/Broker HTTP/2 transport and Host-to-Host
+upstream links. Guest-attached local handlers remain plain in-process handlers:
+Node HTTP handlers, Bun Fetch-style handlers, and Python ASGI apps do not need
+HTTPS certificates or listening ports for this routing path.
 
 The Host certificate must be valid for the hostname or IP address used in
 `hostUrl` because Guest and Broker clients perform normal TLS hostname
@@ -178,6 +178,30 @@ broker = create_verser_broker(
 
 PFX/PKCS12 is also supported with `tls_pfx_file` and `tls_pfx_password`.
 
+### Upstream Host link TLS
+
+Host-to-Host upstream links use the Node client TLS option shape through
+`connectUpstream()`:
+
+```ts
+await runner.connectUpstream({
+  upstreamId: 'manager',
+  url: 'https://manager.internal:8443',
+  tls: {
+    caFile: '/etc/verser/manager-ca.crt',
+    certFile: '/etc/verser/runner-client.crt',
+    keyFile: '/etc/verser/runner-client.key',
+  },
+});
+```
+
+The upstream Host validates the client certificate with Node TLS when
+`tls.clientAuth.ca` or `caFile` is configured, including normal Root CA →
+Intermediate CA → client certificate chains when the CA material and presented
+chain are valid for Node.js. The receiving Host can then run
+`tls.clientAuth.authorizeFederation` with the TLS authorization state and
+extracted certificate identity.
+
 ## Self-signed certificates
 
 Generate a localhost certificate with SAN entries for `localhost` and `127.0.0.1`:
@@ -300,10 +324,11 @@ process.on('SIGUSR1', () => {
 });
 ```
 
-**Note:** Changing `tls.clientAuth`, trusted client CA material, or whether the
-Host requires client certificates changes mTLS mode and requires restarting the
-Host. `reloadTlsCertificate()` is for Host server identity material, not for
-changing client certificate policy on a running server.
+**Note:** Changing `tls.clientAuth`, trusted client CA material, upstream Host
+client CA policy, or whether the Host requires client certificates changes mTLS
+mode and requires restarting the Host. `reloadTlsCertificate()` is for Host
+server identity material, not for changing client certificate policy on a
+running server.
 
 ## Let's Encrypt DNS-01
 

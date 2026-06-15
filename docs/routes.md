@@ -1,7 +1,8 @@
 # Routes
 
-Route records map domain names to registered Guests. The Host maintains the
-route table and advertises changes to connected Brokers.
+Route records map domain names to registered Guests or imported federated route
+candidates. The Host maintains the route table and advertises changes to
+connected Brokers.
 
 ## Route registration
 
@@ -43,6 +44,9 @@ or prefix domain matching:
 
 After registration, the Host sends route-control frames to Brokers with the
 full current route table. Each frame contains `routes: [{ domain, targetId }]`.
+Federated routes are projected into this legacy Broker shape after the Host can
+forward requests for the imported candidate; Brokers do not need to understand
+Host federation metadata.
 
 Later route frames **replace** the Broker's route state entirely. A shorter or
 empty route list signals retraction of previously advertised routes.
@@ -54,6 +58,22 @@ and local Brokers, or `get_routes()` on the Python Broker.
 Local Brokers returned by `host.attachLocalBroker()` receive the same full
 route-table replacement semantics as remote Brokers, including initial snapshots,
 additions, retractions, `getRoutes()`, and `waitForRoute()`.
+
+## Federated route candidates
+
+When Host federation is enabled, a Host can hold multiple candidates for the same
+`domain`/`targetId`: local Guests plus routes imported from upstream or
+downstream Hosts. Candidate selection is deterministic:
+
+1. local Guest routes first;
+2. imported federated routes with a shorter hop count;
+3. stable target/domain/next-hop/owner ordering.
+
+Imported routes include loop-prevention metadata (`originHostId`,
+`nextHopHostId`, `hopCount`, and `viaHostIds`). Routes that would revisit a Host
+or exceed the configured hop limit are suppressed. When a Guest, upstream link,
+or downstream Host disconnects, imported routes owned by that link are withdrawn
+and Brokers receive a replacement route table.
 
 ## waitForRoute
 
