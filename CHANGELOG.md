@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0 - Python distribution artifacts
+
+- Builds the Python Guest package as native Python wheel and source distribution artifacts.
+- Publishes Python distribution artifacts through GitHub Actions and attaches tag builds to GitHub Releases.
+- Reuses validated package build output in the publish workflow to avoid a second full build/stage cycle.
+
 ## v0.2.1 - Broker internal redirects
 
 - Adds default-on internal `307`/`308` redirect following for Node Broker-driven request paths when the `Location` hostname exactly matches an advertised Verser2 route.

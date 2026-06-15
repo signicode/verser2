@@ -128,6 +128,59 @@ function getBaseVersion(version) {
   return buildSplit.slice(0, preSplitIndex);
 }
 
+function sanitizePythonLocalVersion(input) {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/\.+/g, '.')
+    .replace(/^\.|\.$/g, '');
+}
+
+function toPythonVersion(version) {
+  if (!isValidSemver(version)) {
+    throw new Error(`Invalid semver version: ${version}`);
+  }
+
+  const [withoutBuildMetadata, buildMetadata] = version.split('+', 2);
+  const baseVersion = getBaseVersion(withoutBuildMetadata);
+  const prereleaseIndex = withoutBuildMetadata.indexOf('-');
+  const localParts = [];
+
+  if (buildMetadata) {
+    localParts.push(buildMetadata);
+  }
+
+  if (prereleaseIndex === -1) {
+    const localVersion = sanitizePythonLocalVersion(localParts.join('.'));
+    return localVersion ? `${baseVersion}+${localVersion}` : baseVersion;
+  }
+
+  const prerelease = withoutBuildMetadata.slice(prereleaseIndex + 1);
+  const prereleaseParts = prerelease.split('.');
+  const label = prereleaseParts[0].toLowerCase();
+  const numericPart = prereleaseParts.find((part) => /^\d+$/.test(part)) || '0';
+  let pythonPublicVersion;
+
+  if (label === 'alpha' || label === 'a') {
+    pythonPublicVersion = `${baseVersion}a${numericPart}`;
+  } else if (label === 'beta' || label === 'b') {
+    pythonPublicVersion = `${baseVersion}b${numericPart}`;
+  } else if (label === 'rc') {
+    pythonPublicVersion = `${baseVersion}rc${numericPart}`;
+  } else if (label === 'next' || label === 'dev') {
+    pythonPublicVersion = `${baseVersion}.dev${numericPart}`;
+  } else if (label === 'sha') {
+    pythonPublicVersion = `${baseVersion}.dev0`;
+    localParts.push(prerelease);
+  } else {
+    pythonPublicVersion = `${baseVersion}.dev${numericPart}`;
+    localParts.push(prerelease);
+  }
+
+  const localVersion = sanitizePythonLocalVersion(localParts.join('.'));
+  return localVersion ? `${pythonPublicVersion}+${localVersion}` : pythonPublicVersion;
+}
+
 function normalizeShortSha(sha, length = PRESET_SHA_LENGTH) {
   if (typeof sha !== 'string') {
     throw new Error('Invalid short SHA: value must be a string');
@@ -229,11 +282,13 @@ function getPolicySummary({ version, sha, mainBuild }) {
     distTag: determineDistTag(version),
     computedVersion: version,
     npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+    pythonVersion: toPythonVersion(version),
   };
 
   if (mainBuild) {
     const mainVersion = deriveMainBuildVersion(version, sha);
     summary.computedVersion = mainVersion;
+    summary.pythonVersion = toPythonVersion(mainVersion);
   }
 
   return summary;
@@ -309,6 +364,8 @@ module.exports = {
   hasPrerelease,
   getStagingRootDirectory,
   getBaseVersion,
+  toPythonVersion,
+  sanitizePythonLocalVersion,
   PRESET_SHA_LENGTH,
   STABLE_TAG,
   PRERELEASE_TAG,

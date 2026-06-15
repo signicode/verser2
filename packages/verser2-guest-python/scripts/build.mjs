@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repositoryDirectory = resolve(packageDirectory, '..', '..');
 const distDirectory = resolve(packageDirectory, 'dist');
+const pythonDistDirectory = resolve(distDirectory, 'python');
 
 rmSync(distDirectory, { recursive: true, force: true });
 mkdirSync(distDirectory, { recursive: true });
@@ -32,3 +34,7 @@ writeFileSync(
 );
 
 copyFileSync(resolve(repositoryDirectory, 'LICENSE'), resolve(distDirectory, 'LICENSE'));
+
+execFileSync('uv', ['build', '--project', packageDirectory, '--out-dir', pythonDistDirectory], {
+  stdio: 'inherit',
+});

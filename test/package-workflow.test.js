@@ -47,6 +47,17 @@ test('workflow configures npm for GitHub Packages registry/scope', () => {
   );
 });
 
+test('workflow reuses validation build output in publish job', () => {
+  const content = loadWorkflow();
+  assert.match(content, /actions\/upload-artifact@v4[\s\S]*?name:\s*package-build-output/);
+  assert.match(content, /actions\/download-artifact@v4[\s\S]*?name:\s*package-build-output/);
+  assert.match(content, /packages\/verser2-guest-python\/dist\/python/);
+  assert.equal(
+    /package-publish:[\s\S]*?name:\s*Build and stage packages[\s\S]*?npm run build/.test(content),
+    false,
+  );
+});
+
 test('workflow builds, stages, and validates consumers locally', () => {
   assertHas(/npm run build/, 'Expected build step to run.');
   assertHas(/npm run stage:packages/, 'Expected staging step to run.');
@@ -81,6 +92,26 @@ test('workflow applies package version policy and publishes to GitHub Packages',
     /npm publish --access restricted --tag .* --registry https:\/\/npm\.pkg\.github\.com/,
     'Expected npm publish to target npm.pkg.github.com.',
   );
+});
+
+test('workflow publishes Python distributions through GitHub artifacts and releases', () => {
+  const content = loadWorkflow();
+  assert.match(content, /Apply publish version to Python project/);
+  assert.match(
+    content,
+    /uv build --project packages\/verser2-guest-python --out-dir packages\/verser2-guest-python\/dist\/python/,
+  );
+  assert.match(
+    content,
+    /name:\s*verser2-guest-python-\$\{\{\s*steps\.publish-metadata\.outputs\.publish_version\s*\}\}/,
+  );
+  assert.match(content, /python_version=\$\{policy\.toPythonVersion\(publishVersion\)\}/);
+  assert.match(
+    content,
+    /PUBLISH_VERSION:\s*\$\{\{\s*steps\.publish-metadata\.outputs\.python_version\s*\}\}/,
+  );
+  assert.match(content, /softprops\/action-gh-release@v2/);
+  assert.match(content, /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/);
 });
 
 test('workflow never publishes packages from pull request runs', () => {
