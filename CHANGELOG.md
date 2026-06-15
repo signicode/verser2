@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1 - Release workflow reliability
+
+- Preserves staged-package dependency resolution in publish-job validation when validated build artifacts are reused.
+- Shortens slow Bun and Python TLS integration paths to keep release validation faster.
+- Carries forward native Python wheel and source distribution artifact publishing from the 0.3 release line.
+
 ## v0.3.0 - Python distribution artifacts
 
 - Builds the Python Guest package as native Python wheel and source distribution artifacts.
