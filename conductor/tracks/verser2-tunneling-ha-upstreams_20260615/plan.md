@@ -18,10 +18,11 @@
     - [x] Run the narrowest common protocol tests.
     - [x] Run TypeScript build for affected packages if type exports changed.
     - [x] Record coverage applicability and common-library reuse notes.
-- [~] Task: Push phase checkpoint for GitHub-visible manual verification
-    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
-    - [ ] Push the track branch to the remote branch before requesting manual verification.
-    - [ ] Record the pushed commit SHA in this plan.
+- [x] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [x] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [x] Push the track branch to the remote branch before requesting manual verification.
+    - [x] Record the pushed commit SHA in this plan.
+        - Checkpoint commit: `3650cf4`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Protocol and API Design Foundations' (Protocol in workflow.md)
 
 ### Phase 1 notes
