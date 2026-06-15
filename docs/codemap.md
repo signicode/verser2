@@ -9,11 +9,12 @@ Also covers the package publishing runbook (version policy, staging, CI) and rep
 ## Design/Patterns
 
 - **Index + specialized pages** — `docs/index.md` is the landing page with role definitions, getting-started links, transport summary, and terminology table. Each remaining page covers one topic.
-- **12 documentation areas** covering:
+- **13 documentation areas** covering:
   - `connecting.md` — Host creation, Guests (Node/Bun/Python), Broker connection
   - `exposing-http.md` — Node `http.Server`, Bun `fetch` handler, Python ASGI 3 attachment
   - `making-requests.md` — Broker.request(), Agent, Dispatcher, Fetch helper
   - `routes.md` — Route registration, exact hostname matching, control frames, getRoutes/get_routes
+  - `host-federation.md` — Host IDs, upstream Host links, route import/export, HA limits, topology, and non-goals
   - `certificates.md` — TLS config (PEM/PFX), mTLS client auth, cert reloading, self-signed
   - `authorization.md` — Registration-time authorization callback
   - `lifecycle-and-errors.md` — Host/Guest lifecycle events, Broker errors, reconnection
@@ -35,6 +36,7 @@ Root README.md
        ├─ exposing-http.md   → handler attachment (Node/Bun/Python)
        ├─ making-requests.md → Broker API, Agent, Dispatcher, Fetch
        ├─ routes.md          → advertisement, matching, control frames
+       ├─ host-federation.md → upstream links, route import/export, HA limits
        ├─ certificates.md    → TLS, mTLS, self-signed, reloading
        ├─ authorization.md   → registration-time auth
        ├─ lifecycle-and-errors.md → events, errors, reconnection

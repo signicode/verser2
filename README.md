@@ -5,8 +5,8 @@ requests to HTTP handlers that connect **outbound** to a Host instead of
 listening for inbound traffic. It uses TLS HTTP/2 for multiplexed transport
 between three roles:
 
-- **Host** — listens for outbound Peer connections and routes requests to
-  advertised Guest routes.
+- **Host** — listens for outbound Peer connections, can connect outbound to
+  upstream Hosts, and routes requests to advertised Guest routes.
 - **Guest** — connects outbound to a Host and attaches a local HTTP handler
   without calling `listen()`.
 - **Broker** — connects outbound to a Host and sends requests to advertised
@@ -80,8 +80,9 @@ response.body.pipe(process.stdout);
 - [Exposing HTTP handlers](./docs/exposing-http.md) — attach Node, Bun, or Python handlers
 - [Making requests](./docs/making-requests.md) — Broker request, Agent, Dispatcher, Fetch
 - [Routes](./docs/routes.md) — route advertisement and exact hostname matching
+- [Host federation and upstreams](./docs/host-federation.md) — Host-to-Host links, topology, and HA limits
 - [Certificates](./docs/certificates.md) — TLS configuration, mTLS, self-signed certs
-- [Authorization](./docs/authorization.md) — registration-time mTLS authorization
+- [Authorization](./docs/authorization.md) — registration-time and upstream federation mTLS authorization
 - [Lifecycle and errors](./docs/lifecycle-and-errors.md) — events, errors, reconnection
 - [Development](./docs/development.md) — repository setup, validation, and package staging
 
@@ -107,6 +108,8 @@ validation commands.
 - verser2 is not a complete public gateway. Applications remain responsible for
   authentication, authorization, and routing policy.
 - Per-request Broker target authorization is not implemented.
+- Host-to-Host federation is route-aware; generic L4 tunneling and active
+  in-flight request migration are not implemented.
 
 ## Status
 
