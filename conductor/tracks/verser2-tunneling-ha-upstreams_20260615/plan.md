@@ -61,7 +61,7 @@
     - [x] Push the track branch to the remote branch before requesting manual verification.
     - [x] Record the pushed commit SHA in this plan.
         - Checkpoint commit: `353d41a`.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Host Route Registry and Local-First Resolution' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Host Route Registry and Local-First Resolution' (Protocol in workflow.md)
 
 ### Phase 2 notes
 
