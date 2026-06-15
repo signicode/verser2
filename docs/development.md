@@ -31,7 +31,10 @@ npm run lint
 ```
 
 `npm test` builds all packages, stages publish-ready packages under
-`dist/packages`, then runs the Node test suite.
+`dist/packages`, then runs the Node source test suite. The default source suite
+skips redundant package-consumer matrix wrappers and pack dry-runs that are
+covered by the explicit package-validation commands below; this keeps ordinary
+test iteration focused while preserving package validation as a first-class path.
 
 `npm run test:bounded` preserves the same full validation flow while running the
 Node-based build, staging, and test commands with a default 512 MiB V8 old-space
@@ -96,6 +99,12 @@ npm run test:package-consumers -- --source=staging
 npm run test:package-consumers -- --source=tarball
 npm run test:package-tarballs
 ```
+
+To include the package-consumer matrix wrapper tests inside `node --test`, set
+`VERSER_RUN_PACKAGE_CONSUMER_MATRIX=1`. To force the redundant staged-package
+`npm pack --dry-run` assertions, set `VERSER_RUN_PACK_DRY_RUN_TESTS=1`. The
+regular package-validation scripts above are preferred because they exercise the
+same package-consumer and tarball behavior directly.
 
 See [Package publishing](./package-publishing.md) for the GitHub Packages runbook
 and version/dist-tag policy.
