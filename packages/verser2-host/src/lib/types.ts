@@ -4,6 +4,7 @@ import type { Readable } from 'node:stream';
 
 import type {
   VerserPeerRole as CommonVerserPeerRole,
+  FederatedRouteRegistration,
   RoutedDomainRegistration,
   VerserError,
   VerserHostTlsOptions,
@@ -33,6 +34,16 @@ export interface VerserHostOptions {
    * Optional `tls.clientAuth` enables mTLS client certificate authentication.
    */
   readonly tls?: VerserHostTlsOptions;
+  /**
+   * Stable Host identifier used by route-aware Host federation metadata.
+   * Defaults to an internal local identifier when no upstream federation behavior is configured.
+   */
+  readonly hostId?: string;
+  /**
+   * Maximum accepted Host-to-Host hop count for imported federated routes.
+   * Defaults to `8`.
+   */
+  readonly maxFederationHopCount?: number;
 }
 
 /**
@@ -238,6 +249,27 @@ export interface VerserHost {
    * @returns The current route table.
    */
   getRoutedDomains(): RoutedDomainRegistration[];
+  /**
+   * Replaces the imported federated route candidates learned from one upstream Host.
+   *
+   * @internal Foundation seam used by Host federation link handling.
+   */
+  setImportedFederatedRoutes(
+    upstreamId: string,
+    routes: readonly FederatedRouteRegistration[],
+  ): VerserError[];
+  /**
+   * Removes all imported federated route candidates learned from one upstream Host.
+   *
+   * @internal Foundation seam used by Host federation link cleanup.
+   */
+  removeImportedFederatedRoutes(upstreamId: string): void;
+  /**
+   * Returns route candidates currently known for a route identity or for all identities.
+   *
+   * @internal Foundation seam used by Host federation route selection tests and later forwarding phases.
+   */
+  getFederatedRouteCandidates(targetId?: string, domain?: string): FederatedRouteRegistration[];
   /** Attaches an in-process local Guest without opening a TLS HTTP/2 connection. */
   attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle>;
   /** Attaches an in-process local Broker without opening a TLS HTTP/2 connection. */

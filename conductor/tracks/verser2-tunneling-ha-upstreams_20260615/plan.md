@@ -38,29 +38,40 @@
 
 ## Phase 2: Host Route Registry and Local-First Resolution
 
-- [ ] Task: Write failing Host route-registry tests
-    - [ ] Test local Guest routes overriding imported upstream candidates for the same route identity.
-    - [ ] Test Hosts with no configured upstreams and Hosts with unavailable upstreams continue serving local routes correctly.
-    - [ ] Test multi-candidate route storage for future HA selection.
-    - [ ] Test route withdrawal when imported upstream routes disappear.
-    - [ ] Test loop suppression and hop-limit rejection.
-- [ ] Task: Refactor Host routing internals for route candidates
-    - [ ] Separate route registry/candidate resolution from connected peer storage.
-    - [ ] Preserve current local Guest, remote Guest lease, and local peer routing behavior.
-    - [ ] Keep public legacy route advertisements compatible for existing Brokers.
-- [ ] Task: Implement local-first route selection
-    - [ ] Prefer local candidates over imported upstream candidates when local availability exists.
-    - [ ] Preserve exact-hostname matching unless a later track changes route matching semantics.
-    - [ ] Emit clear lifecycle/error events for conflicts, loops, and route withdrawals.
-- [ ] Task: Validate Host route-registry phase
-    - [ ] Run focused Host and common protocol tests.
-    - [ ] Confirm existing Broker/Guest routing tests still pass for unchanged behavior.
-    - [ ] Record deduplication result and route conflict semantics.
-- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
+- [x] Task: Write failing Host route-registry tests
+    - [x] Test local Guest routes overriding imported upstream candidates for the same route identity.
+    - [x] Test Hosts with no configured upstreams and Hosts with unavailable upstreams continue serving local routes correctly.
+    - [x] Test multi-candidate route storage for future HA selection.
+    - [x] Test route withdrawal when imported upstream routes disappear.
+    - [x] Test loop suppression and hop-limit rejection.
+- [x] Task: Refactor Host routing internals for route candidates
+    - [x] Separate route registry/candidate resolution from connected peer storage.
+    - [x] Preserve current local Guest, remote Guest lease, and local peer routing behavior.
+    - [x] Keep public legacy route advertisements compatible for existing Brokers.
+- [x] Task: Implement local-first route selection
+    - [x] Prefer local candidates over imported upstream candidates when local availability exists.
+    - [x] Preserve exact-hostname matching unless a later track changes route matching semantics.
+    - [x] Emit clear lifecycle/error events for conflicts, loops, and route withdrawals.
+- [x] Task: Validate Host route-registry phase
+    - [x] Run focused Host and common protocol tests.
+    - [x] Confirm existing Broker/Guest routing tests still pass for unchanged behavior.
+    - [x] Record deduplication result and route conflict semantics.
+- [~] Task: Push phase checkpoint for GitHub-visible manual verification
     - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
     - [ ] Push the track branch to the remote branch before requesting manual verification.
     - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Host Route Registry and Local-First Resolution' (Protocol in workflow.md)
+
+### Phase 2 notes
+
+- Added Host route-candidate registry in `packages/verser2-host/src/lib/route-registry.ts`, separating route availability/candidate selection from connected peer storage.
+- Local route projection remains the only legacy Broker-advertised route source until federated forwarding exists, so imported candidates are stored for later phases but not exposed as routable Broker routes yet.
+- Local-first semantics: local candidates are ranked before imported candidates for the same route identity; imported candidate `source` is normalized to `upstream` from the current Host perspective.
+- Imported route withdrawal is per upstream ID; looped and over-hop imported candidates are rejected with `route-loop` lifecycle errors.
+- Validation passed: `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-host && node --test test/host-route-registry.test.js test/host.test.js test/local-peers.test.js test/broker-routing.test.js`; `npm run lint`; `node --test --experimental-test-coverage test/host-route-registry.test.js`.
+- Coverage: focused route-registry assertions cover no-upstream local behavior, local/imported candidate ordering, imported source normalization, imported withdrawal, legacy Broker suppression for imported candidates, and loop/hop rejection. Node experimental coverage is bundle-wide and not a per-helper threshold report.
+- Deduplication/common reuse: Host registry reuses common federation route validation, Host IDs, loop/hop helpers, routed-domain validation, and `VerserError`; no duplicated common protocol validation was added.
+- Code review: `@oracle` initially found blockers around imported route advertisement before forwarding, source normalization, and runtime/type seam mismatch. Follow-up review confirmed blockers fixed.
 
 ## Phase 3: Upstream Host Link Lifecycle and Authorization
 

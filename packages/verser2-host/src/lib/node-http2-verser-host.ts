@@ -4,6 +4,7 @@ import { text as readStreamText } from 'node:stream/consumers';
 import type { TLSSocket } from 'node:tls';
 
 import {
+  type FederatedRouteRegistration,
   type RoutedDomainRegistration,
   VERSER_LIFECYCLE_EVENTS,
   type VerserCertificateIdentity,
@@ -42,6 +43,7 @@ import {
   updateLocalBrokerRoutes,
   waitForLocalBrokerRoute,
 } from './local-peers';
+import { type HostRouteRegistry, createHostRouteRegistry } from './route-registry';
 import type {
   VerserHost,
   VerserHostLifecycleEvent,
@@ -116,7 +118,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly queuedLeaseAcquisitions = new Map<VerserPeerId, QueuedLeaseAcquisition[]>();
 
-  private readonly guestRegistrations = new Map<VerserPeerId, RoutedDomainRegistration[]>();
+  private readonly routeRegistry: HostRouteRegistry;
 
   private readonly activeLocalRequests = new Map<VerserPeerId, Set<AbortController>>();
 
@@ -124,6 +126,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   public constructor(options: VerserHostOptions) {
     this.options = options;
+    this.routeRegistry = createHostRouteRegistry(options);
   }
 
   /**
@@ -229,7 +232,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     this.sessions.clear();
     this.peers.clear();
-    this.guestRegistrations.clear();
+    this.routeRegistry.clear();
 
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
@@ -242,7 +245,31 @@ export class NodeHttp2VerserHost implements VerserHost {
    * {@inheritDoc VerserHost.getRoutedDomains}
    */
   public getRoutedDomains(): RoutedDomainRegistration[] {
-    return [...this.guestRegistrations.values()].flat();
+    return this.routeRegistry.getBrokerRoutes();
+  }
+
+  public setImportedFederatedRoutes(
+    upstreamId: string,
+    routes: readonly FederatedRouteRegistration[],
+  ): VerserError[] {
+    const rejected = this.routeRegistry.setImportedRoutes(upstreamId, routes);
+    for (const rejection of rejected) {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: rejection.error });
+    }
+    this.advertiseRoutes();
+    return rejected.map((rejection) => rejection.error);
+  }
+
+  public removeImportedFederatedRoutes(upstreamId: string): void {
+    this.routeRegistry.removeImportedRoutes(upstreamId);
+    this.advertiseRoutes();
+  }
+
+  public getFederatedRouteCandidates(
+    targetId?: string,
+    domain?: string,
+  ): FederatedRouteRegistration[] {
+    return this.routeRegistry.getCandidates(targetId, domain);
   }
 
   public async attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle> {
@@ -264,7 +291,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       transport: 'local',
       localGuest: { listener: extractLocalGuestListener(peerId, options.listener) },
     });
-    this.guestRegistrations.set(
+    this.routeRegistry.setLocalRoutes(
       peerId,
       (options.routedDomains ?? []).map((domain) =>
         createRoutedDomainRegistration({ targetId: peerId, domain }),
@@ -412,7 +439,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
 
     if (registration.role === 'guest') {
-      this.guestRegistrations.set(
+      this.routeRegistry.setLocalRoutes(
         peerId,
         (registration.routedDomains ?? []).map((domain: string) =>
           createRoutedDomainRegistration({ targetId: peerId, domain }),
@@ -532,7 +559,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.peers.delete(peerId);
     const shouldAdvertiseRoutes = peer.role === 'guest';
     if (shouldAdvertiseRoutes) {
-      this.guestRegistrations.delete(peerId);
+      this.routeRegistry.removeLocalRoutes(peerId);
       this.closeGuestLeases(peerId);
       this.failQueuedLeaseAcquisitions(peerId, reason);
       this.abortLocalRequestsForPeer(peerId);
@@ -989,7 +1016,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     for (const [peerId, peer] of this.peers) {
       if (peer.session === session) {
         this.peers.delete(peerId);
-        this.guestRegistrations.delete(peerId);
+        this.routeRegistry.removeLocalRoutes(peerId);
         this.closeGuestLeases(peerId);
         this.failQueuedLeaseAcquisitions(peerId, 'guest-disconnect');
         shouldAdvertiseRoutes = shouldAdvertiseRoutes || peer.role === 'guest';
