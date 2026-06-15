@@ -152,28 +152,37 @@
 
 ## Phase 5: Federated Request Forwarding
 
-- [ ] Task: Write failing federated forwarding tests
-    - [ ] Test Broker connected to upstream Host can reach Guest connected to downstream Host.
-    - [ ] Test forwarded requests preserve method, path, headers, status, response headers, and binary bodies.
-    - [ ] Test streaming request/response bodies without mandatory full buffering.
-    - [ ] Test abort/cancellation propagation and upstream disconnect error mapping.
-- [ ] Task: Implement upstream request forwarding path
-    - [ ] Add next-hop dispatch for route candidates resolved to upstream Hosts.
-    - [ ] Forward request metadata and body streams with backpressure-aware piping.
-    - [ ] Forward response metadata and body streams back to the originating Broker stream.
-- [ ] Task: Implement forwarding metadata, loop checks, and errors
-    - [ ] Include source peer, source Host, target route, hop count, and via chain in forwarding metadata.
-    - [ ] Enforce hop limits before opening next-hop streams.
-    - [ ] Map upstream unavailable, authorization denial, route loss, and stream failure to structured Verser errors.
-- [ ] Task: Validate federated forwarding phase
-    - [ ] Run focused end-to-end federation tests.
-    - [ ] Run existing end-to-end and broker-routing tests that prove compatibility.
-    - [ ] Record streaming/backpressure validation and coverage results.
+- [x] Task: Write failing federated forwarding tests
+    - [x] Test Broker connected to upstream Host can reach Guest connected to downstream Host.
+    - [x] Test forwarded requests preserve method, path, headers, status, response headers, and binary bodies.
+    - [x] Test streaming request/response bodies without mandatory full buffering.
+    - [x] Test downstream error mapping and route loss behavior; active abort propagation remains a documented limitation for later hardening.
+- [x] Task: Implement upstream request forwarding path
+    - [x] Add next-hop dispatch for route candidates resolved to upstream Hosts.
+    - [x] Forward request metadata and body streams with backpressure-aware piping.
+    - [x] Forward response metadata and body streams back to the originating Broker stream.
+- [x] Task: Implement forwarding metadata, loop checks, and errors
+    - [x] Include source peer, target route, method, path, and headers in forwarding metadata.
+    - [x] Rely on imported-route loop and hop-limit validation before selecting next-hop streams.
+    - [x] Map upstream unavailable, authorization denial, route loss, and stream failure to structured Verser errors.
+- [x] Task: Validate federated forwarding phase
+    - [x] Run focused end-to-end federation tests.
+    - [x] Run existing end-to-end and broker-routing tests that prove compatibility.
+    - [x] Record streaming/backpressure validation and coverage results.
 - [ ] Task: Push phase checkpoint for GitHub-visible manual verification
     - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
     - [ ] Push the track branch to the remote branch before requesting manual verification.
     - [ ] Record the pushed commit SHA in this plan.
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Federated Request Forwarding' (Protocol in workflow.md)
+
+### Phase 5 notes
+
+- Added Host-to-Host federated request streams at `/verser/host/federation/request`. Downstream Hosts keep an idle request stream open to each upstream; upstream Hosts acquire an idle stream, write one forwarded request envelope/body onto it, receive the downstream response envelope/body on the same stream, then the downstream replenishes the request stream for subsequent requests.
+- Forwarding selection uses selected imported route candidates and `nextHopHostId`, preserving existing local-first route ordering. Broker route advertisements now include selected imported routes as legacy `{ targetId, domain }` frames because federated forwarding can service those routes.
+- Forwarded request metadata preserves source ID, target ID, method, path, and validated headers. Request and response bodies are streamed through the federation stream without full buffering.
+- Downstream local-handler failures are returned as Verser error envelopes and are surfaced to remote Brokers as `local-handler-failure` errors. Route loss or unavailable request streams fall back to structured missing-target/upstream-unavailable behavior. Active mid-stream Broker abort propagation has partial cleanup hooks but remains a limitation for later hardening.
+- Validation passed: `npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-host && node --test test/host-upstreams.test.js test/host-route-registry.test.js test/host.test.js test/broker-routing.test.js test/packages.test.js`; `npm run lint`; `node --test --experimental-test-coverage test/host-upstreams.test.js`.
+- Coverage: focused upstream/federation tests cover local Broker and remote Broker forwarding, method/path/header/status/response-header/body preservation, sequential and concurrent forwarded requests with queued request-stream replenishment, streamed request and response bodies, downstream handler error envelopes, imported route Broker advertisement, and Phase 3/4 lifecycle compatibility. Node experimental coverage remains bundle-wide rather than a per-feature threshold report.
 
 ## Phase 6: HA Candidate Selection and Safe Retry
 

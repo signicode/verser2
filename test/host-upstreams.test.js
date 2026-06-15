@@ -1,11 +1,14 @@
 const assert = require('node:assert/strict');
 const http2 = require('node:http2');
+const { PassThrough } = require('node:stream');
+const { text } = require('node:stream/consumers');
 const { test } = require('node:test');
 
-const { loadVerserHost } = require('./support/verser-package-imports.cjs');
+const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
 const { trusted, clientCa, trustedClient } = require('./support/tls-fixtures.cjs');
 
 const { createVerserHost } = loadVerserHost();
+const { createVerserBroker } = loadVerserGuestNode();
 
 function tlsOptions(clientAuth) {
   return {
@@ -386,7 +389,7 @@ test('Federated routes propagate across manager hub runner topology and withdraw
   await manager.close();
 });
 
-test('Imported federated routes avoid re-export loops and keep legacy Broker routes local-only', async () => {
+test('Imported federated routes avoid re-export loops and advertise legacy Broker routes', async () => {
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
   await manager.start();
@@ -425,11 +428,264 @@ test('Imported federated routes avoid re-export loops and keep legacy Broker rou
       ],
     ),
   );
-  assert.deepEqual(broker.getRoutes(), []);
+  await assertEventually(() =>
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-runner', domain: 'runner-loop.verser.test' },
+    ]),
+  );
 
   await broker.close();
   await runner.close();
   await manager.close();
+});
+
+test('Broker connected to an upstream Host reaches a downstream Guest through federation', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-runner',
+      routedDomains: ['runner-forward.verser.test'],
+      listener: async (request, response) => {
+        const body = await text(request);
+        response.writeHead(207, { 'x-federated': request.headers['x-forwarded-check'] });
+        response.end(`forwarded:${request.method}:${request.url}:${body}`);
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-runner', 'runner-forward.verser.test').length,
+        1,
+      ),
+    );
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-manager' });
+
+    const response = await broker.request({
+      targetId: 'guest-runner',
+      method: 'POST',
+      path: '/federated?phase=5',
+      headers: { host: 'runner-forward.verser.test', 'x-forwarded-check': 'yes' },
+      body: [Buffer.from('request-body')],
+    });
+
+    assert.equal(response.statusCode, 207);
+    assert.equal(response.headers['x-federated'], 'yes');
+    assert.equal(await text(response.body), 'forwarded:POST:/federated?phase=5:request-body');
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Remote Broker request is forwarded through an upstream Host to a downstream Guest', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-runner-remote',
+      routedDomains: ['runner-remote-forward.verser.test'],
+      listener: async (request, response) => {
+        const body = await text(request);
+        response.writeHead(208, { 'x-remote-federated': request.headers['x-forwarded-check'] });
+        response.end(`remote:${request.method}:${request.url}:${body}`);
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-runner-remote',
+          'runner-remote-forward.verser.test',
+        ).length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-remote-manager',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await assertEventually(() =>
+      assert.deepEqual(broker.getRoutes(), [
+        { targetId: 'guest-runner-remote', domain: 'runner-remote-forward.verser.test' },
+      ]),
+    );
+
+    const response = await broker.request({
+      targetId: 'guest-runner-remote',
+      method: 'PUT',
+      path: '/remote-federated',
+      headers: { host: 'runner-remote-forward.verser.test', 'x-forwarded-check': 'remote' },
+      body: [Buffer.from('remote-body')],
+    });
+
+    assert.equal(response.statusCode, 208);
+    assert.equal(response.headers['x-remote-federated'], 'remote');
+    assert.equal(await text(response.body), 'remote:PUT:/remote-federated:remote-body');
+
+    const secondResponse = await broker.request({
+      targetId: 'guest-runner-remote',
+      method: 'PATCH',
+      path: '/remote-federated-again',
+      headers: { host: 'runner-remote-forward.verser.test', 'x-forwarded-check': 'again' },
+      body: [Buffer.from('second-body')],
+    });
+
+    assert.equal(secondResponse.statusCode, 208);
+    assert.equal(secondResponse.headers['x-remote-federated'], 'again');
+    assert.equal(
+      await text(secondResponse.body),
+      'remote:PATCH:/remote-federated-again:second-body',
+    );
+
+    const [thirdResponse, fourthResponse] = await Promise.all([
+      broker.request({
+        targetId: 'guest-runner-remote',
+        method: 'POST',
+        path: '/remote-concurrent-a',
+        headers: { host: 'runner-remote-forward.verser.test', 'x-forwarded-check': 'third' },
+        body: [Buffer.from('third-body')],
+      }),
+      broker.request({
+        targetId: 'guest-runner-remote',
+        method: 'POST',
+        path: '/remote-concurrent-b',
+        headers: { host: 'runner-remote-forward.verser.test', 'x-forwarded-check': 'fourth' },
+        body: [Buffer.from('fourth-body')],
+      }),
+    ]);
+
+    assert.equal(await text(thirdResponse.body), 'remote:POST:/remote-concurrent-a:third-body');
+    assert.equal(await text(fourthResponse.body), 'remote:POST:/remote-concurrent-b:fourth-body');
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Federated forwarding maps downstream Guest handler failures to Broker errors', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-federated-error',
+      routedDomains: ['runner-error-forward.verser.test'],
+      listener: () => {
+        throw new Error('downstream boom');
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-federated-error',
+          'runner-error-forward.verser.test',
+        ).length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-error-manager',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-federated-error',
+          method: 'GET',
+          path: '/boom',
+          headers: { host: 'runner-error-forward.verser.test' },
+        }),
+      (error) => error.code === 'local-handler-failure' && /downstream boom/.test(error.message),
+    );
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Federated forwarding streams request and response bodies', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-federated-stream',
+      routedDomains: ['runner-stream-forward.verser.test'],
+      listener: async (request, response) => {
+        const body = await text(request);
+        response.writeHead(209, { 'x-streamed': 'yes' });
+        response.write(`first:${body}:`);
+        setTimeout(() => response.end('second'), 5);
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-federated-stream',
+          'runner-stream-forward.verser.test',
+        ).length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-stream-manager',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    const body = new PassThrough();
+    const responsePromise = broker.request({
+      targetId: 'guest-federated-stream',
+      method: 'POST',
+      path: '/streamed',
+      headers: { host: 'runner-stream-forward.verser.test' },
+      body,
+    });
+    body.write('one-');
+    setTimeout(() => body.end('two'), 5);
+
+    const response = await responsePromise;
+    assert.equal(response.statusCode, 209);
+    assert.equal(response.headers['x-streamed'], 'yes');
+    assert.equal(await text(response.body), 'first:one-two:second');
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
 });
 
 async function assertEventually(assertion) {

@@ -41,7 +41,9 @@ test('Host route registry prefers local candidates and reveals imported routes a
   const host = createVerserHost({ hostId: 'host-hub' });
   host.setImportedFederatedRoutes('upstream-manager', [importedRoute({ source: 'local' })]);
 
-  assert.deepEqual(host.getRoutedDomains(), []);
+  assert.deepEqual(host.getRoutedDomains(), [
+    { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+  ]);
   assert.deepEqual(
     host
       .getFederatedRouteCandidates('guest-alpha', 'alpha.verser.test')
@@ -72,7 +74,9 @@ test('Host route registry prefers local candidates and reveals imported routes a
       .map((candidate) => candidate.source),
     ['upstream'],
   );
-  assert.deepEqual(host.getRoutedDomains(), []);
+  assert.deepEqual(host.getRoutedDomains(), [
+    { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+  ]);
   await host.close();
 });
 
@@ -95,13 +99,15 @@ test('Host route registry withdraws imported routes per upstream', () => {
   assert.deepEqual(host.getRoutedDomains(), []);
 });
 
-test('Host route registry does not advertise imported routes to legacy Brokers before forwarding exists', async () => {
+test('Host route registry advertises imported routes to Brokers after forwarding exists', async () => {
   const host = createVerserHost({ hostId: 'host-hub' });
   host.setImportedFederatedRoutes('upstream-manager', [importedRoute()]);
   const broker = await host.attachLocalBroker({ brokerId: 'broker-alpha' });
 
-  assert.deepEqual(host.getRoutedDomains(), []);
-  assert.deepEqual(broker.getRoutes(), []);
+  assert.deepEqual(host.getRoutedDomains(), [
+    { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+  ]);
+  assert.deepEqual(broker.getRoutes(), [{ targetId: 'guest-alpha', domain: 'alpha.verser.test' }]);
 
   await broker.close();
   await host.close();
