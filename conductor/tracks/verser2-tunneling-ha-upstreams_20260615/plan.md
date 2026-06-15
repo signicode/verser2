@@ -205,10 +205,11 @@
     - [x] Run focused HA and route withdrawal tests.
     - [x] Run relevant Broker Agent/Dispatcher/fetch tests if route selection affects them.
     - [x] Record limitations: eventual consistency, no active migration, no exactly-once delivery.
-- [ ] Task: Push phase checkpoint for GitHub-visible manual verification
-    - [ ] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
-    - [ ] Push the track branch to the remote branch before requesting manual verification.
-    - [ ] Record the pushed commit SHA in this plan.
+- [x] Task: Push phase checkpoint for GitHub-visible manual verification
+    - [x] Commit the completed phase changes with the scoped phase summary required by `workflow.md`.
+    - [x] Push the track branch to the remote branch before requesting manual verification.
+    - [x] Record the pushed commit SHA in this plan.
+        - Checkpoint commit: `4988552`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 6: HA Candidate Selection and Safe Retry' (Protocol in workflow.md)
 
 ### Phase 6 notes
