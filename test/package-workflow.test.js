@@ -71,14 +71,14 @@ test('workflow sets required permissions for publish', () => {
 
 test('workflow configures npm for GitHub Packages registry/scope', () => {
   assertHas(
-    /actions\/setup-node@v4[\s\S]*?registry-url:\s*https:\/\/npm\.pkg\.github\.com[\s\S]*?scope:\s*['"]?@signicode['"]?/,
+    /actions\/setup-node@v6[\s\S]*?registry-url:\s*https:\/\/npm\.pkg\.github\.com[\s\S]*?scope:\s*['"]?@signicode['"]?/,
     'Expected setup-node to use GitHub Packages registry with @signicode scope.',
   );
 });
 
 test('workflow reuses validation build output in publish job', () => {
   const content = loadWorkflow();
-  assert.match(content, /actions\/upload-artifact@v4[\s\S]*?name:\s*package-build-output/);
+  assert.match(content, /actions\/upload-artifact@v7[\s\S]*?name:\s*package-build-output/);
   assert.match(content, /actions\/download-artifact@v4[\s\S]*?name:\s*package-build-output/);
   assert.match(content, /packages\/verser2-guest-python\/dist\/python/);
   assert.equal(

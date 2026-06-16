@@ -19,12 +19,10 @@ export class VerserBrokerDispatcher extends Dispatcher {
 
   public override dispatch(
     options: Dispatcher.DispatchOptions,
-    handler: Dispatcher.DispatchHandlers,
+    handler: Dispatcher.DispatchHandler,
   ): boolean {
     const controller = new VerserDispatchController(handler);
-    handler.onConnect?.((error?: Error) => {
-      controller.abort(error ?? new Error('Verser Dispatcher request aborted'));
-    });
+    handler.onRequestStart?.(controller, options.origin ?? null);
 
     if (options.upgrade !== undefined && options.upgrade !== null && options.upgrade !== false) {
       process.nextTick(() => {
@@ -41,7 +39,7 @@ export class VerserBrokerDispatcher extends Dispatcher {
 
   private async dispatchAsync(
     options: Dispatcher.DispatchOptions,
-    handler: Dispatcher.DispatchHandlers,
+    handler: Dispatcher.DispatchHandler,
     controller: VerserDispatchController,
   ): Promise<void> {
     const origin = new URL(String(options.origin ?? 'http://localhost'));
@@ -66,27 +64,27 @@ export class VerserBrokerDispatcher extends Dispatcher {
     }
 
     controller.attachResponseBody(response.body);
+    controller.rawHeaders = toRawHeaderList(response.headers);
     response.body.pause();
     handler.onResponseStarted?.();
-    handler.onHeaders?.(
+    handler.onResponseStart?.(
+      controller,
       response.statusCode,
-      toRawHeaderList(response.headers),
-      () => controller.resume(),
+      response.headers,
       http.STATUS_CODES[response.statusCode] ?? '',
     );
     response.body.on('data', (chunk: Buffer | string) => {
       if (controller.aborted) {
         return;
       }
-      const shouldContinue = handler.onData?.(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      if (shouldContinue === false) {
-        controller.pause();
-      }
+      handler.onResponseData?.(controller, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     response.body.once('end', () => {
       if (!controller.aborted) {
-        handler.onComplete?.([]);
+        controller.rawTrailers = [];
+        handler.onResponseEnd?.(controller, {});
       }
+      response.body.destroy();
     });
     response.body.once('error', (error) => controller.fail(error));
   }

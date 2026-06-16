@@ -1,8 +1,11 @@
 name: Dependency Review
 
 on:
-  pull_request:
-    branches: [main]
+  # Dependency Review requires GitHub's dependency graph, which is not available
+  # while this repository remains private on the current plan/settings.
+  # Re-enable pull_request once the repository is public or dependency graph is
+  # available.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,10 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Review dependency changes
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
           comment-summary-in-pr: always

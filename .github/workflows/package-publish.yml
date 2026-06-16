@@ -43,7 +43,7 @@ jobs:
       should_publish_sha: ${{ steps.check.outputs.should_publish_sha }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -135,10 +135,10 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node for GitHub Packages
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           registry-url: https://npm.pkg.github.com
@@ -146,7 +146,7 @@ jobs:
           cache: npm
 
       - name: Setup Python uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: npm ci
@@ -157,7 +157,7 @@ jobs:
           npm run stage:packages
 
       - name: Upload reusable package build output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-build-output
           path: |
@@ -191,10 +191,10 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node for GitHub Packages
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           registry-url: https://npm.pkg.github.com
@@ -202,7 +202,7 @@ jobs:
           cache: npm
 
       - name: Setup Python uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: npm ci
@@ -314,7 +314,7 @@ jobs:
           done
 
       - name: Upload Python distribution artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verser2-guest-python-${{ steps.publish-metadata.outputs.publish_version }}
           path: packages/verser2-guest-python/dist/python/*
@@ -347,10 +347,10 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node for npmjs.org
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org/
@@ -358,7 +358,7 @@ jobs:
           cache: npm
 
       - name: Setup Python uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: npm ci

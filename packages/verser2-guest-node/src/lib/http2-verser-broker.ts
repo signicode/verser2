@@ -95,6 +95,7 @@ export class Http2VerserBroker implements VerserBroker {
     }
     this.controlStream?.close();
     session.close();
+    session.destroy();
     await once(session, 'close');
     this.session = undefined;
   }

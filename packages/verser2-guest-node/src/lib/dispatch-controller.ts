@@ -19,7 +19,7 @@ export class VerserDispatchController {
 
   private totalBytesSent = 0;
 
-  public constructor(private readonly handler: Dispatcher.DispatchHandlers) {}
+  public constructor(private readonly handler: Dispatcher.DispatchHandler) {}
 
   public get aborted(): boolean {
     return this.abortedState;
@@ -65,15 +65,15 @@ export class VerserDispatchController {
       return;
     }
     this.errorEmitted = true;
-    this.handler.onError?.(error);
+    this.handler.onResponseError?.(this, error);
   }
 
   public emitBodySent(chunk: Buffer): void {
     this.totalBytesSent += chunk.byteLength;
-    this.handler.onBodySent?.(chunk.byteLength, this.totalBytesSent);
+    this.handler.onBodySent?.(chunk);
   }
 
   public emitRequestSent(): void {
-    // Undici 6 has no request-sent callback; body progress is reported through onBodySent.
+    this.handler.onRequestSent?.();
   }
 }

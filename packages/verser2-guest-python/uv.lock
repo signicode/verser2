@@ -182,6 +182,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", specifier = ">=42,<47" },
+    { name = "cryptography", specifier = ">=42,<50" },
     { name = "h2", specifier = ">=4.1,<5" },
 ]
