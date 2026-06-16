@@ -16,6 +16,7 @@ const packageDirectories = [
 ];
 const forbiddenPublishFields = ['private', 'scripts', 'devDependencies', 'workspaces'];
 const runPackDryRunTests = process.env.VERSER_RUN_PACK_DRY_RUN_TESTS === '1';
+const requiredKeywords = ['verser2', 'reverse-http', 'http2', 'guest', 'broker'];
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -95,13 +96,49 @@ test('staged package manifests are publish-only consumer metadata', () => {
     assert.equal(stagedManifest.types, 'dist/index.d.ts');
     assert.equal(stagedManifest.exports['.'].require, './dist/index.js');
     assert.equal(stagedManifest.exports['.'].types, './dist/index.d.ts');
-    assert.equal(stagedManifest.publishConfig.registry, 'https://npm.pkg.github.com');
+    assert.deepEqual(stagedManifest.repository, sourceManifest.repository);
+    assert.deepEqual(stagedManifest.homepage, sourceManifest.homepage);
+    assert.deepEqual(stagedManifest.bugs, sourceManifest.bugs);
+    assert.deepEqual(stagedManifest.keywords, sourceManifest.keywords);
+    assert.deepEqual(stagedManifest.engines, sourceManifest.engines);
+    assert.equal(stagedManifest.publishConfig.registry, 'https://registry.npmjs.org/');
+    assert.equal(stagedManifest.publishConfig.access, 'public');
 
     for (const field of forbiddenPublishFields) {
       assert.equal(
         Object.hasOwn(stagedManifest, field),
         false,
         `Expected ${packageName} staged manifest to omit ${field}`,
+      );
+    }
+  }
+});
+
+test('source workspace packages expose public npm package metadata', () => {
+  for (const packageDirectory of packageDirectories) {
+    const sourceManifest = readJson(path.join(rootDirectory, packageDirectory, 'package.json'));
+
+    assert.equal(sourceManifest.license, 'MIT');
+    assert.equal(sourceManifest.main, 'dist/index.js');
+    assert.equal(sourceManifest.types, 'dist/index.d.ts');
+    assert.deepEqual(sourceManifest.repository, {
+      type: 'git',
+      url: 'git+https://github.com/signicode/verser2.git',
+      directory: packageDirectory,
+    });
+    assert.equal(sourceManifest.homepage, 'https://github.com/signicode/verser2#readme');
+    assert.deepEqual(sourceManifest.bugs, {
+      url: 'https://github.com/signicode/verser2/issues',
+    });
+    assert.deepEqual(sourceManifest.engines, { node: '>=20' });
+    assert.deepEqual(sourceManifest.publishConfig, {
+      registry: 'https://registry.npmjs.org/',
+      access: 'public',
+    });
+    for (const keyword of requiredKeywords) {
+      assert.ok(
+        sourceManifest.keywords.includes(keyword),
+        `${sourceManifest.name} missing ${keyword}`,
       );
     }
   }

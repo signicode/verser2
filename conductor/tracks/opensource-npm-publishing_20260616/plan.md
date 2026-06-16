@@ -79,28 +79,39 @@ Phase 2 validation notes:
 
 ## Phase 3: Package metadata and staged manifest readiness
 
-- [ ] Task: Update public package metadata test-first
-    - [ ] Add or update package-manifest tests that assert publishable workspace packages expose required `repository`, `homepage`, `bugs`, `keywords`, `engines`, license, entrypoint, and public publish metadata.
-    - [ ] Confirm the tests fail before manifest changes where current metadata is missing.
-- [ ] Task: Update JavaScript package manifests
-    - [ ] Preserve root `package.json` as a private workspace aggregator.
-    - [ ] Remove package-level `private: true` from publishable JavaScript workspace packages.
-    - [ ] Add public package metadata and `publishConfig` for npmjs.org public access.
-    - [ ] Confirm package dependency versions remain aligned across workspaces.
-- [ ] Task: Review Python package distribution metadata
-    - [ ] Add `project.urls` metadata to `packages/verser2-guest-python/pyproject.toml` if appropriate.
-    - [ ] Keep PyPI publishing out of scope unless a later manual scope decision changes it.
-    - [ ] Ensure the npm wrapper/package role for Python remains clearly documented.
-- [ ] Task: Update staging and package version policy
-    - [ ] Review `scripts/stage-packages.js` to ensure staged package manifests are suitable for npmjs.org public packages and GitHub Packages previews.
-    - [ ] Update `scripts/package-version-policy.js` so npmjs.org publishing is intentionally allowed with stable/prerelease dist-tag safeguards.
-    - [ ] Add or update tests for staged manifest output and version policy behavior.
-- [ ] Task: Validate package metadata phase
-    - [ ] Run focused manifest/version-policy tests.
-    - [ ] Run `npm run build` and `npm run stage:packages` if staging logic changed.
-    - [ ] Run package consumer and tarball checks if staged package behavior changed.
-    - [ ] Record coverage result or explain why coverage is not applicable to metadata-only assertions.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Package metadata and staged manifest readiness' (Protocol in workflow.md)
+- [x] Task: Update public package metadata test-first
+    - [x] Add or update package-manifest tests that assert publishable workspace packages expose required `repository`, `homepage`, `bugs`, `keywords`, `engines`, license, entrypoint, and public publish metadata.
+    - [x] Confirm the tests fail before manifest changes where current metadata is missing.
+        - Initial focused tests failed as expected for missing source metadata, GitHub-only staged registry metadata, and disabled npmjs policy support.
+- [x] Task: Update JavaScript package manifests
+    - [x] Preserve root `package.json` as a private workspace aggregator.
+    - [x] Remove package-level `private: true` from publishable JavaScript workspace packages.
+        - Adjusted by maintainer direction: source workspace manifests intentionally keep `private: true`; `scripts/stage-packages.js` builds publish-only staged manifests that omit `private` before packing/publishing.
+    - [x] Add public package metadata and `publishConfig` for npmjs.org public access.
+    - [x] Confirm package dependency versions remain aligned across workspaces.
+- [x] Task: Review Python package distribution metadata
+    - [x] Add `project.urls` metadata to `packages/verser2-guest-python/pyproject.toml` if appropriate.
+    - [x] Keep PyPI publishing out of scope unless a later manual scope decision changes it.
+    - [x] Ensure the npm wrapper/package role for Python remains clearly documented.
+- [x] Task: Update staging and package version policy
+    - [x] Review `scripts/stage-packages.js` to ensure staged package manifests are suitable for npmjs.org public packages and GitHub Packages previews.
+        - Staging now defaults staged manifests to npmjs.org public package metadata while allowing `VERSER_PACKAGE_REGISTRY` to override the registry for GitHub Packages preview workflows.
+    - [x] Update `scripts/package-version-policy.js` so npmjs.org publishing is intentionally allowed with stable/prerelease dist-tag safeguards.
+        - Manual npmjs candidates now report `npmJsPublishAllowed: true` with `latest` for stable versions and `next` for prereleases; automated tag, SHA, and nightly summaries remain not npmjs-allowed.
+    - [x] Add or update tests for staged manifest output and version policy behavior.
+- [x] Task: Validate package metadata phase
+    - [x] Run focused manifest/version-policy tests.
+        - Passed: `node --test test/package-publish-readiness.test.js` and `node --test test/package-version-policy.test.js`.
+    - [x] Run `npm run build` and `npm run stage:packages` if staging logic changed.
+        - Passed as part of `npm run build && npm run stage:packages && ...` validation chain.
+    - [x] Run package consumer and tarball checks if staged package behavior changed.
+        - Passed: `npm run test:package-consumers -- --source=staging`, `npm run test:package-consumers -- --source=tarball`, and `npm run test:package-tarballs`.
+    - [x] Record coverage result or explain why coverage is not applicable to metadata-only assertions.
+        - Coverage: not applicable to metadata/release-policy assertions; package behavior remained validated through staged consumer and tarball checks.
+    - [x] Run lint validation.
+        - Passed: `npm run lint` after correcting a formatting issue introduced in the new metadata test.
+- [~] Task: Conductor - User Manual Verification 'Phase 3: Package metadata and staged manifest readiness' (Protocol in workflow.md)
+    - [ ] Maintainer manually verifies Phase 3 package metadata and staged manifest readiness before Phase 4 begins.
 
 ## Phase 4: CI and dual-registry release workflow
 
