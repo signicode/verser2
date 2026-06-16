@@ -2,8 +2,8 @@
 
 ## Phase 1: Safety inventory and release-surface audit
 
-- [ ] Task: Create track branch and PR review surface
-    - [ ] Create a dedicated Conductor track branch before implementation work.
+- [~] Task: Create track branch and PR review surface
+    - [x] Create a dedicated Conductor track branch before implementation work.
     - [ ] Create a GitHub pull request whose title and body describe the final TO-BE open-source and dual-registry publishing state.
     - [ ] Record the PR link in this plan.
 - [ ] Task: Source-of-truth inventory
