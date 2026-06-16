@@ -36,7 +36,8 @@
     - [x] Push the phase commit to the track PR branch.
     - [x] Record the commit SHA and validation results in this plan.
         - Phase work was consolidated into implementation checkpoint `938e8de` after the failing tests were confirmed and the implementation/docs were completed.
-- [~] Task: Conductor - User Manual Verification 'Phase 1: Track branch, PR surface, and workflow behavior inventory' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Track branch, PR surface, and workflow behavior inventory' (Protocol in workflow.md)
+    - User verified and accepted on 2026-06-16.
 
 ## Phase 2: Workflow trigger and publish-kind implementation
 
@@ -69,7 +70,8 @@
     - [x] Record the commit SHA and validation results in this plan.
         - Implementation checkpoint: `938e8de fix(release): correct package publish workflow`.
         - Pushed to `origin/track/github-action-workflow-corrections_20260616`.
-- [~] Task: Conductor - User Manual Verification 'Phase 2: Workflow trigger and publish-kind implementation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Workflow trigger and publish-kind implementation' (Protocol in workflow.md)
+    - User verified and accepted on 2026-06-16.
 
 ## Phase 3: Release documentation and full validation
 
@@ -102,5 +104,6 @@
     - [x] Push the phase commit to the track PR branch.
     - [x] Record the commit SHA and validation results in this plan.
         - Implementation checkpoint: `938e8de fix(release): correct package publish workflow`.
-        - Plan checkpoint update pending after manual verification response.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Release documentation and full validation' (Protocol in workflow.md)
+        - Manual verification checkpoint will be committed with final track completion.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Release documentation and full validation' (Protocol in workflow.md)
+    - User verified and accepted on 2026-06-16.
