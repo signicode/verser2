@@ -7,7 +7,7 @@ Use a test-driven, incremental workflow for every behavior-changing track. For b
 ## Guiding Principles
 
 1. **The Plan is the Source of Truth:** All work must be tracked in `plan.md`.
-2. **Tracks Start on Reviewable Branches:** Each new track must begin on a dedicated branch with a GitHub pull request created using `gh`; use the PR as the review and checkpoint surface until the track is complete. The PR title and description must describe the track's intended TO-BE state, not only the initial plan, specification, or documentation artifact.
+2. **Tracks Start on Reviewable Branches:** Each new track must begin on a dedicated branch with a GitHub pull request created using `gh`; use the PR as the review and checkpoint surface until the track is complete. Branch from the branch that is current when the track is planned, not from an assumed default branch, unless the user explicitly requests a different base. The PR title and description must describe the track's intended TO-BE state, not only the initial plan, specification, or documentation artifact.
 3. **The Tech Stack is Deliberate:** Changes to the tech stack must be documented in `tech-stack.md` before implementation.
 4. **Test-Driven Development:** Write failing tests before implementing feature behavior; for behavior-neutral documentation/API-doc work, verify claims from source before writing final docs.
 5. **High Code Coverage:** Maintain at least 95% meaningful test coverage for changed behavior; record coverage as not applicable when the phase only changes documentation comments, docstrings, or Markdown.
@@ -89,6 +89,8 @@ At the end of each phase:
 
 ## Pull Request Policy
 
+- During `conductor:newTrack` planning, include branch and PR setup at the beginning of Phase 1 by default unless the user explicitly asks to omit it. Use the current branch as the PR base. A connected GitHub issue is optional and should be included only when one exists or the user provides one.
+- The initial Phase 1 plan should include a task like `Create track branch and PR review surface`, with subtasks to create the dedicated track branch, create the PR with `gh`, and record the branch name and PR URL in `plan.md`. The upstream Broker dispatch track at `conductor/archive/upstream-broker-dispatch_20260616/plan.md` is a good example of this pattern.
 - Every Conductor track PR title must describe the intended TO-BE state of the implemented track.
 - Every Conductor track PR description must include the intended TO-BE state, including the behavior, structure, or workflow that should exist when the track is complete.
 - Do not title or describe a Conductor track PR as only a plan/spec/docs PR when the branch is the review surface for the full track implementation.
