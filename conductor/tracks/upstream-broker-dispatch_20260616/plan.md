@@ -59,34 +59,38 @@
     - [x] Record the commit SHA and validation results in this plan.
     - Validation: `npm run lint` passes.
     - Phase 2 checkpoint commit: `77f4249` pushed to `track/upstream-broker-dispatch_20260616`.
-- [~] Task: Conductor - User Manual Verification 'Phase 2: Upstream federation request-stream support' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Upstream federation request-stream support' (Protocol in workflow.md)
 
 ## Phase 3: Downstream Broker dispatch, redirects, and runtime validation
 
-- [ ] Task: Implement downstream Broker dispatch to imported upstream routes
-    - [ ] Connect route-local request handling to the upstream federation request-stream path for imported route candidates.
-    - [ ] Preserve local-first route behavior and existing route candidate ordering/fallback semantics.
-    - [ ] Ensure the issue #24 raw Host/Broker reproduction returns the upstream route response.
-- [ ] Task: Implement and validate native redirect flow across upstream routes
-    - [ ] Ensure a Broker request to an imported Manager route can receive and follow eligible native 307/308 redirects to advertised routes.
-    - [ ] Preserve method-preserving redirect behavior, hop limits, and replay-buffer safeguards.
-    - [ ] Confirm Manager coordinates routing without becoming the payload proxy for single-owner target routes when redirect-following applies.
-- [ ] Task: Validate implemented runtime surfaces
-    - [ ] Validate Node Host and Node Broker behavior directly.
-    - [ ] Validate Bun-facing Broker behavior where it exercises the shared Node transport path.
-    - [ ] Validate Python Broker behavior where practical, or document why direct validation is deferred and which shared protocol tests cover compatibility.
-- [ ] Task: Improve error clarity
-    - [ ] Update errors so unavailable upstream route candidates distinguish inbound federation misses from upstream-link unavailability.
-    - [ ] Include useful target route id/domain, next-hop host id, upstream id, direction, connection state, and request path context where available.
-    - [ ] Confirm error tests assert the improved context.
-- [ ] Task: Validate downstream dispatch phase
-    - [ ] Run the focused regression tests from Phase 1 and confirm they pass.
-    - [ ] Run existing Host federation, Broker redirect, Bun-facing, and Python Broker tests relevant to the changed behavior.
-    - [ ] Record coverage result or justify any runtime-specific coverage limitation.
-- [ ] Task: Commit and push Phase 3 before manual validation
+- [x] Task: Implement downstream Broker dispatch to imported upstream routes
+    - [x] Connect route-local request handling to the upstream federation request-stream path for imported route candidates.
+    - [x] Preserve local-first route behavior and existing route candidate ordering/fallback semantics.
+    - [x] Ensure the issue #24 raw Host/Broker reproduction returns the upstream route response.
+- [x] Task: Implement and validate native redirect flow across upstream routes
+    - [x] Ensure a Broker request to an imported Manager route can receive and follow eligible native 307/308 redirects to advertised routes.
+    - [x] Preserve method-preserving redirect behavior, hop limits, and replay-buffer safeguards.
+    - [x] Confirm Manager coordinates routing without becoming the payload proxy for single-owner target routes when redirect-following applies.
+- [x] Task: Validate implemented runtime surfaces
+    - [x] Validate Node Host and Node Broker behavior directly.
+    - [x] Validate Bun-facing Broker behavior where it exercises the shared Node transport path.
+    - [x] Validate Python Broker behavior where practical, or document why direct validation is deferred and which shared protocol tests cover compatibility.
+    - Runtime validation: Node Host/Broker upstream and redirect regressions pass in `test/host-upstreams.test.js`; Bun-facing Broker `createFetch()` upstream route validation added to `test/host-upstreams.test.js`; Python Broker upstream route validation added to `test/python-broker-tls-integration.test.js`.
+- [x] Task: Improve error clarity
+    - [x] Update errors so unavailable upstream route candidates distinguish inbound federation misses from upstream-link unavailability.
+    - [x] Include useful target route id/domain, next-hop host id, upstream id, direction, connection state, and request path context where available.
+    - [x] Confirm error tests assert the improved context.
+    - Note: Verser error context accepts primitive values, so exhausted-candidate details are summarized as `candidateCount`, `nextHopHostIds`, `originHostIds`, and `domains`.
+- [x] Task: Validate downstream dispatch phase
+    - [x] Run the focused regression tests from Phase 1 and confirm they pass.
+    - [x] Run existing Host federation, Broker redirect, Bun-facing, and Python Broker tests relevant to the changed behavior.
+    - [x] Record coverage result or justify any runtime-specific coverage limitation.
+    - Validation: `npm run build --workspace=@signicode/verser2-host` passes. `npm run build --workspace=@signicode/verser2-host && npm run build --workspace=@signicode/verser2-guest-bun && node --test test/host-upstreams.test.js` passes 27 tests. `node --test test/python-broker-tls-integration.test.js` passes 5 tests. A parallel build/test attempt briefly failed because tests used stale generated output while build was still running; rerunning after successful build passed. Coverage measurement deferred to final validation.
+- [~] Task: Commit and push Phase 3 before manual validation
     - [ ] Commit Phase 3 changes with a scoped message.
     - [ ] Push the phase commit to the track PR branch.
     - [ ] Record the commit SHA and validation results in this plan.
+    - Validation: `npm run lint` initially found session-introduced formatting in Host/Python test edits; formatting was fixed and rerun successfully.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Downstream Broker dispatch, redirects, and runtime validation' (Protocol in workflow.md)
 
 ## Phase 4: Finalization, documentation, and full validation
