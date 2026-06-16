@@ -5,14 +5,14 @@ This checklist captures the current repository state and the work to complete be
 ## Current state snapshot
 
 - Repository: `signicode/verser2` on GitHub.
-- Visibility: private.
+- Visibility: public.
 - Default branch: `main`.
 - GitHub features: Issues and Projects are enabled; Wiki and Discussions are disabled.
 - Merge methods: merge commits, squash merges, and rebase merges are all allowed.
-- Delete branch on merge: disabled.
+- Delete branch on merge: enabled.
 - License detected by GitHub: MIT.
-- Branch protection: not verifiable through the current private-repository API response; confirm manually before publishing.
-- GitHub security features: Dependabot alerts and secret scanning are disabled; code scanning requires GitHub Advanced Security while the repository remains private.
+- Branch protection/ruleset: `Protect main` is active for the default branch, blocks deletion and non-fast-forward updates, requires pull requests, one approving review, resolved review threads, last-push approval, and required `Package publish readiness` and `Secret Scan` checks.
+- GitHub security features: Dependabot alerts and security updates are enabled; secret scanning and push protection are enabled; non-provider patterns and validity checks are unavailable or disabled.
 - Existing workflow: `.github/workflows/package-publish.yml` validates packages on selected pull requests and publishes to GitHub Packages on `main` and `v*` tags.
 
 ## Publish decision gates
@@ -25,14 +25,14 @@ This checklist captures the current repository state and the work to complete be
 
 ## Safety precautions before changing visibility
 
-- [ ] Run a full secret scan on the complete git history, not only the working tree.
+- [x] Run a full secret scan on the complete git history, not only the working tree.
 - [x] Treat `test/fixtures/generated-tls/` certificates and keys as test-only; document this if they remain in the public repo.
-- [ ] Review commit history for credentials, private hostnames, customer names, private URLs, unpublished business plans, and personal data. Suggested command: `docker run --rm -v $(pwd):/repo ghcr.io/gitleaks/gitleaks:latest detect --source=/repo --verbose --report-path=/tmp/gitleaks-report.json`.
+- [x] Review commit history for credentials, private hostnames, customer names, private URLs, unpublished business plans, and personal data. Suggested command: `docker run --rm -v $(pwd):/repo ghcr.io/gitleaks/gitleaks:latest detect --source=/repo --verbose --report-path=/tmp/gitleaks-report.json`.
 - [x] Review `conductor/` for internal planning details that should not be public.
 - [x] Review `.github/workflows/package-publish.yml` and all scripts for tokens, registry assumptions, and publish side effects.
 - [ ] Confirm `.gitignore` excludes generated output (`dist/`, coverage, virtualenvs, caches, local cert locks, and dependency folders).
 - [ ] Rotate any credential that ever appeared in the repository, even if it was later removed.
-- [ ] Make the repository public only after branch protection, required checks, and security scanning are configured.
+- [x] Make the repository public only after branch protection, required checks, and security scanning are configured.
 
 ## Licensing and attribution
 
@@ -106,15 +106,15 @@ Checklist:
 
 ## GitHub repository safeguards
 
-- [ ] Make `main` branch protection explicit before public launch.
-- [ ] Require pull requests before merge.
-- [ ] Require status checks for build, tests, lint, package staging, package consumer tests, and tarball tests.
-- [ ] Require conversation resolution and at least one approving review.
+- [x] Make `main` branch protection explicit before public launch.
+- [x] Require pull requests before merge.
+- [x] Require status checks for build, tests, lint, package staging, package consumer tests, and tarball tests.
+- [x] Require conversation resolution and at least one approving review.
 - [ ] Restrict who can push tags matching `v*` or create releases.
-- [ ] Enable delete branch on merge if that matches maintainer workflow.
+- [x] Enable delete branch on merge if that matches maintainer workflow.
 - [ ] Decide which merge method to allow; allowing all three is flexible but can make history conventions inconsistent.
-- [x] Enable Dependabot alerts and add `.github/dependabot.yml` for npm and GitHub Actions. Dependabot alerts still require repository setting enablement.
-- [ ] Enable secret scanning after making the repository public, and enable push protection if available.
+- [x] Enable Dependabot alerts and add `.github/dependabot.yml` for npm and GitHub Actions.
+- [x] Enable secret scanning after making the repository public, and enable push protection if available.
 - [x] Enable CodeQL or another code scanning workflow for TypeScript and Python.
 - [x] Add `.github/CODEOWNERS` for package, docs, scripts, and workflow ownership.
 - [x] Add issue templates and a pull request template.
@@ -129,8 +129,8 @@ Current state:
 - Tests use Node `node:test`; Python package has `unittest` and syntax checks through `compileall`.
 - Package staging, consumer import checks, and tarball behavior tests exist.
 - No pre-commit hook configuration is present.
-- No secret scanning configuration is present.
-- No CodeQL, Dependabot, dependency review, or security scanning workflow is present.
+- Secret scanning and push protection are enabled in GitHub repository settings.
+- CodeQL, Dependabot, dependency review, and Gitleaks secret scanning workflows/configuration are present.
 
 Checklist:
 
