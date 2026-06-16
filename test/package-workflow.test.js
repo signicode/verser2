@@ -173,7 +173,10 @@ test('workflow publishes Python distributions through GitHub artifacts and relea
     /PUBLISH_VERSION:\s*\$\{\{\s*steps\.publish-metadata\.outputs\.python_version\s*\}\}/,
   );
   assert.match(content, /softprops\/action-gh-release@v2/);
-  assert.match(content, /files:[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.whl[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.tar\.gz/);
+  assert.match(
+    content,
+    /files:[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.whl[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.tar\.gz/,
+  );
   assert.match(content, /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/);
 });
 
