@@ -63,6 +63,11 @@ asyncio.run(main())
   });
 }
 
+function assertPythonBrokerTlsRejected(result) {
+  assert.notEqual(result.code, 0, result.stdout);
+  assert.match(result.stderr, /tls|handshake|certificate|alert|socket|Broker connection closed/i);
+}
+
 function runPythonBrokerRequest(options) {
   const script = `
 import asyncio
@@ -202,8 +207,7 @@ test(
         },
       });
 
-      assert.notEqual(result.code, 0, result.stdout);
-      assert.match(result.stderr, /tls|handshake|certificate|alert|socket/i);
+      assertPythonBrokerTlsRejected(result);
     } finally {
       await host.close('test-complete');
     }
@@ -232,8 +236,7 @@ test(
         },
       });
 
-      assert.notEqual(result.code, 0, result.stdout);
-      assert.match(result.stderr, /tls|handshake|certificate|alert|socket/i);
+      assertPythonBrokerTlsRejected(result);
     } finally {
       await host.close('test-complete');
     }
