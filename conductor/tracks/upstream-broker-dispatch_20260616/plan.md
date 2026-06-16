@@ -53,12 +53,13 @@
     - [x] Run existing inbound federation tests to confirm compatibility.
     - [x] Record coverage result or justify any phase-specific coverage limitation.
     - Validation: `npm run build --workspace=@signicode/verser2-host` passes after fixing a session-introduced waiter type issue. `node --test test/host-upstreams.test.js` passes all 26 tests, including existing inbound federation coverage and the two new upstream-dispatch regressions. Coverage measurement deferred to broader validation.
-- [~] Task: Commit and push Phase 2 before manual validation
-    - [ ] Commit Phase 2 changes with a scoped message.
-    - [ ] Push the phase commit to the track PR branch.
-    - [ ] Record the commit SHA and validation results in this plan.
+- [x] Task: Commit and push Phase 2 before manual validation
+    - [x] Commit Phase 2 changes with a scoped message.
+    - [x] Push the phase commit to the track PR branch.
+    - [x] Record the commit SHA and validation results in this plan.
     - Validation: `npm run lint` passes.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Upstream federation request-stream support' (Protocol in workflow.md)
+    - Phase 2 checkpoint commit: `77f4249` pushed to `track/upstream-broker-dispatch_20260616`.
+- [~] Task: Conductor - User Manual Verification 'Phase 2: Upstream federation request-stream support' (Protocol in workflow.md)
 
 ## Phase 3: Downstream Broker dispatch, redirects, and runtime validation
 
