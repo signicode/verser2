@@ -26,7 +26,7 @@
   "dependencies": {
     "@signicode/verser-common": "0.4.1",
     "@signicode/verser2-guest-js-common": "0.4.1",
-    "undici": "^6.26.0"
+    "undici": "^8.5.0"
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common --external @signicode/verser2-guest-js-common --external undici && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
