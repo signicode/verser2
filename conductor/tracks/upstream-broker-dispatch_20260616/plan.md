@@ -2,8 +2,8 @@
 
 ## Phase 1: TDD regression tests and PR review surface
 
-- [ ] Task: Create track branch and PR review surface
-    - [ ] Create a dedicated track branch before behavior-changing implementation work.
+- [~] Task: Create track branch and PR review surface
+    - [x] Create a dedicated track branch before behavior-changing implementation work.
     - [ ] Create a GitHub pull request using `gh` with a title/body describing the intended TO-BE state: downstream Broker requests can dispatch to imported upstream Host routes.
     - [ ] Record the PR URL in this plan.
 - [ ] Task: Inventory existing federation implementation and common reuse points
