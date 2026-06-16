@@ -152,6 +152,15 @@ Phase 3 validation notes:
 - [~] Task: Conductor - User Manual Verification 'Phase 4: CI and dual-registry release workflow' (Protocol in workflow.md)
     - [ ] Maintainer manually verifies Phase 4 workflow behavior on the pushed review branch before Phase 5 begins.
 
+Phase 4 validation notes:
+
+- Common libraries scanned: no common runtime libraries needed; phase changed workflow YAML and workflow/release-policy tests only.
+- Deduplication result: GitHub Packages and npmjs publish policy checks remain centralized in `.github/workflows/package-publish.yml` plus `scripts/package-version-policy.js`.
+- Validation: `node --test test/package-workflow.test.js`; `node --test test/package-version-policy.test.js`; `node --test test/package-publish-readiness.test.js`; `npm run lint` all passed.
+- Coverage: not applicable to workflow YAML assertions.
+- Review branch push: Phase 4 review state pushed to `track/opensource-npm-publishing_20260616` at commit `14dd0cf` before manual verification.
+- Phase checkpoint commit: pending manual verification.
+
 ## Phase 5: Documentation, checklist closure, and final validation
 
 - [ ] Task: Update public open-source documentation
