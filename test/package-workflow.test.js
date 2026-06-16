@@ -129,9 +129,13 @@ test('workflow supports maintainer-gated npmjs publishing', () => {
   assert.match(content, /environment:\s*npmjs-release/);
   assert.match(content, /github\.event_name\s*==\s*'workflow_dispatch'/);
   assert.match(content, /inputs\.publish_npmjs\s*==\s*true/);
+  assert.match(content, /github\.event_name\s*==\s*'push'/);
+  assert.match(content, /github\.ref_type\s*==\s*'tag'/);
+  assert.match(content, /startsWith\(github\.ref, 'refs\/tags\/v'\)/);
   assert.match(content, /publishKind:\s*'manual-npmjs-candidate'/);
   assert.match(content, /id-token:\s*write/);
   assert.doesNotMatch(content, /secrets\.NPM_TOKEN/);
+  assert.match(content, /npmjs publishing is not allowed for SHA build versions/);
   assert.match(
     content,
     /npm publish --access public --tag .* --registry https:\/\/registry\.npmjs\.org\//,

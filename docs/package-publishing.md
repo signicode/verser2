@@ -6,7 +6,7 @@ For the end-to-end release commit, tag, publish, and post-release bump procedure
 
 ## Version and dist-tag policy
 
-Use `npm run package:version-policy` to inspect how a package version maps to publish metadata. The helper can describe tag releases, merged-PR SHA builds, nightly builds, and manual npmjs candidates; automatic `main`, tag, and nightly workflows publish only to GitHub Packages, while npmjs.org publication requires manual workflow dispatch plus the `npmjs-release` environment gate.
+Use `npm run package:version-policy` to inspect how a package version maps to publish metadata. The helper can describe tag releases, merged-PR SHA builds, nightly builds, and manual npmjs candidates; automatic `main` and nightly workflows publish only to GitHub Packages, while `v*` tag releases can publish to both GitHub Packages and npmjs.org after the `npmjs-release` environment gate approves npm trusted publishing.
 
 Stable versions use the `latest` dist-tag:
 
@@ -143,7 +143,7 @@ The GitHub mode exits successfully with a skip report unless `VERSER_RUN_GITHUB_
 
 ## npmjs publishing boundary
 
-This repository keeps npmjs publishing manual and maintainer-gated. Automatic `main`, tag, and nightly workflow paths never publish to npmjs.org. The version-policy helper can describe a manual npmjs candidate, does not run `npm publish` itself, and reports `npmJsPublishAllowed: true` only for the explicit `manual-npmjs-candidate` publish kind:
+This repository keeps npmjs publishing maintainer-gated. Automatic `main` and nightly workflow paths never publish to npmjs.org; `v*` tag release paths may publish to npmjs.org after validation and `npmjs-release` environment approval. The version-policy helper can describe a manual npmjs candidate, does not run `npm publish` itself, and reports `npmJsPublishAllowed: true` only for the explicit `manual-npmjs-candidate` publish kind:
 
 ```sh
 npm run package:version-policy -- --version 1.2.3 --publish-kind manual-npmjs-candidate --json
@@ -156,7 +156,12 @@ Manual npmjs release work should reuse the same stable/prerelease tag policy:
 - stable versions publish with `latest`;
 - prerelease versions publish with `next`.
 
-The npmjs workflow path is available through `.github/workflows/package-publish.yml` using `workflow_dispatch` inputs:
+The npmjs workflow path is available through `.github/workflows/package-publish.yml` in two modes:
+
+- automatic `v*` tag pushes publish the tag version to npmjs.org after package validation and `npmjs-release` environment approval, as long as the resolved version is not a SHA build version;
+- manual `workflow_dispatch` runs can publish an explicitly selected version.
+
+Manual dispatch uses these inputs:
 
 - `publish_npmjs: true` to opt in to npmjs publication;
 - `npmjs_version` with the exact semver version to publish;
@@ -175,7 +180,7 @@ Behavior summary:
 - Pull requests to `main`: build, stage, pack, run local package-consumer tests, and run automated tarball behavior tests without path filters so docs, governance, workflow, package metadata, and source changes receive validation. Pull-request workflow runs must never publish packages to GitHub Packages or npmjs.org.
 - Pushes to `main`: classify changed files before package validation. Package-affecting merges run the validation flow, upload the validated build/staging output for reuse by the publish job, compute a deterministic SHA version, re-run staged, import-only tarball, and automated tarball behavior tests after applying that version, then publish with the non-channel `main-sha` dist-tag. Documentation-only and Conductor-only merges do not publish packages; release-procedure/package-publishing docs can trigger validation without publication.
 - Scheduled nightly runs: run independently of the latest changed files, validate package output, compute a deterministic nightly version, then publish to GitHub Packages with the non-channel `nightly` dist-tag.
-- Pushes for tags matching `v*`: run the same flow, reuse the validated build/staging output, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish using stable/pre-release dist-tags from policy (`latest` for stable semver, `next` for prereleases).
+- Pushes for tags matching `v*`: run the same flow, reuse the validated build/staging output, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish GitHub Packages and npmjs.org using stable/pre-release dist-tags from policy (`latest` for stable semver, `next` for prereleases). The npmjs publish job still waits for `npmjs-release` environment approval and rejects SHA build versions.
 - Manual workflow dispatch with `publish_npmjs: true`: validates the package output, applies the requested npmjs version to staged manifests, re-runs staged/tarball consumer checks and tarball behavior tests, then publishes JavaScript packages to npmjs.org only after the `npmjs-release` environment gate approves the run. Python PyPI publishing remains out of scope.
 
 For both publish paths, the workflow:

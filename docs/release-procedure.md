@@ -70,15 +70,15 @@ Prerelease tags such as `v0.2.1-rc.1` publish to GitHub Packages with the `next`
 
 ## Manual npmjs publication boundary
 
-Automatic `main`, tag, nightly, and pull-request workflow paths never publish to npmjs.org. Public npmjs publication uses the manual `workflow_dispatch` path in `.github/workflows/package-publish.yml` and must be approved through the `npmjs-release` environment.
+Automatic `main`, nightly, and pull-request workflow paths never publish to npmjs.org. Tag pushes matching `v*` publish to npmjs.org automatically after validation when the resolved version is not a SHA build version, but the npmjs job still requires approval through the `npmjs-release` environment. Maintainers can also use the manual `workflow_dispatch` path in `.github/workflows/package-publish.yml` for an explicitly selected version.
 
 Before the first real npmjs publication:
 
 1. Configure the `npmjs-release` GitHub environment with required reviewers.
 2. Configure npm trusted publishing for the `@signicode` packages with publisher `GitHub Actions`, organization `signicode`, repository `verser2`, workflow `package-publish.yml`, and environment `npmjs-release`.
 3. Confirm package access settings for public scoped packages.
-4. Run the workflow with `publish_npmjs: true`, the intended `npmjs_version`, and `npmjs_dry_run: true`.
-5. Review the dry-run output, then re-run with `npmjs_dry_run: false` only when maintainers approve the public publish.
+4. For manual dry runs, run the workflow with `publish_npmjs: true`, the intended `npmjs_version`, and `npmjs_dry_run: true`.
+5. Review the dry-run output. For real releases, push a `v*` tag or re-run manual dispatch with `npmjs_dry_run: false` only when maintainers approve the public publish.
 
 The npmjs path uses the same stable/prerelease dist-tag policy: stable versions publish with `latest`, and prerelease versions publish with `next`.
 
