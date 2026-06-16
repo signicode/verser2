@@ -130,8 +130,8 @@ test('workflow supports maintainer-gated npmjs publishing', () => {
   assert.match(content, /github\.event_name\s*==\s*'workflow_dispatch'/);
   assert.match(content, /inputs\.publish_npmjs\s*==\s*true/);
   assert.match(content, /publishKind:\s*'manual-npmjs-candidate'/);
-  assert.match(content, /secrets\.NPM_TOKEN/);
   assert.match(content, /id-token:\s*write/);
+  assert.doesNotMatch(content, /secrets\.NPM_TOKEN/);
   assert.match(
     content,
     /npm publish --access public --tag .* --registry https:\/\/registry\.npmjs\.org\//,
@@ -176,10 +176,11 @@ test('workflow never publishes packages from pull request runs', () => {
   assert.match(content, /Confirm validation job never publishes packages/);
 });
 
-test('workflow scopes GitHub and npmjs publish credentials separately', () => {
+test('workflow scopes package publishing credentials by registry', () => {
   const content = loadWorkflow();
   assert.match(content, /NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/);
-  assert.match(content, /NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
+  assert.match(content, /npmjs-publish:[\s\S]*?id-token:\s*write/);
+  assert.doesNotMatch(content, /NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
 });
 
 test('workflow avoids commit of generated artifacts', () => {

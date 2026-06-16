@@ -100,7 +100,7 @@ Checklist:
 - [ ] Pin or audit third-party GitHub Actions (`actions/checkout`, `actions/setup-node`, `actions/upload-artifact`, `actions/download-artifact`, `astral-sh/setup-uv`, `softprops/action-gh-release`).
 - [ ] Use environments or required reviewers for publishing jobs.
 - [ ] Confirm `packages: write` and `contents: write` are granted only to publish jobs, not validation jobs.
-- [x] If publishing to npmjs.org, change registry configuration, add `NPM_TOKEN`, and update `scripts/package-version-policy.js` where `NPMJS_PUBLISH_ALLOWED` is currently false. Manual setup of `NPM_TOKEN` or trusted publishing remains required.
+- [x] If publishing to npmjs.org, change registry configuration, configure npm trusted publishing, and update `scripts/package-version-policy.js` where `NPMJS_PUBLISH_ALLOWED` is currently false.
 - [ ] If publishing to PyPI, add trusted publishing or scoped API token release steps for `packages/verser2-guest-python`.
 - [ ] Add release notes validation and changelog requirements before tag publishing.
 

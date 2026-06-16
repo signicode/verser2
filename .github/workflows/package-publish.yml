@@ -401,8 +401,6 @@ jobs:
           npm run test:package-tarballs
 
       - name: Publish staged packages to npmjs.org
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           publishFlags=""
           if [ "${{ inputs.npmjs_dry_run }}" = "true" ]; then

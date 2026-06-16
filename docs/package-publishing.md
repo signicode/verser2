@@ -162,7 +162,7 @@ The npmjs workflow path is available through `.github/workflows/package-publish.
 - `npmjs_version` with the exact semver version to publish;
 - `npmjs_dry_run: true` for the default dry run before a real publish.
 
-Before the first real npmjs publish, maintainers must configure the `npmjs-release` GitHub environment with required reviewers and configure either `NPM_TOKEN` or npm trusted publishing for the `@signicode` packages. The workflow grants `id-token: write` for provenance/trusted publishing and uses `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}` when token-based publishing is configured.
+Before the first real npmjs publish, maintainers must configure the `npmjs-release` GitHub environment with required reviewers and npm trusted publishing for the `@signicode` packages. The workflow grants `id-token: write` and relies on npm trusted publishing instead of an `NPM_TOKEN` secret.
 
 ## GitHub Actions package publish workflow
 
@@ -180,8 +180,9 @@ Behavior summary:
 
 For both publish paths, the workflow:
 
-- Uses `actions/setup-node` with `registry-url: https://npm.pkg.github.com` and `scope: @signicode`.
-- Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for publish.
+- Uses `actions/setup-node` with the registry URL and `scope: @signicode` for the active publish target.
+- Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for GitHub Packages publish.
+- Uses npm trusted publishing with `id-token: write` for npmjs.org publish.
 - Publishes GitHub Packages with `npm publish --access public` so package pages and installs can be public after the repository launch.
 - Uploads the validation job's `dist/packages` tree and Python distribution directory, then downloads those artifacts in the publish job instead of running a second full `npm run build` / `npm run stage:packages` cycle.
 - Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
@@ -207,7 +208,7 @@ Manual validation steps (first-time publish):
 5. Push a release-style tag like `v1.2.3` and confirm stable publish metadata.
 6. Push a prerelease tag like `v1.2.3-next.0` and confirm the `next` dist-tag behavior.
 7. Set `VERSER_RUN_GITHUB_CONSUMER_TESTS=1` and verify GitHub Packages install checks pass from the workflow logs.
-8. Configure `npmjs-release` required reviewers and `NPM_TOKEN` or npm trusted publishing before running the npmjs workflow path.
+8. Configure `npmjs-release` required reviewers and npm trusted publishing before running the npmjs workflow path.
 9. Run a manual npmjs dry run with `publish_npmjs: true`, `npmjs_dry_run: true`, and the intended version before the first real public publish.
 
 If GitHub Packages validation is intentionally disabled, confirm the step logs a skip reason instead of failing.
