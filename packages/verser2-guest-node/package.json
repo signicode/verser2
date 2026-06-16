@@ -1,14 +1,14 @@
 {
   "name": "@signicode/verser2-guest-node",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Initial TypeScript scaffold for the Verser2 Node Guest package.",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@signicode/verser-common": "0.4.0",
-    "@signicode/verser2-guest-js-common": "0.4.0",
+    "@signicode/verser-common": "0.4.1",
+    "@signicode/verser2-guest-js-common": "0.4.1",
     "undici": "^6.26.0"
   },
   "scripts": {
