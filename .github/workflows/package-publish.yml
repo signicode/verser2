@@ -208,7 +208,7 @@ jobs:
         run: npm ci
 
       - name: Download validated package build output
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: package-build-output
           path: .
@@ -322,7 +322,7 @@ jobs:
 
       - name: Attach Python distribution to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: packages/verser2-guest-python/dist/python/*
 
@@ -364,7 +364,7 @@ jobs:
         run: npm ci
 
       - name: Download validated package build output
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: package-build-output
           path: .
