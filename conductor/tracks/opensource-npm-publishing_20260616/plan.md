@@ -149,8 +149,8 @@ Phase 3 validation notes:
         - Broader package staging/consumer/tarball validation was already run in Phase 3 after staging behavior changed; Phase 4 changed workflow YAML and workflow tests only.
     - [x] Record coverage result or explain why coverage is not applicable to workflow-only assertions.
         - Coverage: not applicable to workflow YAML assertions; workflow behavior is covered by static tests and package metadata/version-policy tests.
-- [~] Task: Conductor - User Manual Verification 'Phase 4: CI and dual-registry release workflow' (Protocol in workflow.md)
-    - [ ] Maintainer manually verifies Phase 4 workflow behavior on the pushed review branch before Phase 5 begins.
+- [x] Task: Conductor - User Manual Verification 'Phase 4: CI and dual-registry release workflow' (Protocol in workflow.md)
+    - [x] Maintainer manually verifies Phase 4 workflow behavior on the pushed review branch before Phase 5 begins.
 
 Phase 4 validation notes:
 
@@ -159,7 +159,8 @@ Phase 4 validation notes:
 - Validation: `node --test test/package-workflow.test.js`; `node --test test/package-version-policy.test.js`; `node --test test/package-publish-readiness.test.js`; `npm run lint` all passed.
 - Coverage: not applicable to workflow YAML assertions.
 - Review branch push: Phase 4 review state pushed to `track/opensource-npm-publishing_20260616` at commit `14dd0cf` before manual verification.
-- Phase checkpoint commit: pending manual verification.
+- Manual verification: approved.
+- Phase checkpoint commit: `ee84e0d`.
 
 ## Phase 5: Documentation, checklist closure, and final validation
 
