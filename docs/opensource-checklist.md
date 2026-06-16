@@ -18,7 +18,7 @@ This checklist captures the current repository state and the work to complete be
 ## Publish decision gates
 
 - [x] Decide whether open sourcing means source visibility only, GitHub Packages publishing, npmjs.org publishing, PyPI publishing, or all of these. Current repository-file support covers public source readiness, GitHub Packages previews/releases, and maintainer-gated npmjs.org publishing; PyPI remains out of scope.
-- [ ] Decide whether `conductor/`, `opencode.jsonc`, and `.slim/` should stay public, move to private tooling, or be documented as internal project-management/tooling artifacts.
+- [x] Decide whether `conductor/`, `opencode.jsonc`, and `.slim/` should stay public, move to private tooling, or be documented as internal project-management/tooling artifacts. `opencode.jsonc` is removed from the current tree; `conductor/` remains public with older archived plans summarized as outcomes; `.slim/` remains public.
 - [x] Decide whether package publication remains under `@signicode` and whether public package names are final. Repository metadata and workflows keep the `@signicode` scope.
 - [x] Confirm every roadmap claim is still accurate; do not imply HTTP/3, browser, Rust, Go, Java, or Python Host implementations are shipped.
 - [x] Confirm the README states that applications remain responsible for authentication, authorization, and routing policy.
