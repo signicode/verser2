@@ -30,30 +30,34 @@
     - [x] Record the commit SHA and validation results in this plan.
     - Validation: `npm run lint` initially found session-introduced formatting in the new tests; formatting was fixed and rerun successfully.
     - Phase 1 checkpoint commit: `a1a9981` pushed to `track/upstream-broker-dispatch_20260616`.
-- [~] Task: Conductor - User Manual Verification 'Phase 1: TDD regression tests and PR review surface' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: TDD regression tests and PR review surface' (Protocol in workflow.md)
 
 ## Phase 2: Upstream federation request-stream support
 
-- [ ] Task: Design upstream request-stream acquisition path
-    - [ ] Compare inbound federation request acquisition with upstream link request stream state.
-    - [ ] Identify reusable route candidate, lease, cleanup, and fallback logic.
-    - [ ] Decide whether to adapt existing helpers or introduce shared internal helpers while preserving public API behavior.
-- [ ] Task: Implement upstream request stream acquisition
-    - [ ] Add support for acquiring a request stream from an upstream link when a route candidate’s next hop is available through `upstreamLinks`.
-    - [ ] Preserve existing inbound federation request acquisition and fallback behavior.
-    - [ ] Handle closed, stale, missing, or unavailable upstream links with contextual errors.
-- [ ] Task: Preserve protocol and lifecycle semantics
-    - [ ] Ensure forwarded requests preserve method, path, headers, body streaming, status, response headers, and response body semantics.
-    - [ ] Ensure route cleanup and HA fallback behavior remain compatible with existing inbound federation behavior.
-    - [ ] Avoid duplicating logic that belongs in common or shared Host federation helpers.
-- [ ] Task: Validate upstream request-stream support
-    - [ ] Run focused Host federation tests for the new upstream acquisition path.
-    - [ ] Run existing inbound federation tests to confirm compatibility.
-    - [ ] Record coverage result or justify any phase-specific coverage limitation.
-- [ ] Task: Commit and push Phase 2 before manual validation
+- [x] Task: Design upstream request-stream acquisition path
+    - [x] Compare inbound federation request acquisition with upstream link request stream state.
+    - [x] Identify reusable route candidate, lease, cleanup, and fallback logic.
+    - [x] Decide whether to adapt existing helpers or introduce shared internal helpers while preserving public API behavior.
+    - Design: preserve the existing idle `/verser/host/federation/request` stream for upstream-to-downstream dispatch and add a one-shot dispatch mode for downstream-to-upstream requests over a healthy `UpstreamLink.session`, keyed by route-candidate `nextHopHostId` matching `UpstreamLink.remoteHostId`.
+- [x] Task: Implement upstream request stream acquisition
+    - [x] Add support for acquiring a request stream from an upstream link when a route candidate’s next hop is available through `upstreamLinks`.
+    - [x] Preserve existing inbound federation request acquisition and fallback behavior.
+    - [x] Handle closed, stale, missing, or unavailable upstream links with contextual errors.
+- [x] Task: Preserve protocol and lifecycle semantics
+    - [x] Ensure forwarded requests preserve method, path, headers, body streaming, status, response headers, and response body semantics.
+    - [x] Ensure route cleanup and HA fallback behavior remain compatible with existing inbound federation behavior.
+    - [x] Avoid duplicating logic that belongs in common or shared Host federation helpers.
+    - Deduplication: shared incoming federation request handling now accepts both client and server HTTP/2 stream directions; route candidate loops remain separate for local and H2 Broker paths to keep the refactor minimal.
+- [x] Task: Validate upstream request-stream support
+    - [x] Run focused Host federation tests for the new upstream acquisition path.
+    - [x] Run existing inbound federation tests to confirm compatibility.
+    - [x] Record coverage result or justify any phase-specific coverage limitation.
+    - Validation: `npm run build --workspace=@signicode/verser2-host` passes after fixing a session-introduced waiter type issue. `node --test test/host-upstreams.test.js` passes all 26 tests, including existing inbound federation coverage and the two new upstream-dispatch regressions. Coverage measurement deferred to broader validation.
+- [~] Task: Commit and push Phase 2 before manual validation
     - [ ] Commit Phase 2 changes with a scoped message.
     - [ ] Push the phase commit to the track PR branch.
     - [ ] Record the commit SHA and validation results in this plan.
+    - Validation: `npm run lint` passes.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Upstream federation request-stream support' (Protocol in workflow.md)
 
 ## Phase 3: Downstream Broker dispatch, redirects, and runtime validation
