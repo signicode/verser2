@@ -1,0 +1,11 @@
+name: Security report
+description: Do not open public vulnerability reports here.
+title: "security: do not file public vulnerability reports"
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not submit vulnerability details in a public issue.
+
+        Follow SECURITY.md and use GitHub private vulnerability reporting when it is enabled. If private reporting is unavailable, contact maintainers through the repository owner's published security contact channel.

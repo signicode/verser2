@@ -1,0 +1,9 @@
+# Default owners for public collaboration. Maintainers may replace this with
+# team-specific owners after organization teams are configured.
+* @MichalCz
+
+/packages/ @MichalCz
+/scripts/ @MichalCz
+/docs/ @MichalCz
+/.github/ @MichalCz
+/conductor/ @MichalCz
