@@ -110,8 +110,8 @@ Phase 2 validation notes:
         - Coverage: not applicable to metadata/release-policy assertions; package behavior remained validated through staged consumer and tarball checks.
     - [x] Run lint validation.
         - Passed: `npm run lint` after correcting a formatting issue introduced in the new metadata test.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Package metadata and staged manifest readiness' (Protocol in workflow.md)
-    - [ ] Maintainer manually verifies Phase 3 package metadata and staged manifest readiness before Phase 4 begins.
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Package metadata and staged manifest readiness' (Protocol in workflow.md)
+    - [x] Maintainer manually verifies Phase 3 package metadata and staged manifest readiness before Phase 4 begins.
 
 Phase 3 validation notes:
 
@@ -120,7 +120,8 @@ Phase 3 validation notes:
 - Validation: `node --test test/package-publish-readiness.test.js`; `node --test test/package-version-policy.test.js`; `npm run build`; `npm run stage:packages`; `npm run test:package-consumers -- --source=staging`; `npm run test:package-consumers -- --source=tarball`; `npm run test:package-tarballs`; `npm run lint` all passed.
 - Coverage: not applicable to metadata/release-policy assertions; staged package import and tarball behavior validation passed.
 - Review branch push: Phase 3 review state pushed to `track/opensource-npm-publishing_20260616` at commit `728014a` before manual verification.
-- Phase checkpoint commit: pending manual verification.
+- Manual verification: approved.
+- Phase checkpoint commit: `a358af9`.
 
 ## Phase 4: CI and dual-registry release workflow
 
