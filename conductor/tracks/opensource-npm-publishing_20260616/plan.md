@@ -63,8 +63,8 @@ Phase 1 validation notes:
         - Governance/template text keeps Host/Guest/Broker/Peer terminology explicit, redirects security reports out of public issues, and preserves unsupported-runtime and public-gateway boundaries.
     - [x] Record coverage as not applicable for behavior-neutral repository documentation/config changes.
         - Coverage: not applicable; Phase 2 added governance docs, repository safeguard configuration, and GitHub templates only.
-- [~] Task: Conductor - User Manual Verification 'Phase 2: Governance and repository safeguard files' (Protocol in workflow.md)
-    - [ ] Maintainer manually verifies Phase 2 governance and safeguard files before Phase 3 begins.
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Governance and repository safeguard files' (Protocol in workflow.md)
+    - [x] Maintainer manually verifies Phase 2 governance and safeguard files before Phase 3 begins.
 
 Phase 2 validation notes:
 
@@ -73,7 +73,8 @@ Phase 2 validation notes:
 - Validation: `npm run lint` passed; signoff enforcement was checked for the exempt `MichalCz` path and the non-exempt unsigned-commit rejection path.
 - Coverage: not applicable for governance documents, repository safeguard configuration, and GitHub templates.
 - Review branch push: Phase 2 review state pushed to `track/opensource-npm-publishing_20260616` at commit `cc18db8` before manual verification.
-- Phase checkpoint commit: pending manual verification.
+- Manual verification: approved after adding external-contributor signoff enforcement.
+- Phase checkpoint commit: `d4a0f9d`.
 - Phase 2 review correction: added `scripts/check-pr-signoffs.js`, `.github/workflows/signoff.yml`, and governance/template notes requiring DCO-style `Signed-off-by` trailers for external contributors unless the PR comes from `MichalCz` or the configured Signicode maintainer team.
 
 ## Phase 3: Package metadata and staged manifest readiness
