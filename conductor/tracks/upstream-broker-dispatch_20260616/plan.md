@@ -86,12 +86,13 @@
     - [x] Run existing Host federation, Broker redirect, Bun-facing, and Python Broker tests relevant to the changed behavior.
     - [x] Record coverage result or justify any runtime-specific coverage limitation.
     - Validation: `npm run build --workspace=@signicode/verser2-host` passes. `npm run build --workspace=@signicode/verser2-host && npm run build --workspace=@signicode/verser2-guest-bun && node --test test/host-upstreams.test.js` passes 27 tests. `node --test test/python-broker-tls-integration.test.js` passes 5 tests. A parallel build/test attempt briefly failed because tests used stale generated output while build was still running; rerunning after successful build passed. Coverage measurement deferred to final validation.
-- [~] Task: Commit and push Phase 3 before manual validation
-    - [ ] Commit Phase 3 changes with a scoped message.
-    - [ ] Push the phase commit to the track PR branch.
-    - [ ] Record the commit SHA and validation results in this plan.
+- [x] Task: Commit and push Phase 3 before manual validation
+    - [x] Commit Phase 3 changes with a scoped message.
+    - [x] Push the phase commit to the track PR branch.
+    - [x] Record the commit SHA and validation results in this plan.
     - Validation: `npm run lint` initially found session-introduced formatting in Host/Python test edits; formatting was fixed and rerun successfully.
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Downstream Broker dispatch, redirects, and runtime validation' (Protocol in workflow.md)
+    - Phase 3 checkpoint commit: `414ca05` pushed to `track/upstream-broker-dispatch_20260616`.
+- [~] Task: Conductor - User Manual Verification 'Phase 3: Downstream Broker dispatch, redirects, and runtime validation' (Protocol in workflow.md)
 
 ## Phase 4: Finalization, documentation, and full validation
 
