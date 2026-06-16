@@ -1,12 +1,12 @@
 # Package publishing runbook
 
-This runbook describes the release-engineering helpers for preparing Verser2 workspace packages for GitHub Packages validation. It does not change Host, Guest, Broker, Peer, HTTP routing, or streaming behavior.
+This runbook describes the release-engineering helpers for preparing Verser2 workspace packages for GitHub Packages validation and maintainer-gated npmjs.org publication. It does not change Host, Guest, Broker, Peer, HTTP routing, or streaming behavior.
 
 For the end-to-end release commit, tag, publish, and post-release bump procedure, see [Release procedure](./release-procedure.md).
 
 ## Version and dist-tag policy
 
-Use `npm run package:version-policy` to inspect how a package version maps to publish metadata. The helper can describe tag releases, merged-PR SHA builds, nightly builds, and manual npmjs candidates; automated workflows only publish to GitHub Packages.
+Use `npm run package:version-policy` to inspect how a package version maps to publish metadata. The helper can describe tag releases, merged-PR SHA builds, nightly builds, and manual npmjs candidates; automatic `main`, tag, and nightly workflows publish only to GitHub Packages, while npmjs.org publication requires manual workflow dispatch plus the `npmjs-release` environment gate.
 
 Stable versions use the `latest` dist-tag:
 
@@ -143,7 +143,7 @@ The GitHub mode exits successfully with a skip report unless `VERSER_RUN_GITHUB_
 
 ## npmjs publishing boundary
 
-This repository keeps npmjs publishing manual. The automated GitHub Actions package workflow never publishes to npmjs.org. The version-policy helper can describe a manual npmjs candidate, but it does not run `npm publish` and reports `npmJsPublishAllowed: false`:
+This repository keeps npmjs publishing manual and maintainer-gated. Automatic `main`, tag, and nightly workflow paths never publish to npmjs.org. The version-policy helper can describe a manual npmjs candidate, does not run `npm publish` itself, and reports `npmJsPublishAllowed: true` only for the explicit `manual-npmjs-candidate` publish kind:
 
 ```sh
 npm run package:version-policy -- --version 1.2.3 --publish-kind manual-npmjs-candidate --json
@@ -156,6 +156,14 @@ Manual npmjs release work should reuse the same stable/prerelease tag policy:
 - stable versions publish with `latest`;
 - prerelease versions publish with `next`.
 
+The npmjs workflow path is available through `.github/workflows/package-publish.yml` using `workflow_dispatch` inputs:
+
+- `publish_npmjs: true` to opt in to npmjs publication;
+- `npmjs_version` with the exact semver version to publish;
+- `npmjs_dry_run: true` for the default dry run before a real publish.
+
+Before the first real npmjs publish, maintainers must configure the `npmjs-release` GitHub environment with required reviewers and configure either `NPM_TOKEN` or npm trusted publishing for the `@signicode` packages. The workflow grants `id-token: write` for provenance/trusted publishing and uses `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}` when token-based publishing is configured.
+
 ## GitHub Actions package publish workflow
 
 A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
@@ -164,10 +172,11 @@ A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
 
 Behavior summary:
 
-- Pull requests to `main`: build, stage, pack, run local package-consumer tests, and run automated tarball behavior tests only for relevant source, package metadata, test, workflow, script, and release-engineering documentation changes. Pull-request workflow runs must never publish packages to GitHub Packages. Conductor-only pull requests do not run the package validation jobs.
+- Pull requests to `main`: build, stage, pack, run local package-consumer tests, and run automated tarball behavior tests without path filters so docs, governance, workflow, package metadata, and source changes receive validation. Pull-request workflow runs must never publish packages to GitHub Packages or npmjs.org.
 - Pushes to `main`: classify changed files before package validation. Package-affecting merges run the validation flow, upload the validated build/staging output for reuse by the publish job, compute a deterministic SHA version, re-run staged, import-only tarball, and automated tarball behavior tests after applying that version, then publish with the non-channel `main-sha` dist-tag. Documentation-only and Conductor-only merges do not publish packages; release-procedure/package-publishing docs can trigger validation without publication.
 - Scheduled nightly runs: run independently of the latest changed files, validate package output, compute a deterministic nightly version, then publish to GitHub Packages with the non-channel `nightly` dist-tag.
 - Pushes for tags matching `v*`: run the same flow, reuse the validated build/staging output, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish using stable/pre-release dist-tags from policy (`latest` for stable semver, `next` for prereleases).
+- Manual workflow dispatch with `publish_npmjs: true`: validates the package output, applies the requested npmjs version to staged manifests, re-runs staged/tarball consumer checks and tarball behavior tests, then publishes JavaScript packages to npmjs.org only after the `npmjs-release` environment gate approves the run. Python PyPI publishing remains out of scope.
 
 For both publish paths, the workflow:
 
@@ -179,7 +188,7 @@ For both publish paths, the workflow:
 - Re-runs staged consumer validation, import-only tarball consumer validation, and automated tarball behavior tests after applying the publish version so internal package dependencies point at the same published version.
 - Runs automated tarball behavior tests before any `npm publish` command executes.
 - Optionally runs GitHub Packages consumer validation with `VERSER_RUN_GITHUB_CONSUMER_TESTS=1`.
-- Avoids `npm publish` to npmjs.org.
+- Avoids npmjs.org publication on automatic push, tag, nightly, and pull-request paths.
 
 The Python Guest package is built as a native Python source distribution and
 pure-Python wheel under `packages/verser2-guest-python/dist/python`. Publish runs
@@ -197,5 +206,7 @@ Manual validation steps (first-time publish):
 5. Push a release-style tag like `v1.2.3` and confirm stable publish metadata.
 6. Push a prerelease tag like `v1.2.3-next.0` and confirm the `next` dist-tag behavior.
 7. Set `VERSER_RUN_GITHUB_CONSUMER_TESTS=1` and verify GitHub Packages install checks pass from the workflow logs.
+8. Configure `npmjs-release` required reviewers and `NPM_TOKEN` or npm trusted publishing before running the npmjs workflow path.
+9. Run a manual npmjs dry run with `publish_npmjs: true`, `npmjs_dry_run: true`, and the intended version before the first real public publish.
 
 If GitHub Packages validation is intentionally disabled, confirm the step logs a skip reason instead of failing.

@@ -1,10 +1,10 @@
 # Release procedure
 
-This procedure prepares and publishes Verser2 workspace packages to GitHub Packages. It does not publish to npmjs.org; npmjs publication remains a manual follow-up from an explicitly selected package version that has already been validated in GitHub Packages.
+This procedure prepares and publishes Verser2 workspace packages to GitHub Packages and describes the maintainer-gated npmjs.org follow-up path. Python PyPI publishing remains out of scope.
 
 ## Branch and pull request workflow
 
-Do release-engineering changes on a normal branch and pull request. Package-affecting pull requests to `main` run `.github/workflows/package-publish.yml` validation when they change source, package metadata, tests, release scripts, the package workflow, or release-engineering docs such as this file and `docs/package-publishing.md`. Conductor-only changes under `conductor/**` do not run the package build/test validation jobs.
+Do release-engineering changes on a normal branch and pull request. Pull requests to `main` run `.github/workflows/package-publish.yml` validation without path filters so source, package metadata, tests, release scripts, governance files, workflow changes, and release-engineering docs receive validation.
 
 Before merging a release workflow pull request, fetch review feedback with `gh`:
 
@@ -70,7 +70,17 @@ Prerelease tags such as `v0.2.1-rc.1` publish to GitHub Packages with the `next`
 
 ## Manual npmjs publication boundary
 
-The automated workflow never publishes to npmjs.org. To publish to npmjs manually in a future release procedure, first choose a version that has already passed GitHub Packages publication and installation validation, then run the manual npmjs process outside `.github/workflows/package-publish.yml` with explicit maintainer approval.
+Automatic `main`, tag, nightly, and pull-request workflow paths never publish to npmjs.org. Public npmjs publication uses the manual `workflow_dispatch` path in `.github/workflows/package-publish.yml` and must be approved through the `npmjs-release` environment.
+
+Before the first real npmjs publication:
+
+1. Configure the `npmjs-release` GitHub environment with required reviewers.
+2. Configure either `NPM_TOKEN` or npm trusted publishing for the `@signicode` packages.
+3. Confirm package access settings for public scoped packages.
+4. Run the workflow with `publish_npmjs: true`, the intended `npmjs_version`, and `npmjs_dry_run: true`.
+5. Review the dry-run output, then re-run with `npmjs_dry_run: false` only when maintainers approve the public publish.
+
+The npmjs path uses the same stable/prerelease dist-tag policy: stable versions publish with `latest`, and prerelease versions publish with `next`.
 
 ## Monitor the release
 
@@ -81,7 +91,7 @@ gh run list --workflow "Package publish readiness" --limit 5
 gh run watch <run-id> --exit-status
 ```
 
-If the tag, SHA, or nightly publish succeeds, confirm that GitHub Packages installation validation passed in the workflow logs.
+If the tag, SHA, or nightly publish succeeds, confirm that GitHub Packages installation validation passed in the workflow logs. If the manual npmjs path is used, confirm that staged/tarball validation passed before the npmjs publish step and that the run was approved through `npmjs-release`.
 
 ## After publishing
 

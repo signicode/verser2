@@ -164,22 +164,35 @@ Phase 4 validation notes:
 
 ## Phase 5: Documentation, checklist closure, and final validation
 
-- [ ] Task: Update public open-source documentation
-    - [ ] Update `docs/opensource-checklist.md` to mark completed automated work and preserve remaining manual gates.
-    - [ ] Update `docs/package-publishing.md` for dual-registry publishing, npmjs.org setup, GitHub Packages previews, and manual release controls.
-    - [ ] Update `docs/release-procedure.md` for first public release and maintainer-run final publish steps.
-    - [ ] Update README/package README content only where needed for public package consumption or status badges.
-- [ ] Task: Product-boundary documentation review
-    - [ ] Confirm docs do not imply complete public gateway behavior.
-    - [ ] Confirm unsupported HTTP/3, browser, Rust, Go, Java, and Python Host behavior remain roadmap/non-goal items.
-    - [ ] Confirm Host/Guest/Broker/Peer terminology remains precise.
-- [ ] Task: Full validation pass
-    - [ ] Run `npm run lint`.
-    - [ ] Run `npm test` or the documented narrower equivalent if a full run is not necessary.
-    - [ ] Run package consumer and tarball validations for staged packages.
-    - [ ] Record skipped validation, failures, or manual GitHub-only checks with reasons.
-- [ ] Task: Final review and handoff
-    - [ ] Review all acceptance criteria against the approved specification.
-    - [ ] Record remaining manual GitHub settings, secret setup, visibility change, and first-public-publish steps.
-    - [ ] Request final maintainer manual verification before completing the track.
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Documentation, checklist closure, and final validation' (Protocol in workflow.md)
+- [x] Task: Update public open-source documentation
+    - [x] Update `docs/opensource-checklist.md` to mark completed automated work and preserve remaining manual gates.
+    - [x] Update `docs/package-publishing.md` for dual-registry publishing, npmjs.org setup, GitHub Packages previews, and manual release controls.
+    - [x] Update `docs/release-procedure.md` for first public release and maintainer-run final publish steps.
+    - [x] Update README/package README content only where needed for public package consumption or status badges.
+        - Root README now links to contributing, security, and code-of-conduct documents; package READMEs did not need status badges or package-consumption changes in this phase.
+- [x] Task: Product-boundary documentation review
+    - [x] Confirm docs do not imply complete public gateway behavior.
+    - [x] Confirm unsupported HTTP/3, browser, Rust, Go, Java, and Python Host behavior remain roadmap/non-goal items.
+    - [x] Confirm Host/Guest/Broker/Peer terminology remains precise.
+- [x] Task: Full validation pass
+    - [x] Run `npm run lint`.
+    - [x] Run `npm test` or the documented narrower equivalent if a full run is not necessary.
+    - [x] Run package consumer and tarball validations for staged packages.
+    - [x] Record skipped validation, failures, or manual GitHub-only checks with reasons.
+        - Passed: `npm run lint`; `npm test`; `npm run test:package-consumers -- --source=staging`; `npm run test:package-consumers -- --source=tarball`; `npm run test:package-tarballs`.
+        - Manual GitHub-only checks remaining: configure repository visibility, branch protection, required checks, repository security settings, `npmjs-release` environment reviewers, `NPM_TOKEN` or trusted publishing, and first public npmjs dry run/real publish approval.
+- [x] Task: Final review and handoff
+    - [x] Review all acceptance criteria against the approved specification.
+    - [x] Record remaining manual GitHub settings, secret setup, visibility change, and first-public-publish steps.
+    - [x] Request final maintainer manual verification before completing the track.
+- [~] Task: Conductor - User Manual Verification 'Phase 5: Documentation, checklist closure, and final validation' (Protocol in workflow.md)
+    - [ ] Maintainer manually verifies Phase 5 documentation and final validation before the track is marked complete.
+
+Phase 5 validation notes:
+
+- Common libraries scanned: no common runtime libraries needed; phase changed public documentation/checklist content only.
+- Deduplication result: not applicable; no runtime code was added.
+- Validation: `npm run lint`; `npm test`; `npm run test:package-consumers -- --source=staging`; `npm run test:package-consumers -- --source=tarball`; `npm run test:package-tarballs` all passed.
+- Coverage: not applicable to documentation/checklist changes; full source tests and staged/tarball package validations passed.
+- Review branch push: pending.
+- Phase checkpoint commit: pending manual verification.

@@ -86,6 +86,12 @@ response.body.pipe(process.stdout);
 - [Lifecycle and errors](./docs/lifecycle-and-errors.md) — events, errors, reconnection
 - [Development](./docs/development.md) — repository setup, validation, and package staging
 
+## Contributing and security
+
+- [Contributing](./CONTRIBUTING.md) — setup, validation, pull requests, and signoff expectations
+- [Security policy](./SECURITY.md) — private vulnerability reporting and supported-version expectations
+- [Code of conduct](./CODE_OF_CONDUCT.md) — public collaboration baseline
+
 ## Development
 
 ```sh
