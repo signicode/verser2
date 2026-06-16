@@ -1,0 +1,104 @@
+# Implementation Plan: Broker dispatch to imported upstream Host routes
+
+## Phase 1: TDD regression tests and PR review surface
+
+- [ ] Task: Create track branch and PR review surface
+    - [ ] Create a dedicated track branch before behavior-changing implementation work.
+    - [ ] Create a GitHub pull request using `gh` with a title/body describing the intended TO-BE state: downstream Broker requests can dispatch to imported upstream Host routes.
+    - [ ] Record the PR URL in this plan.
+- [ ] Task: Inventory existing federation implementation and common reuse points
+    - [ ] Review Host federation files, route candidate handling, upstream link state, inbound federation host state, request-stream acquisition, and existing tests.
+    - [ ] Review `@signicode/verser-common` exports before adding new package-local types/helpers.
+    - [ ] Record current source references and deduplication opportunities in this plan.
+- [ ] Task: Write failing issue #24 regression tests first
+    - [ ] Add a raw Verser2 Host/Broker test for downstream Broker request to an imported upstream route.
+    - [ ] Add a raw Verser2 Host/Broker test for downstream Broker request to an imported upstream Manager route that returns native 307/308 redirect to another advertised route.
+    - [ ] Add or update error tests for unavailable upstream route candidates and expected route/host/direction context.
+    - [ ] Add runtime coverage targets for Node, Bun-facing Broker, and Python Broker where practical, documenting any shared-protocol coverage decision.
+- [ ] Task: Confirm tests fail for the expected reason
+    - [ ] Run the narrowest focused test command for the new regression tests.
+    - [ ] Confirm the failure reproduces issue #24 or the expected missing upstream-dispatch behavior.
+    - [ ] Record coverage status as not yet applicable until implementation begins.
+- [ ] Task: Commit and push Phase 1 before manual validation
+    - [ ] Run `npm run lint` or the narrowest lint/docs validation needed for test-only changes.
+    - [ ] Commit Phase 1 changes with a scoped message.
+    - [ ] Push the phase commit to the track PR branch.
+    - [ ] Record the commit SHA and validation results in this plan.
+- [ ] Task: Conductor - User Manual Verification 'Phase 1: TDD regression tests and PR review surface' (Protocol in workflow.md)
+
+## Phase 2: Upstream federation request-stream support
+
+- [ ] Task: Design upstream request-stream acquisition path
+    - [ ] Compare inbound federation request acquisition with upstream link request stream state.
+    - [ ] Identify reusable route candidate, lease, cleanup, and fallback logic.
+    - [ ] Decide whether to adapt existing helpers or introduce shared internal helpers while preserving public API behavior.
+- [ ] Task: Implement upstream request stream acquisition
+    - [ ] Add support for acquiring a request stream from an upstream link when a route candidate’s next hop is available through `upstreamLinks`.
+    - [ ] Preserve existing inbound federation request acquisition and fallback behavior.
+    - [ ] Handle closed, stale, missing, or unavailable upstream links with contextual errors.
+- [ ] Task: Preserve protocol and lifecycle semantics
+    - [ ] Ensure forwarded requests preserve method, path, headers, body streaming, status, response headers, and response body semantics.
+    - [ ] Ensure route cleanup and HA fallback behavior remain compatible with existing inbound federation behavior.
+    - [ ] Avoid duplicating logic that belongs in common or shared Host federation helpers.
+- [ ] Task: Validate upstream request-stream support
+    - [ ] Run focused Host federation tests for the new upstream acquisition path.
+    - [ ] Run existing inbound federation tests to confirm compatibility.
+    - [ ] Record coverage result or justify any phase-specific coverage limitation.
+- [ ] Task: Commit and push Phase 2 before manual validation
+    - [ ] Commit Phase 2 changes with a scoped message.
+    - [ ] Push the phase commit to the track PR branch.
+    - [ ] Record the commit SHA and validation results in this plan.
+- [ ] Task: Conductor - User Manual Verification 'Phase 2: Upstream federation request-stream support' (Protocol in workflow.md)
+
+## Phase 3: Downstream Broker dispatch, redirects, and runtime validation
+
+- [ ] Task: Implement downstream Broker dispatch to imported upstream routes
+    - [ ] Connect route-local request handling to the upstream federation request-stream path for imported route candidates.
+    - [ ] Preserve local-first route behavior and existing route candidate ordering/fallback semantics.
+    - [ ] Ensure the issue #24 raw Host/Broker reproduction returns the upstream route response.
+- [ ] Task: Implement and validate native redirect flow across upstream routes
+    - [ ] Ensure a Broker request to an imported Manager route can receive and follow eligible native 307/308 redirects to advertised routes.
+    - [ ] Preserve method-preserving redirect behavior, hop limits, and replay-buffer safeguards.
+    - [ ] Confirm Manager coordinates routing without becoming the payload proxy for single-owner target routes when redirect-following applies.
+- [ ] Task: Validate implemented runtime surfaces
+    - [ ] Validate Node Host and Node Broker behavior directly.
+    - [ ] Validate Bun-facing Broker behavior where it exercises the shared Node transport path.
+    - [ ] Validate Python Broker behavior where practical, or document why direct validation is deferred and which shared protocol tests cover compatibility.
+- [ ] Task: Improve error clarity
+    - [ ] Update errors so unavailable upstream route candidates distinguish inbound federation misses from upstream-link unavailability.
+    - [ ] Include useful target route id/domain, next-hop host id, upstream id, direction, connection state, and request path context where available.
+    - [ ] Confirm error tests assert the improved context.
+- [ ] Task: Validate downstream dispatch phase
+    - [ ] Run the focused regression tests from Phase 1 and confirm they pass.
+    - [ ] Run existing Host federation, Broker redirect, Bun-facing, and Python Broker tests relevant to the changed behavior.
+    - [ ] Record coverage result or justify any runtime-specific coverage limitation.
+- [ ] Task: Commit and push Phase 3 before manual validation
+    - [ ] Commit Phase 3 changes with a scoped message.
+    - [ ] Push the phase commit to the track PR branch.
+    - [ ] Record the commit SHA and validation results in this plan.
+- [ ] Task: Conductor - User Manual Verification 'Phase 3: Downstream Broker dispatch, redirects, and runtime validation' (Protocol in workflow.md)
+
+## Phase 4: Finalization, documentation, and full validation
+
+- [ ] Task: Update documentation
+    - [ ] Update Host federation/request-routing docs to describe downstream-Broker-to-upstream-route dispatch.
+    - [ ] Document native 307/308 redirect behavior across imported upstream routes and any limits.
+    - [ ] Keep Host/Guest/Broker/Peer terminology precise and avoid unsupported runtime or HTTP/3 claims.
+- [ ] Task: Final deduplication and code review
+    - [ ] Review changed Host federation code for duplicated inbound/upstream request-routing logic.
+    - [ ] Move repeated protocol-neutral logic into existing common/shared helpers where appropriate.
+    - [ ] Confirm public APIs remain compatible and no unrelated Host/Guest/Broker behavior changed.
+- [ ] Task: Full validation pass
+    - [ ] Run `npm run lint`.
+    - [ ] Run `npm test` or narrower documented equivalents if full validation is not necessary.
+    - [ ] Run package staging, consumer, and tarball validations if package output or public behavior documentation changed.
+    - [ ] Record skipped validation, failures, or manual-only checks with reasons.
+- [ ] Task: Close issue and PR handoff readiness
+    - [ ] Confirm all acceptance criteria are met against GitHub issue #24.
+    - [ ] Ensure the PR body or comments summarize tests, validation, and any runtime-specific limitations.
+    - [ ] Reference issue #24 for closure once the PR merges.
+- [ ] Task: Commit and push Phase 4 before manual validation
+    - [ ] Commit Phase 4 changes with a scoped message.
+    - [ ] Push the phase commit to the track PR branch.
+    - [ ] Record the commit SHA and validation results in this plan.
+- [ ] Task: Conductor - User Manual Verification 'Phase 4: Finalization, documentation, and full validation' (Protocol in workflow.md)
