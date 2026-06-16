@@ -23,13 +23,14 @@
     - [x] Confirm the failure reproduces issue #24 or the expected missing upstream-dispatch behavior.
     - [x] Record coverage status as not yet applicable until implementation begins.
     - Validation: `npm run build && node --test test/host-upstreams.test.js` passed existing 24 tests and failed the 2 new regressions with `upstream-unavailable` for `guest-manager-upstream` and `guest-manager-redirect`, matching the issue #24 upstream-dispatch gap. Coverage is not applicable until implementation changes begin.
-- [~] Task: Commit and push Phase 1 before manual validation
+- [x] Task: Commit and push Phase 1 before manual validation
     - [x] Run `npm run lint` or the narrowest lint/docs validation needed for test-only changes.
-    - [ ] Commit Phase 1 changes with a scoped message.
-    - [ ] Push the phase commit to the track PR branch.
-    - [ ] Record the commit SHA and validation results in this plan.
+    - [x] Commit Phase 1 changes with a scoped message.
+    - [x] Push the phase commit to the track PR branch.
+    - [x] Record the commit SHA and validation results in this plan.
     - Validation: `npm run lint` initially found session-introduced formatting in the new tests; formatting was fixed and rerun successfully.
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: TDD regression tests and PR review surface' (Protocol in workflow.md)
+    - Phase 1 checkpoint commit: `a1a9981` pushed to `track/upstream-broker-dispatch_20260616`.
+- [~] Task: Conductor - User Manual Verification 'Phase 1: TDD regression tests and PR review surface' (Protocol in workflow.md)
 
 ## Phase 2: Upstream federation request-stream support
 
