@@ -22,7 +22,7 @@ test('package publish workflow is defined', () => {
   );
 });
 
-test('workflow supports pull request, main push, tag, and nightly triggers', () => {
+test('workflow supports broad pull request, main push, tag, nightly, and manual triggers', () => {
   const content = loadWorkflow();
   assert.match(content, /\non:\s*\n[\s\S]*?pull_request:/);
   assert.match(content, /pull_request:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
@@ -33,11 +33,11 @@ test('workflow supports pull request, main push, tag, and nightly triggers', () 
   assert.match(content, /push:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
   assert.match(content, /tags:\n[\s\S]*?-\s*'v\*'/);
   assert.match(content, /schedule:\n[\s\S]*?-\s*cron:/);
-  assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'packages\/\*\/src\/\*\*'/);
-  assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'docs\/release-procedure\.md'/);
-  assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'docs\/package-publishing\.md'/);
+  assert.match(content, /workflow_dispatch:/);
+  assert.match(content, /publish_npmjs:/);
+  assert.match(content, /npmjs_version:/);
+  assert.equal(/pull_request:[\s\S]*?paths:/.test(content), false);
   assert.equal(/push:[\s\S]*?paths:/.test(content), false);
-  assert.equal(/conductor\/\*\*/.test(content), false);
 });
 
 test('workflow detects package-affecting changes before validation or SHA publishing', () => {
@@ -48,6 +48,7 @@ test('workflow detects package-affecting changes before validation or SHA publis
   assert.match(content, /conductor-only/);
   assert.match(content, /docs-only/);
   assert.match(content, /github\.event\.before/);
+  assert.match(content, /workflow_dispatch/);
   assert.match(content, /git diff --name-only "\$BASE_SHA"/);
   assert.match(content, /docs\/release-procedure\.md/);
   assert.match(content, /docs\/package-publishing\.md/);
@@ -111,7 +112,7 @@ test('workflow reuses existing build outputs for source tests and lint in valida
   );
 });
 
-test('workflow applies package version policy and publishes to GitHub Packages', () => {
+test('workflow applies package version policy and preserves GitHub Packages publishing', () => {
   assertHas(
     /npm run package:version-policy -- --version/,
     'Expected package-version-policy to be part of publish flow.',
@@ -120,6 +121,22 @@ test('workflow applies package version policy and publishes to GitHub Packages',
     /npm publish --access restricted --tag .* --registry https:\/\/npm\.pkg\.github\.com/,
     'Expected npm publish to target npm.pkg.github.com.',
   );
+});
+
+test('workflow supports maintainer-gated npmjs publishing', () => {
+  const content = loadWorkflow();
+  assert.match(content, /npmjs-publish:/);
+  assert.match(content, /environment:\s*npmjs-release/);
+  assert.match(content, /github\.event_name\s*==\s*'workflow_dispatch'/);
+  assert.match(content, /inputs\.publish_npmjs\s*==\s*true/);
+  assert.match(content, /publishKind:\s*'manual-npmjs-candidate'/);
+  assert.match(content, /secrets\.NPM_TOKEN/);
+  assert.match(content, /id-token:\s*write/);
+  assert.match(
+    content,
+    /npm publish --access public --tag .* --registry https:\/\/registry\.npmjs\.org\//,
+  );
+  assert.match(content, /--provenance/);
 });
 
 test('workflow resolves publish kind for tag, merged PR SHA, and nightly publication', () => {
@@ -159,10 +176,10 @@ test('workflow never publishes packages from pull request runs', () => {
   assert.match(content, /Confirm validation job never publishes packages/);
 });
 
-test('workflow uses NODE_AUTH_TOKEN from GitHub secret and no npmjs publish', () => {
+test('workflow scopes GitHub and npmjs publish credentials separately', () => {
   const content = loadWorkflow();
   assert.match(content, /NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/);
-  assert.equal(/https:\/\/registry\.npmjs\.org/.test(content), false);
+  assert.match(content, /NODE_AUTH_TOKEN:\s*\$\{\{\s*secrets\.NPM_TOKEN\s*\}\}/);
 });
 
 test('workflow avoids commit of generated artifacts', () => {

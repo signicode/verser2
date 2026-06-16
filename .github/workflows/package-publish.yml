@@ -8,22 +8,6 @@ on:
       - opened
       - synchronize
       - reopened
-    paths:
-      - '.github/workflows/package-publish.yml'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'biome.json'
-      - 'biome.jsonc'
-      - 'tsconfig*.json'
-      - 'packages/*/package.json'
-      - 'packages/*/tsconfig*.json'
-      - 'packages/*/pyproject.toml'
-      - 'packages/*/src/**'
-      - 'packages/*/scripts/**'
-      - 'scripts/**'
-      - 'test/**'
-      - 'docs/release-procedure.md'
-      - 'docs/package-publishing.md'
   push:
     branches:
       - main
@@ -31,6 +15,22 @@ on:
       - 'v*'
   schedule:
     - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      publish_npmjs:
+        description: 'Publish staged JavaScript packages to npmjs.org after validation and environment approval.'
+        type: boolean
+        required: true
+        default: false
+      npmjs_version:
+        description: 'Exact semver version to publish to npmjs.org, for example 1.2.3 or 1.2.3-rc.1.'
+        type: string
+        required: true
+      npmjs_dry_run:
+        description: 'Run npm publish with --dry-run instead of publishing.'
+        type: boolean
+        required: true
+        default: true
 
 jobs:
   detect-package-changes:
@@ -55,6 +55,10 @@ jobs:
 
           if [ "$EVENT_NAME" = "pull_request" ]; then
             echo "change_type=package-affecting"
+            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "change_type=manual-release"
             echo "should_validate=true" >> "$GITHUB_OUTPUT"
             echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
           elif [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
@@ -330,3 +334,82 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm run test:package-consumers -- --source=github
+
+  npmjs-publish:
+    name: Publish to npmjs.org
+    runs-on: ubuntu-latest
+    needs: [detect-package-changes, package-validation]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_npmjs == true }}
+    environment: npmjs-release
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node for npmjs.org
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+          scope: '@signicode'
+          cache: npm
+
+      - name: Setup Python uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download validated package build output
+        uses: actions/download-artifact@v4
+        with:
+          name: package-build-output
+          path: .
+
+      - name: Resolve npmjs publish metadata
+        id: npmjs-metadata
+        env:
+          NPMJS_VERSION: ${{ inputs.npmjs_version }}
+        run: |
+          node <<'NODE' > "$GITHUB_OUTPUT"
+          const policy = require('./scripts/package-version-policy');
+          const version = process.env.NPMJS_VERSION;
+          const summary = policy.getPolicySummary({
+            version,
+            publishKind: 'manual-npmjs-candidate',
+          });
+
+          if (!summary.npmJsPublishAllowed) {
+            throw new Error('npmjs publishing is not allowed for this candidate');
+          }
+
+          console.log(`publish_version=${summary.computedVersion}`);
+          console.log(`dist_tag=${summary.distTag}`);
+          NODE
+
+      - name: Apply npmjs publish version to staged packages
+        run: |
+          npm run package:version-policy -- --version "${{ steps.npmjs-metadata.outputs.publish_version }}" --apply-staged
+
+      - name: Validate npmjs versioned staged packages
+        run: |
+          npm run test:package-consumers -- --source=staging
+          npm run test:package-consumers -- --source=tarball
+          npm run test:package-tarballs
+
+      - name: Publish staged packages to npmjs.org
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          publishFlags=""
+          if [ "${{ inputs.npmjs_dry_run }}" = "true" ]; then
+            publishFlags="--dry-run"
+          fi
+
+          for packageDirectory in dist/packages/*;
+          do
+            (cd "$packageDirectory" && npm publish --access public --tag "${{ steps.npmjs-metadata.outputs.dist_tag }}" --registry https://registry.npmjs.org/ --provenance $publishFlags)
+          done
