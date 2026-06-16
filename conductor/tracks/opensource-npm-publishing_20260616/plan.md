@@ -51,13 +51,14 @@ Phase 1 validation notes:
         - Added CodeQL for JavaScript/TypeScript and Python, guarded to run only when the repository is public because private-repository CodeQL requires GitHub Advanced Security unless maintainers enable it manually.
     - [x] Add dependency review for pull requests.
     - [x] Add secret scanning guidance/configuration such as Gitleaks or TruffleHog for local and CI use where practical.
+    - [x] Add external-contributor signoff enforcement with exemptions for `MichalCz` and an optional configured Signicode team.
 - [x] Task: Add GitHub collaboration templates
     - [x] Add CODEOWNERS for packages, scripts, docs, and workflows.
     - [x] Add pull request template with validation and checklist prompts.
     - [x] Add issue templates for bug reports, feature requests, and security-report redirection.
 - [x] Task: Validate governance and safeguards
     - [x] Run the narrowest applicable lint/format validation.
-        - Validation passed: `npm run lint`.
+        - Validation passed: `npm run lint`; exempt signoff path passed with `PR_AUTHOR=MichalCz ... node scripts/check-pr-signoffs.js`; non-exempt unsigned-commit rejection was confirmed with an expected-failure wrapper.
     - [x] Confirm docs and templates preserve Verser2 Host/Guest/Broker terminology and product boundaries.
         - Governance/template text keeps Host/Guest/Broker/Peer terminology explicit, redirects security reports out of public issues, and preserves unsupported-runtime and public-gateway boundaries.
     - [x] Record coverage as not applicable for behavior-neutral repository documentation/config changes.
@@ -69,10 +70,11 @@ Phase 2 validation notes:
 
 - Common libraries scanned: no common runtime libraries needed; phase was behavior-neutral governance/config/template work.
 - Deduplication result: not applicable; no repeated runtime code was added.
-- Validation: `npm run lint` passed.
+- Validation: `npm run lint` passed; signoff enforcement was checked for the exempt `MichalCz` path and the non-exempt unsigned-commit rejection path.
 - Coverage: not applicable for governance documents, repository safeguard configuration, and GitHub templates.
 - Review branch push: Phase 2 review state pushed to `track/opensource-npm-publishing_20260616` at commit `f173f18` before manual verification.
 - Phase checkpoint commit: pending manual verification.
+- Phase 2 review correction: added `scripts/check-pr-signoffs.js`, `.github/workflows/signoff.yml`, and governance/template notes requiring DCO-style `Signed-off-by` trailers for external contributors unless the PR comes from `MichalCz` or the configured Signicode maintainer team.
 
 ## Phase 3: Package metadata and staged manifest readiness
 
