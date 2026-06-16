@@ -1,0 +1,46 @@
+name: External Contributor Signoff
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  signoff:
+    name: Check DCO signoffs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check Signicode team membership
+        id: team
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          SIGNICODE_TEAM_SLUG: ${{ vars.SIGNICODE_DCO_EXEMPT_TEAM_SLUG }}
+        run: |
+          if [ -z "$SIGNICODE_TEAM_SLUG" ]; then
+            echo "exempt=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if gh api "/orgs/signicode/teams/$SIGNICODE_TEAM_SLUG/memberships/$PR_AUTHOR" >/dev/null 2>&1; then
+            echo "exempt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exempt=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check commit signoffs
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: origin/${{ github.base_ref }}
+          HEAD_REF: HEAD
+          DCO_EXEMPT_USERS: MichalCz
+          DCO_TEAM_EXEMPT: ${{ steps.team.outputs.exempt }}
+        run: node scripts/check-pr-signoffs.js

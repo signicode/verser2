@@ -60,6 +60,7 @@ npm run test:package-tarballs
 
 Before opening or updating a pull request:
 
+- External contributors must add a DCO-style signoff to each commit with `git commit --signoff` or `git commit -s`. Pull requests from `MichalCz` or the configured Signicode maintainer team are exempt.
 - Run the narrowest validation that proves the change.
 - Update docs when public behavior, package metadata, release workflow, or user-facing APIs change.
 - Confirm Host/Guest/Broker terminology is precise.

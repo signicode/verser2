@@ -11,6 +11,7 @@
 
 ## Checklist
 
+- [ ] External contributor commits include `Signed-off-by` trailers (`git commit -s`), or the author is `MichalCz` / configured Signicode maintainer team.
 - [ ] Tests or source references were updated before behavior/documentation changes.
 - [ ] Host/Guest/Broker/Peer terminology is precise.
 - [ ] Unsupported HTTP/3, browser, Rust, Go, Java, and Python Host behavior is not described as implemented.
