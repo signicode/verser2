@@ -113,6 +113,15 @@ Phase 2 validation notes:
 - [~] Task: Conductor - User Manual Verification 'Phase 3: Package metadata and staged manifest readiness' (Protocol in workflow.md)
     - [ ] Maintainer manually verifies Phase 3 package metadata and staged manifest readiness before Phase 4 begins.
 
+Phase 3 validation notes:
+
+- Common libraries scanned: no common runtime libraries needed; phase changed package metadata, staging, and release policy only.
+- Deduplication result: staging metadata behavior remains centralized in `scripts/stage-packages.js`; version/dist-tag policy remains centralized in `scripts/package-version-policy.js`.
+- Validation: `node --test test/package-publish-readiness.test.js`; `node --test test/package-version-policy.test.js`; `npm run build`; `npm run stage:packages`; `npm run test:package-consumers -- --source=staging`; `npm run test:package-consumers -- --source=tarball`; `npm run test:package-tarballs`; `npm run lint` all passed.
+- Coverage: not applicable to metadata/release-policy assertions; staged package import and tarball behavior validation passed.
+- Review branch push: Phase 3 review state pushed to `track/opensource-npm-publishing_20260616` at commit `728014a` before manual verification.
+- Phase checkpoint commit: pending manual verification.
+
 ## Phase 4: CI and dual-registry release workflow
 
 - [ ] Task: Split or refine pull request CI
