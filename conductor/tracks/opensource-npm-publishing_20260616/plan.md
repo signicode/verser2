@@ -1,0 +1,108 @@
+# Implementation Plan: Open source readiness and full npm publishing
+
+## Phase 1: Safety inventory and release-surface audit
+
+- [ ] Task: Create track branch and PR review surface
+    - [ ] Create a dedicated Conductor track branch before implementation work.
+    - [ ] Create a GitHub pull request whose title and body describe the final TO-BE open-source and dual-registry publishing state.
+    - [ ] Record the PR link in this plan.
+- [ ] Task: Source-of-truth inventory
+    - [ ] Review `docs/opensource-checklist.md`, `docs/package-publishing.md`, `docs/release-procedure.md`, package manifests, `scripts/`, and `.github/workflows/`.
+    - [ ] Record source references for existing publish behavior, package staging, package testing, and release constraints.
+    - [ ] Confirm this phase is behavior-neutral documentation/release-tooling inventory and record coverage as not applicable.
+- [ ] Task: Safety and sensitivity review
+    - [ ] Run or document a full-history secret scanning command appropriate for maintainers.
+    - [ ] Review tracked test TLS fixtures and document why they are safe test-only materials or identify required remediation.
+    - [ ] Review `conductor/`, `opencode.jsonc`, `.slim/`, workflows, and scripts for internal-only or sensitive content.
+    - [ ] Document manual repository visibility and credential-rotation gates.
+- [ ] Task: Conductor - User Manual Verification 'Phase 1: Safety inventory and release-surface audit' (Protocol in workflow.md)
+
+## Phase 2: Governance and repository safeguard files
+
+- [ ] Task: Write contributor governance documents
+    - [ ] Add `CONTRIBUTING.md` with setup, npm/uv commands, TDD workflow, PR expectations, and package terminology.
+    - [ ] Add `SECURITY.md` with supported versions, vulnerability reporting, and disclosure expectations.
+    - [ ] Add `CODE_OF_CONDUCT.md` using a standard public collaboration baseline.
+    - [ ] Add `NOTICE` only if license review requires it; otherwise record that no extra notice file is currently required.
+- [ ] Task: Add repository safeguard configuration
+    - [ ] Add Dependabot configuration for npm and GitHub Actions.
+    - [ ] Add CodeQL or equivalent static-analysis workflow for TypeScript/JavaScript and Python where practical.
+    - [ ] Add dependency review for pull requests.
+    - [ ] Add secret scanning guidance/configuration such as Gitleaks or TruffleHog for local and CI use where practical.
+- [ ] Task: Add GitHub collaboration templates
+    - [ ] Add CODEOWNERS for packages, scripts, docs, and workflows.
+    - [ ] Add pull request template with validation and checklist prompts.
+    - [ ] Add issue templates for bug reports, feature requests, and security-report redirection.
+- [ ] Task: Validate governance and safeguards
+    - [ ] Run the narrowest applicable lint/format validation.
+    - [ ] Confirm docs and templates preserve Verser2 Host/Guest/Broker terminology and product boundaries.
+    - [ ] Record coverage as not applicable for behavior-neutral repository documentation/config changes.
+- [ ] Task: Conductor - User Manual Verification 'Phase 2: Governance and repository safeguard files' (Protocol in workflow.md)
+
+## Phase 3: Package metadata and staged manifest readiness
+
+- [ ] Task: Update public package metadata test-first
+    - [ ] Add or update package-manifest tests that assert publishable workspace packages expose required `repository`, `homepage`, `bugs`, `keywords`, `engines`, license, entrypoint, and public publish metadata.
+    - [ ] Confirm the tests fail before manifest changes where current metadata is missing.
+- [ ] Task: Update JavaScript package manifests
+    - [ ] Preserve root `package.json` as a private workspace aggregator.
+    - [ ] Remove package-level `private: true` from publishable JavaScript workspace packages.
+    - [ ] Add public package metadata and `publishConfig` for npmjs.org public access.
+    - [ ] Confirm package dependency versions remain aligned across workspaces.
+- [ ] Task: Review Python package distribution metadata
+    - [ ] Add `project.urls` metadata to `packages/verser2-guest-python/pyproject.toml` if appropriate.
+    - [ ] Keep PyPI publishing out of scope unless a later manual scope decision changes it.
+    - [ ] Ensure the npm wrapper/package role for Python remains clearly documented.
+- [ ] Task: Update staging and package version policy
+    - [ ] Review `scripts/stage-packages.js` to ensure staged package manifests are suitable for npmjs.org public packages and GitHub Packages previews.
+    - [ ] Update `scripts/package-version-policy.js` so npmjs.org publishing is intentionally allowed with stable/prerelease dist-tag safeguards.
+    - [ ] Add or update tests for staged manifest output and version policy behavior.
+- [ ] Task: Validate package metadata phase
+    - [ ] Run focused manifest/version-policy tests.
+    - [ ] Run `npm run build` and `npm run stage:packages` if staging logic changed.
+    - [ ] Run package consumer and tarball checks if staged package behavior changed.
+    - [ ] Record coverage result or explain why coverage is not applicable to metadata-only assertions.
+- [ ] Task: Conductor - User Manual Verification 'Phase 3: Package metadata and staged manifest readiness' (Protocol in workflow.md)
+
+## Phase 4: CI and dual-registry release workflow
+
+- [ ] Task: Split or refine pull request CI
+    - [ ] Add an always-on or broadly-triggered PR validation workflow for build, lint, tests, staging, consumer checks, and tarball checks.
+    - [ ] Ensure docs, governance, workflow, and package metadata changes are not skipped by overly narrow path filters.
+    - [ ] Keep all pull request workflows non-publishing.
+- [ ] Task: Add safe npmjs.org release path
+    - [ ] Add or update release workflow steps for npmjs.org publication with manual environment gates, least-privilege permissions, and explicit token/trusted-publishing setup.
+    - [ ] Preserve GitHub Packages publishing for preview/internal builds.
+    - [ ] Ensure tag and `main` push behavior cannot accidentally publish public npm packages without the intended release gate.
+- [ ] Task: Test workflow and release scripts
+    - [ ] Add or update tests that inspect workflow trigger and permission expectations where practical.
+    - [ ] Validate package version policy and publish metadata generation for stable, prerelease, main-build, GitHub Packages, and npmjs.org cases.
+    - [ ] Document any workflow behavior that must be manually verified in GitHub.
+- [ ] Task: Validate workflow phase
+    - [ ] Run focused workflow/script tests.
+    - [ ] Run `npm run lint`.
+    - [ ] Run broader package validation if workflow/script changes affect staging or publication.
+    - [ ] Record coverage result or explain why coverage is not applicable to workflow-only assertions.
+- [ ] Task: Conductor - User Manual Verification 'Phase 4: CI and dual-registry release workflow' (Protocol in workflow.md)
+
+## Phase 5: Documentation, checklist closure, and final validation
+
+- [ ] Task: Update public open-source documentation
+    - [ ] Update `docs/opensource-checklist.md` to mark completed automated work and preserve remaining manual gates.
+    - [ ] Update `docs/package-publishing.md` for dual-registry publishing, npmjs.org setup, GitHub Packages previews, and manual release controls.
+    - [ ] Update `docs/release-procedure.md` for first public release and maintainer-run final publish steps.
+    - [ ] Update README/package README content only where needed for public package consumption or status badges.
+- [ ] Task: Product-boundary documentation review
+    - [ ] Confirm docs do not imply complete public gateway behavior.
+    - [ ] Confirm unsupported HTTP/3, browser, Rust, Go, Java, and Python Host behavior remain roadmap/non-goal items.
+    - [ ] Confirm Host/Guest/Broker/Peer terminology remains precise.
+- [ ] Task: Full validation pass
+    - [ ] Run `npm run lint`.
+    - [ ] Run `npm test` or the documented narrower equivalent if a full run is not necessary.
+    - [ ] Run package consumer and tarball validations for staged packages.
+    - [ ] Record skipped validation, failures, or manual GitHub-only checks with reasons.
+- [ ] Task: Final review and handoff
+    - [ ] Review all acceptance criteria against the approved specification.
+    - [ ] Record remaining manual GitHub settings, secret setup, visibility change, and first-public-publish steps.
+    - [ ] Request final maintainer manual verification before completing the track.
+- [ ] Task: Conductor - User Manual Verification 'Phase 5: Documentation, checklist closure, and final validation' (Protocol in workflow.md)
