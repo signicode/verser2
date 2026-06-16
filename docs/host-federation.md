@@ -1,8 +1,9 @@
 # Host federation and upstreams
 
 Host federation lets one Verser2 Host connect outbound to another Host over TLS
-HTTP/2. The connected Hosts exchange route availability, and an upstream Host can
-forward Broker requests to a Guest that is attached to a downstream Host.
+HTTP/2. The connected Hosts exchange route availability, and either side can
+route Broker requests to eligible imported route candidates over the federated
+Host link.
 
 This is route-aware Host-to-Host federation. It is not generic L4 tunneling or
 HTTP/2 CONNECT tunneling.
@@ -26,6 +27,9 @@ runner Host ───────────┘
 - Brokers still receive the legacy `{ domain, targetId }` route shape.
 - Request bodies and response bodies are streamed; ordinary forwarded requests do
   not require full-body buffering.
+- A Broker connected to the upstream Host can reach a downstream Guest route, and
+  a Broker connected to the downstream Host can reach routes imported from the
+  upstream Host.
 
 ## Minimal upstream setup
 
@@ -122,6 +126,48 @@ const response = await broker.request({
 The Broker connects only to the manager Host. The manager selects the imported
 route candidate and forwards the request over the federated Host link to the
 runner Host, which dispatches it to the Guest.
+
+## Broker reaching an upstream route
+
+The reverse request direction is also supported. A Broker connected to a
+downstream Host can request a route imported from the upstream Host:
+
+```txt
+Broker ──▶ runner Host ──upstream link──▶ manager Host ──▶ Guest: manager-api.internal
+```
+
+```ts
+await runner.connectUpstream({
+  upstreamId: 'manager',
+  url: 'https://manager.internal:8443',
+  tls: { caFile: '/etc/verser/manager-ca.crt' },
+});
+
+const broker = createVerserBroker({
+  hostUrl: 'https://runner.internal:8443',
+  brokerId: 'broker-runner',
+  tls: { caFile: '/etc/verser/runner-ca.crt' },
+});
+await broker.connect();
+await broker.waitForRoute('manager-api.internal');
+
+const response = await broker.request({
+  targetId: 'guest-manager-api',
+  method: 'POST',
+  path: '/jobs',
+  headers: { host: 'manager-api.internal' },
+  body: [Buffer.from('payload')],
+});
+```
+
+The downstream Host opens a one-shot federated request stream over its existing
+upstream link for the selected imported candidate. Existing inbound federation
+request streams continue to handle upstream-to-downstream requests.
+
+Node and Bun-facing Brokers can also follow native `307`/`308` redirects across
+advertised imported routes. For example, a manager route can return
+`308 Location: http://target-runner.internal/final`, and the Broker will replay
+the request to the advertised target route when its redirect safeguards allow it.
 
 ## Runner -> hub -> manager topology
 

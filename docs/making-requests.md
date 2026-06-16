@@ -1,6 +1,7 @@
 # Making requests
 
-A Broker sends requests to advertised Guest routes through the Host.
+A Broker sends requests to advertised Guest routes through the Host. Advertised
+routes can be local to that Host or imported through Host federation.
 
 ## Broker versus public gateway
 
@@ -84,6 +85,8 @@ route. Redirect targets are resolved through the Broker route table, not DNS, an
 the original method, headers, path/query semantics, and replayable request body
 are preserved. This applies to direct `broker.request()`, Agent-backed
 `node:http` requests, and Dispatcher/fetch requests that use the Node Broker.
+The advertised redirect target can be a local route or an imported federated
+route, including routes imported by a downstream Host from its upstream Host.
 
 Redirect following is bounded. `maxInternalRedirects` defaults to `3`, and
 `internalRedirectReplayBufferBytes` defaults to `16 KiB`:
