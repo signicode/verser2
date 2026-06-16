@@ -22,7 +22,19 @@ export class VerserBrokerDispatcher extends Dispatcher {
     handler: Dispatcher.DispatchHandler,
   ): boolean {
     const controller = new VerserDispatchController(handler);
-    handler.onRequestStart?.(controller, options.origin ?? null);
+    if (
+      !controller.invoke(() => {
+        if (handler.onRequestStart !== undefined) {
+          handler.onRequestStart(controller, options.origin ?? null);
+          return;
+        }
+        handler.onConnect?.((error?: Error) => {
+          controller.abort(error ?? new Error('Verser Dispatcher request aborted'));
+        });
+      })
+    ) {
+      return true;
+    }
 
     if (options.upgrade !== undefined && options.upgrade !== null && options.upgrade !== false) {
       process.nextTick(() => {
@@ -32,7 +44,7 @@ export class VerserBrokerDispatcher extends Dispatcher {
     }
 
     this.dispatchAsync(options, handler, controller).catch((error: unknown) => {
-      controller.fail(error instanceof Error ? error : new Error(String(error)));
+      controller.failFromUnknown(error);
     });
     return true;
   }
@@ -66,23 +78,64 @@ export class VerserBrokerDispatcher extends Dispatcher {
     controller.attachResponseBody(response.body);
     controller.rawHeaders = toRawHeaderList(response.headers);
     response.body.pause();
-    handler.onResponseStarted?.();
-    handler.onResponseStart?.(
-      controller,
-      response.statusCode,
-      response.headers,
-      http.STATUS_CODES[response.statusCode] ?? '',
-    );
+    if (!controller.invoke(() => handler.onResponseStarted?.())) {
+      response.body.destroy(controller.reason ?? undefined);
+      return;
+    }
+    if (
+      !controller.invoke(() => {
+        if (handler.onResponseStart !== undefined) {
+          handler.onResponseStart(
+            controller,
+            response.statusCode,
+            response.headers,
+            http.STATUS_CODES[response.statusCode] ?? '',
+          );
+          return;
+        }
+        const shouldContinue = handler.onHeaders?.(
+          response.statusCode,
+          toRawHeaderList(response.headers),
+          () => controller.resume(),
+          http.STATUS_CODES[response.statusCode] ?? '',
+        );
+        if (shouldContinue === false) {
+          controller.pause();
+        }
+      })
+    ) {
+      response.body.destroy(controller.reason ?? undefined);
+      return;
+    }
     response.body.on('data', (chunk: Buffer | string) => {
       if (controller.aborted) {
         return;
       }
-      handler.onResponseData?.(controller, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (
+        !controller.invoke(() => {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          if (handler.onResponseData !== undefined) {
+            handler.onResponseData(controller, buffer);
+            return;
+          }
+          if (handler.onData?.(buffer) === false) {
+            controller.pause();
+          }
+        })
+      ) {
+        response.body.destroy(controller.reason ?? undefined);
+      }
     });
     response.body.once('end', () => {
       if (!controller.aborted) {
         controller.rawTrailers = [];
-        handler.onResponseEnd?.(controller, {});
+        controller.invoke(() => {
+          if (handler.onResponseEnd !== undefined) {
+            handler.onResponseEnd(controller, {});
+            return;
+          }
+          handler.onComplete?.([]);
+        });
       }
       response.body.destroy();
     });

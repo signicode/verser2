@@ -41,6 +41,6 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           BASE_REF: origin/${{ github.base_ref }}
           HEAD_REF: HEAD
-          DCO_EXEMPT_USERS: MichalCz
+          DCO_EXEMPT_USERS: MichalCz,dependabot[bot]
           DCO_TEAM_EXEMPT: ${{ steps.team.outputs.exempt }}
         run: node scripts/check-pr-signoffs.js

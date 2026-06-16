@@ -65,15 +65,33 @@ export class VerserDispatchController {
       return;
     }
     this.errorEmitted = true;
-    this.handler.onResponseError?.(this, error);
+    if (this.handler.onResponseError !== undefined) {
+      this.handler.onResponseError(this, error);
+      return;
+    }
+    this.handler.onError?.(error);
+  }
+
+  public failFromUnknown(error: unknown): void {
+    this.fail(error instanceof Error ? error : new Error(String(error)));
+  }
+
+  public invoke(callback: () => void): boolean {
+    try {
+      callback();
+      return true;
+    } catch (error) {
+      this.failFromUnknown(error);
+      return false;
+    }
   }
 
   public emitBodySent(chunk: Buffer): void {
     this.totalBytesSent += chunk.byteLength;
-    this.handler.onBodySent?.(chunk);
+    this.handler.onBodySent?.(chunk.byteLength, this.totalBytesSent);
   }
 
   public emitRequestSent(): void {
-    this.handler.onRequestSent?.();
+    // Undici 7 has no request-sent callback; body progress is reported through onBodySent.
   }
 }
