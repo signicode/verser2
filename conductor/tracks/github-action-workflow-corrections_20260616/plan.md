@@ -2,7 +2,7 @@
 
 ## Phase 1: Track branch, PR surface, and workflow behavior inventory
 
-- [ ] Task: Create track branch and PR review surface
+- [~] Task: Create track branch and PR review surface
     - [ ] Record the current branch as the PR base before creating the track branch.
     - [ ] Create a dedicated Conductor track branch from the current branch before implementation work.
     - [ ] Create a GitHub pull request using `gh` with a title/body describing the TO-BE workflow behavior: relevant PRs validate, merged source PRs publish SHA builds, nightly runs publish nightly builds, GitHub tags publish channel releases, and npmjs remains manual.

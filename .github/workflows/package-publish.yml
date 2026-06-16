@@ -4,6 +4,10 @@ on:
   pull_request:
     branches:
       - main
+    types:
+      - opened
+      - synchronize
+      - reopened
     paths:
       - '.github/workflows/package-publish.yml'
       - 'package.json'
@@ -18,16 +22,110 @@ on:
       - 'packages/*/scripts/**'
       - 'scripts/**'
       - 'test/**'
+      - 'docs/release-procedure.md'
+      - 'docs/package-publishing.md'
   push:
     branches:
       - main
     tags:
       - 'v*'
+  schedule:
+    - cron: '0 6 * * *'
 
 jobs:
+  detect-package-changes:
+    name: Detect package-affecting changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_validate: ${{ steps.check.outputs.should_validate }}
+      should_publish_sha: ${{ steps.check.outputs.should_publish_sha }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changes
+        id: check
+        run: |
+          EVENT_NAME="${{ github.event_name }}"
+          REF_TYPE="${{ github.ref_type }}"
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "change_type=package-affecting"
+            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            echo "change_type=package-affecting"
+            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "schedule" ]; then
+            echo "change_type=package-affecting"
+            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+            echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              BASE_SHA="HEAD^"
+            fi
+            CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}" 2>/dev/null || echo "")
+            PACKAGE_AFFECTING=false
+            RELEASE_DOCS=false
+            CONDUCTOR_ONLY=true
+            OTHER_CHANGES=false
+
+            for file in $CHANGED_FILES; do
+              case "$file" in
+                .github/workflows/package-publish.yml | packages/* | scripts/* | test/* | package.json | package-lock.json | tsconfig*.json | biome*)
+                  PACKAGE_AFFECTING=true
+                  CONDUCTOR_ONLY=false
+                  ;;
+                docs/release-procedure.md | docs/package-publishing.md)
+                  RELEASE_DOCS=true
+                  CONDUCTOR_ONLY=false
+                  ;;
+                conductor/*)
+                  ;;
+                docs/*)
+                  CONDUCTOR_ONLY=false
+                  ;;
+                *)
+                  CONDUCTOR_ONLY=false
+                  OTHER_CHANGES=true
+                  ;;
+              esac
+            done
+
+            if [ "$PACKAGE_AFFECTING" = "true" ]; then
+              echo "change_type=package-affecting"
+              echo "should_validate=true" >> "$GITHUB_OUTPUT"
+              echo "should_publish_sha=true" >> "$GITHUB_OUTPUT"
+            elif [ "$RELEASE_DOCS" = "true" ]; then
+              echo "change_type=release-docs"
+              echo "should_validate=true" >> "$GITHUB_OUTPUT"
+              echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
+            elif [ "$CONDUCTOR_ONLY" = "true" ]; then
+              echo "change_type=conductor-only"
+              echo "should_validate=false" >> "$GITHUB_OUTPUT"
+              echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
+            elif [ "$OTHER_CHANGES" = "true" ]; then
+              echo "change_type=package-affecting"
+              echo "should_validate=true" >> "$GITHUB_OUTPUT"
+              echo "should_publish_sha=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "change_type=docs-only"
+              echo "should_validate=false" >> "$GITHUB_OUTPUT"
+              echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
   package-validation:
     name: Build, stage, pack, and consume without publishing
     runs-on: ubuntu-latest
+    needs: detect-package-changes
+    if: ${{ needs.detect-package-changes.outputs.should_validate == 'true' }}
     permissions:
       contents: read
 
@@ -81,8 +179,8 @@ jobs:
   package-publish:
     name: Publish to GitHub Packages
     runs-on: ubuntu-latest
-    needs: package-validation
-    if: github.event_name != 'pull_request' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [detect-package-changes, package-validation]
+    if: ${{ github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || needs.detect-package-changes.outputs.should_publish_sha == 'true') }}
     permissions:
       contents: write
       packages: write
@@ -114,6 +212,22 @@ jobs:
       - name: Resolve publish version and dist-tag
         id: publish-metadata
         run: |
+          # Determine publish kind based on trigger
+          publishKind=""
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            publishKind="tag-release"
+            echo "publish_kind=tag-release"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            publishKind="nightly"
+            echo "publish_kind=nightly"
+          elif [ "${{ needs.detect-package-changes.outputs.should_publish_sha == 'true' }}" = "true" ]; then
+            publishKind="merged-pr-sha"
+            echo "publish_kind=merged-pr-sha"
+          fi
+
+          echo '--publish-kind "${publishKind}"'
+          export PUBLISH_KIND="${publishKind}"
+
           node <<'NODE' > "$GITHUB_OUTPUT"
           const fs = require('node:fs');
           const path = require('node:path');
@@ -121,35 +235,35 @@ jobs:
 
           const refType = process.env.GITHUB_REF_TYPE;
           const refName = process.env.GITHUB_REF_NAME;
-          const sourceVersion = JSON.parse(
-            fs.readFileSync(
-              path.join(process.cwd(), 'packages', 'verser-common', 'package.json'),
-              'utf8',
-            ),
-          ).version;
+          const sha = process.env.GITHUB_SHA;
+          const publishKind = process.env.PUBLISH_KIND || '';
+          const nightlyDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
-          let publishVersion;
-          let distTag = 'next';
-
+          let sourceVersion;
           if (refType === 'tag') {
-            const inputVersion = refName.startsWith('v') ? refName.slice(1) : refName;
-            const summary = policy.getPolicySummary({ version: inputVersion });
-            publishVersion = summary.computedVersion;
-            distTag = summary.distTag;
+            sourceVersion = refName.startsWith('v') ? refName.slice(1) : refName;
           } else {
-            const summary = policy.getPolicySummary({
-              version: sourceVersion,
-              mainBuild: true,
-              sha: process.env.GITHUB_SHA,
-            });
-            publishVersion = summary.computedVersion;
+            sourceVersion = JSON.parse(
+              fs.readFileSync(
+                path.join(process.cwd(), 'packages', 'verser-common', 'package.json'),
+                'utf8',
+              ),
+            ).version;
           }
 
+          const summary = policy.getPolicySummary({
+            version: sourceVersion,
+            publishKind: publishKind || undefined,
+            sha,
+            nightlyDate,
+          });
+
+          const publishVersion = summary.computedVersion;
           console.log(`publish_version=${publishVersion}`);
           console.log(`python_version=${policy.toPythonVersion(publishVersion)}`);
-          console.log(`dist_tag=${distTag}`);
+          console.log(`dist_tag=${summary.distTag}`);
           NODE
-          
+
         env:
           GITHUB_REF_TYPE: ${{ github.ref_type }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
