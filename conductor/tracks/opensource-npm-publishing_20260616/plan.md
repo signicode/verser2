@@ -125,24 +125,32 @@ Phase 3 validation notes:
 
 ## Phase 4: CI and dual-registry release workflow
 
-- [ ] Task: Split or refine pull request CI
-    - [ ] Add an always-on or broadly-triggered PR validation workflow for build, lint, tests, staging, consumer checks, and tarball checks.
-    - [ ] Ensure docs, governance, workflow, and package metadata changes are not skipped by overly narrow path filters.
-    - [ ] Keep all pull request workflows non-publishing.
-- [ ] Task: Add safe npmjs.org release path
-    - [ ] Add or update release workflow steps for npmjs.org publication with manual environment gates, least-privilege permissions, and explicit token/trusted-publishing setup.
-    - [ ] Preserve GitHub Packages publishing for preview/internal builds.
-    - [ ] Ensure tag and `main` push behavior cannot accidentally publish public npm packages without the intended release gate.
-- [ ] Task: Test workflow and release scripts
-    - [ ] Add or update tests that inspect workflow trigger and permission expectations where practical.
-    - [ ] Validate package version policy and publish metadata generation for stable, prerelease, main-build, GitHub Packages, and npmjs.org cases.
-    - [ ] Document any workflow behavior that must be manually verified in GitHub.
-- [ ] Task: Validate workflow phase
-    - [ ] Run focused workflow/script tests.
-    - [ ] Run `npm run lint`.
-    - [ ] Run broader package validation if workflow/script changes affect staging or publication.
-    - [ ] Record coverage result or explain why coverage is not applicable to workflow-only assertions.
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: CI and dual-registry release workflow' (Protocol in workflow.md)
+- [x] Task: Split or refine pull request CI
+    - [x] Add an always-on or broadly-triggered PR validation workflow for build, lint, tests, staging, consumer checks, and tarball checks.
+    - [x] Ensure docs, governance, workflow, and package metadata changes are not skipped by overly narrow path filters.
+        - Removed pull-request path filters from `.github/workflows/package-publish.yml` so governance, docs, workflow, and package metadata pull requests receive validation.
+    - [x] Keep all pull request workflows non-publishing.
+- [x] Task: Add safe npmjs.org release path
+    - [x] Add or update release workflow steps for npmjs.org publication with manual environment gates, least-privilege permissions, and explicit token/trusted-publishing setup.
+        - Added `workflow_dispatch` npmjs inputs and `npmjs-publish` job gated by `publish_npmjs: true`, the `npmjs-release` environment, `NPM_TOKEN`, and `id-token: write` for trusted publishing/provenance.
+    - [x] Preserve GitHub Packages publishing for preview/internal builds.
+    - [x] Ensure tag and `main` push behavior cannot accidentally publish public npm packages without the intended release gate.
+        - npmjs publication only runs on manual `workflow_dispatch` when `publish_npmjs` is true; `main`, tag, and nightly paths continue to target GitHub Packages only.
+- [x] Task: Test workflow and release scripts
+    - [x] Add or update tests that inspect workflow trigger and permission expectations where practical.
+    - [x] Validate package version policy and publish metadata generation for stable, prerelease, main-build, GitHub Packages, and npmjs.org cases.
+    - [x] Document any workflow behavior that must be manually verified in GitHub.
+        - Manual GitHub verification needed: configure `npmjs-release` environment required reviewers; configure `NPM_TOKEN` or npm trusted publishing; confirm dry-run workflow dispatch before first real npmjs publish.
+- [x] Task: Validate workflow phase
+    - [x] Run focused workflow/script tests.
+        - Passed: `node --test test/package-workflow.test.js`, `node --test test/package-version-policy.test.js`, and `node --test test/package-publish-readiness.test.js`.
+    - [x] Run `npm run lint`.
+    - [x] Run broader package validation if workflow/script changes affect staging or publication.
+        - Broader package staging/consumer/tarball validation was already run in Phase 3 after staging behavior changed; Phase 4 changed workflow YAML and workflow tests only.
+    - [x] Record coverage result or explain why coverage is not applicable to workflow-only assertions.
+        - Coverage: not applicable to workflow YAML assertions; workflow behavior is covered by static tests and package metadata/version-policy tests.
+- [~] Task: Conductor - User Manual Verification 'Phase 4: CI and dual-registry release workflow' (Protocol in workflow.md)
+    - [ ] Maintainer manually verifies Phase 4 workflow behavior on the pushed review branch before Phase 5 begins.
 
 ## Phase 5: Documentation, checklist closure, and final validation
 
