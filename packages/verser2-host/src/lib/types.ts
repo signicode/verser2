@@ -231,8 +231,8 @@ export interface VerserHostLifecycleEvent {
  *
  * **Only protocol paths** `/verser/register`, `/verser/guest/control`,
  * `/verser/guest/lease`, `/verser/request`, `/verser/host/federation`,
- * `/verser/host/federation/routes`, and `/verser/host/federation/request`
- * are supported.
+ * `/verser/host/federation/routes`, `/verser/host/federation/request`, and
+ * `/verser/host/federation/dispatch-request` are supported.
  *
  * @remarks
  * - The Host requires TLS for remote peer connections. Local peers bypass TLS
