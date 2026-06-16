@@ -1,0 +1,40 @@
+name: Bug report
+description: Report reproducible Verser2 behavior that does not match documentation or expected semantics.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security vulnerabilities, do not open a public issue. Follow SECURITY.md.
+  - type: input
+    id: package
+    attributes:
+      label: Package or area
+      description: Host, Guest, Broker, docs, release tooling, or package name.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include minimal code, commands, and logs where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Node, npm, Bun, Python, OS, and package versions.

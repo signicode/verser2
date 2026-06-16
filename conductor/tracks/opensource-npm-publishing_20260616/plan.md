@@ -39,25 +39,31 @@ Phase 1 validation notes:
 
 ## Phase 2: Governance and repository safeguard files
 
-- [ ] Task: Write contributor governance documents
-    - [ ] Add `CONTRIBUTING.md` with setup, npm/uv commands, TDD workflow, PR expectations, and package terminology.
-    - [ ] Add `SECURITY.md` with supported versions, vulnerability reporting, and disclosure expectations.
-    - [ ] Add `CODE_OF_CONDUCT.md` using a standard public collaboration baseline.
-    - [ ] Add `NOTICE` only if license review requires it; otherwise record that no extra notice file is currently required.
-- [ ] Task: Add repository safeguard configuration
-    - [ ] Add Dependabot configuration for npm and GitHub Actions.
-    - [ ] Add CodeQL or equivalent static-analysis workflow for TypeScript/JavaScript and Python where practical.
-    - [ ] Add dependency review for pull requests.
-    - [ ] Add secret scanning guidance/configuration such as Gitleaks or TruffleHog for local and CI use where practical.
-- [ ] Task: Add GitHub collaboration templates
-    - [ ] Add CODEOWNERS for packages, scripts, docs, and workflows.
-    - [ ] Add pull request template with validation and checklist prompts.
-    - [ ] Add issue templates for bug reports, feature requests, and security-report redirection.
-- [ ] Task: Validate governance and safeguards
-    - [ ] Run the narrowest applicable lint/format validation.
-    - [ ] Confirm docs and templates preserve Verser2 Host/Guest/Broker terminology and product boundaries.
-    - [ ] Record coverage as not applicable for behavior-neutral repository documentation/config changes.
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Governance and repository safeguard files' (Protocol in workflow.md)
+- [x] Task: Write contributor governance documents
+    - [x] Add `CONTRIBUTING.md` with setup, npm/uv commands, TDD workflow, PR expectations, and package terminology.
+    - [x] Add `SECURITY.md` with supported versions, vulnerability reporting, and disclosure expectations.
+    - [x] Add `CODE_OF_CONDUCT.md` using a standard public collaboration baseline.
+    - [x] Add `NOTICE` only if license review requires it; otherwise record that no extra notice file is currently required.
+        - No `NOTICE` file is currently required: repository sources are MIT licensed, no bundled third-party source/assets requiring extra attribution were identified in this phase, and dependency licenses remain referenced through package lock metadata rather than vendored code.
+- [x] Task: Add repository safeguard configuration
+    - [x] Add Dependabot configuration for npm and GitHub Actions.
+    - [x] Add CodeQL or equivalent static-analysis workflow for TypeScript/JavaScript and Python where practical.
+        - Added CodeQL for JavaScript/TypeScript and Python, guarded to run only when the repository is public because private-repository CodeQL requires GitHub Advanced Security unless maintainers enable it manually.
+    - [x] Add dependency review for pull requests.
+    - [x] Add secret scanning guidance/configuration such as Gitleaks or TruffleHog for local and CI use where practical.
+- [x] Task: Add GitHub collaboration templates
+    - [x] Add CODEOWNERS for packages, scripts, docs, and workflows.
+    - [x] Add pull request template with validation and checklist prompts.
+    - [x] Add issue templates for bug reports, feature requests, and security-report redirection.
+- [x] Task: Validate governance and safeguards
+    - [x] Run the narrowest applicable lint/format validation.
+        - Validation passed: `npm run lint`.
+    - [x] Confirm docs and templates preserve Verser2 Host/Guest/Broker terminology and product boundaries.
+        - Governance/template text keeps Host/Guest/Broker/Peer terminology explicit, redirects security reports out of public issues, and preserves unsupported-runtime and public-gateway boundaries.
+    - [x] Record coverage as not applicable for behavior-neutral repository documentation/config changes.
+        - Coverage: not applicable; Phase 2 added governance docs, repository safeguard configuration, and GitHub templates only.
+- [~] Task: Conductor - User Manual Verification 'Phase 2: Governance and repository safeguard files' (Protocol in workflow.md)
+    - [ ] Maintainer manually verifies Phase 2 governance and safeguard files before Phase 3 begins.
 
 ## Phase 3: Package metadata and staged manifest readiness
 

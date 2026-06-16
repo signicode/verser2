@@ -1,0 +1,10 @@
+title = "Verser2 Gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated local TLS test fixtures are not committed and are documented test-only material."
+paths = [
+  '''^test/fixtures/generated-tls/''',
+]

@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest a change to Verser2 behavior, APIs, docs, or release tooling.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What use case or limitation should this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the desired Host, Guest, Broker, package, or documentation behavior.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Product boundaries
+      options:
+        - label: This request does not assume unsupported HTTP/3, browser, Rust, Go, Java, or Python Host behavior is already implemented.
+        - label: This request does not treat Verser2 as a complete public gateway or replacement for application-owned auth/routing policy.
