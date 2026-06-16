@@ -2,28 +2,33 @@
 
 ## Phase 1: TDD regression tests and PR review surface
 
-- [~] Task: Create track branch and PR review surface
+- [x] Task: Create track branch and PR review surface
     - [x] Create a dedicated track branch before behavior-changing implementation work.
-    - [ ] Create a GitHub pull request using `gh` with a title/body describing the intended TO-BE state: downstream Broker requests can dispatch to imported upstream Host routes.
-    - [ ] Record the PR URL in this plan.
-- [ ] Task: Inventory existing federation implementation and common reuse points
-    - [ ] Review Host federation files, route candidate handling, upstream link state, inbound federation host state, request-stream acquisition, and existing tests.
-    - [ ] Review `@signicode/verser-common` exports before adding new package-local types/helpers.
-    - [ ] Record current source references and deduplication opportunities in this plan.
-- [ ] Task: Write failing issue #24 regression tests first
-    - [ ] Add a raw Verser2 Host/Broker test for downstream Broker request to an imported upstream route.
-    - [ ] Add a raw Verser2 Host/Broker test for downstream Broker request to an imported upstream Manager route that returns native 307/308 redirect to another advertised route.
-    - [ ] Add or update error tests for unavailable upstream route candidates and expected route/host/direction context.
-    - [ ] Add runtime coverage targets for Node, Bun-facing Broker, and Python Broker where practical, documenting any shared-protocol coverage decision.
-- [ ] Task: Confirm tests fail for the expected reason
-    - [ ] Run the narrowest focused test command for the new regression tests.
-    - [ ] Confirm the failure reproduces issue #24 or the expected missing upstream-dispatch behavior.
-    - [ ] Record coverage status as not yet applicable until implementation begins.
-- [ ] Task: Commit and push Phase 1 before manual validation
-    - [ ] Run `npm run lint` or the narrowest lint/docs validation needed for test-only changes.
+    - [x] Create a GitHub pull request using `gh` with a title/body describing the intended TO-BE state: downstream Broker requests can dispatch to imported upstream Host routes.
+    - [x] Record the PR URL in this plan: https://github.com/signicode/verser2/pull/25
+- [x] Task: Inventory existing federation implementation and common reuse points
+    - [x] Review Host federation files, route candidate handling, upstream link state, inbound federation host state, request-stream acquisition, and existing tests.
+    - [x] Review `@signicode/verser-common` exports before adding new package-local types/helpers.
+    - [x] Record current source references and deduplication opportunities in this plan.
+    - Source references: Host upstream/inbound state in `packages/verser2-host/src/lib/node-http2-verser-host.ts:102`, maps at `:169`, upstream streams at `:724`, inbound request stream at `:779`, upstream request handler at `:808`, local federation dispatch/acquisition at `:1409`, H2 dispatch at `:1809`; route selection in `packages/verser2-host/src/lib/route-registry.ts`; common federation helpers in `packages/verser-common/src/lib/federation.ts`; existing coverage in `test/host-upstreams.test.js:476` and redirect behavior in `test/broker-routing.test.js:203`.
+    - Deduplication opportunity: local and H2 candidate iteration/acquisition share the same inbound-only request-stream assumption and should use a shared upstream/inbound acquisition policy rather than parallel fixes.
+- [x] Task: Write failing issue #24 regression tests first
+    - [x] Add a raw Verser2 Host/Broker test for downstream Broker request to an imported upstream route.
+    - [x] Add a raw Verser2 Host/Broker test for downstream Broker request to an imported upstream Manager route that returns native 307/308 redirect to another advertised route.
+    - [x] Add or update error tests for unavailable upstream route candidates and expected route/host/direction context.
+    - [x] Add runtime coverage targets for Node, Bun-facing Broker, and Python Broker where practical, documenting any shared-protocol coverage decision.
+    - Runtime coverage target: Phase 1 adds raw Node Host/Node Broker regressions in `test/host-upstreams.test.js`; Phase 3 will decide whether Bun-facing and Python Broker validation require direct tests or are covered by shared Host/protocol behavior.
+- [x] Task: Confirm tests fail for the expected reason
+    - [x] Run the narrowest focused test command for the new regression tests.
+    - [x] Confirm the failure reproduces issue #24 or the expected missing upstream-dispatch behavior.
+    - [x] Record coverage status as not yet applicable until implementation begins.
+    - Validation: `npm run build && node --test test/host-upstreams.test.js` passed existing 24 tests and failed the 2 new regressions with `upstream-unavailable` for `guest-manager-upstream` and `guest-manager-redirect`, matching the issue #24 upstream-dispatch gap. Coverage is not applicable until implementation changes begin.
+- [~] Task: Commit and push Phase 1 before manual validation
+    - [x] Run `npm run lint` or the narrowest lint/docs validation needed for test-only changes.
     - [ ] Commit Phase 1 changes with a scoped message.
     - [ ] Push the phase commit to the track PR branch.
     - [ ] Record the commit SHA and validation results in this plan.
+    - Validation: `npm run lint` initially found session-introduced formatting in the new tests; formatting was fixed and rerun successfully.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: TDD regression tests and PR review surface' (Protocol in workflow.md)
 
 ## Phase 2: Upstream federation request-stream support
