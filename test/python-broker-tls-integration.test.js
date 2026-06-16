@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { spawn, spawnSync } = require('node:child_process');
 const path = require('node:path');
+const { text } = require('node:stream/consumers');
 const test = require('node:test');
 
 const { loadVerserHost } = require('./support/verser-package-imports.cjs');
@@ -44,6 +45,46 @@ async def main():
     broker = create_verser_broker(**opts)
     await asyncio.wait_for(broker.connect(), timeout=connect_timeout)
     print("python broker connected", flush=True)
+    await broker.close()
+
+asyncio.run(main())
+`;
+
+  const child = spawn('uv', ['run', '--project', pythonPackageDirectory, 'python', '-c', script], {
+    cwd: rootDirectory,
+    env: {
+      ...process.env,
+      PYTHONPATH: pythonSourceDirectory,
+      ...options.env,
+    },
+  });
+  return collectChildProcessResult(child, {
+    timeoutMs: Number(options.env?.VERSER_PROCESS_TIMEOUT_MS || options.timeout || 20_000),
+  });
+}
+
+function runPythonBrokerRequest(options) {
+  const script = `
+import asyncio
+import os
+from verser2_guest_python import create_verser_broker
+
+async def main():
+    broker = create_verser_broker(
+        host_url=os.environ["VERSER_HOST_URL"],
+        broker_id=os.environ.get("VERSER_BROKER_ID", "python-broker-upstream"),
+        tls_ca_file=os.environ["VERSER_TLS_CA_FILE"],
+    )
+    await asyncio.wait_for(broker.connect(), timeout=10)
+    await asyncio.wait_for(broker.wait_for_route(os.environ["VERSER_ROUTE_DOMAIN"]), timeout=10)
+    response = await broker.post(
+        os.environ["VERSER_REQUEST_URL"],
+        text="python-upstream-body",
+        headers={"x-python-broker": "yes"},
+    )
+    print(f"status={response.status}", flush=True)
+    print(f"x-upstream-python={response.headers.get('x-upstream-python')}", flush=True)
+    print(await response.text(), flush=True)
     await broker.close()
 
 asyncio.run(main())
@@ -195,6 +236,63 @@ test(
       assert.match(result.stderr, /tls|handshake|certificate|alert|socket/i);
     } finally {
       await host.close('test-complete');
+    }
+  },
+);
+
+test(
+  'Python Broker reaches imported upstream route through downstream Host federation',
+  {
+    skip: hasUv()
+      ? false
+      : 'Skipping Python Broker upstream integration because uv is not installed.',
+    timeout: 45_000,
+  },
+  async () => {
+    const manager = createVerserHost({
+      hostId: 'host-manager',
+      tls: { cert: trusted.certificate, key: trusted.key },
+    });
+    const runner = createVerserHost({
+      hostId: 'host-runner',
+      tls: { cert: trusted.certificate, key: trusted.key },
+    });
+    await manager.start();
+
+    try {
+      await manager.attachLocalGuest({
+        guestId: 'guest-manager-python',
+        routedDomains: ['manager-python.verser.test'],
+        listener: async (request, response) => {
+          const body = await text(request);
+          response.writeHead(203, { 'x-upstream-python': request.headers['x-python-broker'] });
+          response.end(`${request.method}:${request.url}:${body}`);
+        },
+      });
+      await runner.start();
+      await runner.connectUpstream({
+        upstreamId: 'manager',
+        url: `https://localhost:${manager.address.port}`,
+        tls: { ca: trusted.certificate },
+      });
+
+      const result = await runPythonBrokerRequest({
+        env: {
+          VERSER_HOST_URL: `https://127.0.0.1:${runner.address.port}`,
+          VERSER_TLS_CA_FILE: trusted.certificatePath,
+          VERSER_BROKER_ID: 'python-broker-upstream-route',
+          VERSER_ROUTE_DOMAIN: 'manager-python.verser.test',
+          VERSER_REQUEST_URL: 'http://manager-python.verser.test/from-python?via=upstream',
+        },
+      });
+
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /status=203/);
+      assert.match(result.stdout, /x-upstream-python=yes/);
+      assert.match(result.stdout, /POST:\/from-python\?via=upstream:python-upstream-body/);
+    } finally {
+      await runner.close('test-complete');
+      await manager.close('test-complete');
     }
   },
 );
