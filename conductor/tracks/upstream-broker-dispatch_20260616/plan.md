@@ -117,8 +117,9 @@
     - [x] Ensure the PR body or comments summarize tests, validation, and any runtime-specific limitations.
     - [x] Reference issue #24 for closure once the PR merges.
     - Handoff readiness: issue #24 requested downstream Broker dispatch to imported upstream routes, native 308 redirect-following across upstream routes, and avoidance of a Transform Hub proxy workaround. The added Host/Node Broker, Bun-facing Broker, and Python Broker integration coverage validates the supported route-aware upstream request path; the PR body references `Closes #24`.
-- [ ] Task: Commit and push Phase 4 before manual validation
-    - [ ] Commit Phase 4 changes with a scoped message.
-    - [ ] Push the phase commit to the track PR branch.
-    - [ ] Record the commit SHA and validation results in this plan.
+- [x] Task: Commit and push Phase 4 before manual validation
+    - [x] Commit Phase 4 changes with a scoped message.
+    - [x] Push the phase commit to the track PR branch.
+    - [x] Record the commit SHA and validation results in this plan.
+    - Phase 4 checkpoint commit: `b8304a8` pushed to `track/upstream-broker-dispatch_20260616`.
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Finalization, documentation, and full validation' (Protocol in workflow.md)
