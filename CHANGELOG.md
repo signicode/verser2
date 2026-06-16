@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.1 - Upstream Broker dispatch
+
+- Enables Brokers connected to downstream Hosts to dispatch requests to routes imported from upstream Host federation links.
+- Adds a distinct one-shot federated dispatch path for downstream-to-upstream requests while preserving existing upstream-to-downstream request streams.
+- Validates Node, Bun-facing, and Python Broker behavior for upstream route dispatch, including native 307/308 redirect-following across imported routes.
+
 ## v0.4.0 - Host federation, upstreams, and HA foundations
 
 - Adds route-aware Host-to-Host federation over TLS HTTP/2 with stable Host IDs, upstream link lifecycle APIs, mTLS federation authorization, and federated route import/export.
