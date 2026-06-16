@@ -116,6 +116,14 @@ interface InboundFederationLink {
   readonly requestBusy?: boolean;
 }
 
+type FederationRequestStream = http2.ServerHttp2Stream | http2.ClientHttp2Stream;
+
+interface AcquiredFederatedRequestStream {
+  readonly stream: FederationRequestStream;
+  readonly via: 'inbound-federation' | 'upstream-link';
+  readonly hostId: string;
+}
+
 interface FederatedRequestStreamWaiter {
   readonly timeout: NodeJS.Timeout;
   readonly resolve: (stream: http2.ServerHttp2Stream) => void;
@@ -123,6 +131,8 @@ interface FederatedRequestStreamWaiter {
 }
 
 const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 1000;
+
+const FEDERATION_DISPATCH_REQUEST_PATH = '/verser/host/federation/dispatch-request';
 
 /**
  * TLS HTTP/2 server implementation of the {@link VerserHost} interface.
@@ -136,8 +146,9 @@ const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 1000;
  * - Listens on `127.0.0.1` port `0` (ephemeral) by default.
  * - Handles only the Verser protocol paths (`/verser/register`,
  *   `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`,
- *   `/verser/host/federation`, `/verser/host/federation/routes`, and
- *   `/verser/host/federation/request`).
+ *   `/verser/host/federation`, `/verser/host/federation/routes`,
+ *   `/verser/host/federation/request`, and
+ *   `/verser/host/federation/dispatch-request`).
  * - Peer sessions are tracked for lifecycle management; duplicate peer IDs
  *   are rejected at registration time.
  * - Lease streams are managed as an idle pool; when a Broker request arrives,
@@ -540,6 +551,11 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
+    if (path === FEDERATION_DISPATCH_REQUEST_PATH) {
+      this.handleHostFederationDispatchRequestStream(stream, headers);
+      return;
+    }
+
     if (path !== '/verser/register') {
       throw createVerserError('protocol-error', 'Unsupported Host stream path', {
         path,
@@ -776,6 +792,34 @@ export class NodeHttp2VerserHost implements VerserHost {
     return stream;
   }
 
+  private async openUpstreamDispatchRequestStream(
+    link: UpstreamLink,
+    localHostId: VerserHostId,
+  ): Promise<http2.ClientHttp2Stream> {
+    const stream = link.session.request({
+      ':method': 'POST',
+      ':path': FEDERATION_DISPATCH_REQUEST_PATH,
+      'x-verser-host-id': localHostId,
+    });
+    const headers = await this.waitForUpstreamHandshakeResponse(stream, link.upstreamId);
+    const statusCode = Number(headers[':status'] ?? 0);
+    if (statusCode < 200 || statusCode >= 300) {
+      stream.close(http2.constants.NGHTTP2_CANCEL);
+      throw createVerserError(
+        'upstream-unavailable',
+        'Upstream federation dispatch request stream rejected',
+        {
+          upstreamId: link.upstreamId,
+          remoteHostId: link.remoteHostId,
+          statusCode,
+          direction: 'upstream-link',
+        },
+      );
+    }
+
+    return stream;
+  }
+
   private handleHostFederationRequestStream(
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders,
@@ -805,16 +849,46 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
   }
 
+  private handleHostFederationDispatchRequestStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): void {
+    const hostId = String(headers['x-verser-host-id'] ?? '').trim();
+    const link = this.inboundFederationHosts.get(hostId);
+    if (hostId.length === 0 || link === undefined || link.session !== stream.session) {
+      throw createVerserError(
+        'disconnected-target',
+        'Federated Host dispatch request stream is not registered',
+        { hostId },
+      );
+    }
+
+    stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
+    void this.handleFederatedIncomingRequestStream(stream, hostId);
+  }
+
   private async handleUpstreamRequestStream(
     stream: http2.ClientHttp2Stream,
     upstreamId: string,
+  ): Promise<void> {
+    await this.handleFederatedIncomingRequestStream(stream, upstreamId);
+    if (stream.closed) {
+      void this.replenishUpstreamRequestStream(upstreamId, stream);
+    } else {
+      stream.once('close', () => void this.replenishUpstreamRequestStream(upstreamId, stream));
+    }
+  }
+
+  private async handleFederatedIncomingRequestStream(
+    stream: FederationRequestStream,
+    peerHostId: string,
   ): Promise<void> {
     let requestId: string | undefined;
     let targetId: string | undefined;
     try {
       const metadata = await readLeaseRequestMetadataFromStream(stream, {
         guestId: this.getFederationHostId(),
-        leaseId: upstreamId,
+        leaseId: peerHostId,
       });
       requestId = metadata.requestId;
       targetId = metadata.targetId;
@@ -873,12 +947,6 @@ export class NodeHttp2VerserHost implements VerserHost {
       }
       if (!stream.closed) {
         stream.close(http2.constants.NGHTTP2_CANCEL);
-      }
-    } finally {
-      if (stream.closed) {
-        void this.replenishUpstreamRequestStream(upstreamId, stream);
-      } else {
-        stream.once('close', () => void this.replenishUpstreamRequestStream(upstreamId, stream));
       }
     }
   }
@@ -1410,20 +1478,32 @@ export class NodeHttp2VerserHost implements VerserHost {
     request: LocalDispatchRequest,
   ): Promise<VerserLocalBrokerResponse | undefined> {
     let hadUpstreamCandidate = false;
+    const unavailableCandidates: Array<{
+      readonly domain: string;
+      readonly originHostId: string;
+      readonly nextHopHostId: string;
+      readonly hopCount: number;
+    }> = [];
     for (const candidate of this.routeRegistry.getCandidates(request.targetId)) {
       if (candidate.source !== 'upstream') {
         continue;
       }
       hadUpstreamCandidate = true;
-      const requestStream = await this.tryAcquireFederatedRequestStream(
+      unavailableCandidates.push({
+        domain: candidate.domain,
+        originHostId: candidate.originHostId,
+        nextHopHostId: candidate.nextHopHostId,
+        hopCount: candidate.hopCount,
+      });
+      const acquired = await this.tryAcquireFederatedRequestStream(
         candidate.nextHopHostId,
         request.leaseAcquireTimeoutMs,
       );
-      if (requestStream === undefined) {
+      if (acquired === undefined) {
         continue;
       }
 
-      return this.routeLocalRequestOverFederationStream(request, requestStream);
+      return this.routeLocalRequestOverFederationStream(request, acquired.stream);
     }
 
     if (hadUpstreamCandidate) {
@@ -1432,6 +1512,13 @@ export class NodeHttp2VerserHost implements VerserHost {
         'No federated route candidates are available',
         {
           targetId: request.targetId,
+          direction: 'federated-candidates',
+          candidateCount: unavailableCandidates.length,
+          nextHopHostIds: unavailableCandidates
+            .map((candidate) => candidate.nextHopHostId)
+            .join(','),
+          originHostIds: unavailableCandidates.map((candidate) => candidate.originHostId).join(','),
+          domains: unavailableCandidates.map((candidate) => candidate.domain).join(','),
         },
       );
     }
@@ -1442,7 +1529,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async tryAcquireFederatedRequestStream(
     hostId: string,
     timeoutMs: number,
-  ): Promise<http2.ServerHttp2Stream | undefined> {
+  ): Promise<AcquiredFederatedRequestStream | undefined> {
     try {
       return await this.acquireFederatedRequestStream(hostId, timeoutMs);
     } catch (error) {
@@ -1457,17 +1544,41 @@ export class NodeHttp2VerserHost implements VerserHost {
   private acquireFederatedRequestStream(
     hostId: string,
     timeoutMs: number,
-  ): Promise<http2.ServerHttp2Stream> {
+  ): Promise<AcquiredFederatedRequestStream> {
     const link = this.inboundFederationHosts.get(hostId);
     if (link?.requestStream !== undefined && !link.requestStream.closed && !link.requestBusy) {
       this.inboundFederationHosts.set(hostId, { ...link, requestBusy: true });
-      return Promise.resolve(link.requestStream);
+      return Promise.resolve({ stream: link.requestStream, via: 'inbound-federation', hostId });
     }
 
-    return new Promise<http2.ServerHttp2Stream>((resolve, reject) => {
+    const upstreamLink = [...this.upstreamLinks.values()].find(
+      (candidate) =>
+        candidate.remoteHostId === hostId &&
+        !candidate.closing &&
+        !candidate.session.closed &&
+        !candidate.session.destroyed,
+    );
+    if (upstreamLink !== undefined) {
+      return this.openUpstreamDispatchRequestStream(upstreamLink, this.getFederationHostId()).then(
+        (stream) => ({ stream, via: 'upstream-link', hostId }),
+      );
+    }
+
+    if (link === undefined) {
+      return Promise.reject(
+        createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
+          hostId,
+          direction: 'inbound-or-upstream',
+        }),
+      );
+    }
+
+    return new Promise<AcquiredFederatedRequestStream>((resolve, reject) => {
+      const resolveStream = (stream: http2.ServerHttp2Stream): void =>
+        resolve({ stream, via: 'inbound-federation', hostId });
       const timeout = setTimeout(() => {
         const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
-        const remainingWaiters = waiters.filter((waiter) => waiter.resolve !== resolve);
+        const remainingWaiters = waiters.filter((waiter) => waiter.resolve !== resolveStream);
         if (remainingWaiters.length === 0) {
           this.federatedRequestStreamWaiters.delete(hostId);
         } else {
@@ -1476,11 +1587,16 @@ export class NodeHttp2VerserHost implements VerserHost {
         reject(
           createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
             hostId,
+            direction: 'inbound-federation',
           }),
         );
       }, timeoutMs);
       const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
-      waiters.push({ timeout, resolve, reject });
+      waiters.push({
+        timeout,
+        resolve: resolveStream,
+        reject,
+      });
       this.federatedRequestStreamWaiters.set(hostId, waiters);
     });
   }
@@ -1502,6 +1618,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       waiter.reject(
         createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
           hostId,
+          direction: 'inbound-federation',
         }),
       );
       return;
@@ -1513,7 +1630,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private async routeLocalRequestOverFederationStream(
     request: LocalDispatchRequest,
-    requestStream: http2.ServerHttp2Stream,
+    requestStream: FederationRequestStream,
   ): Promise<VerserLocalBrokerResponse> {
     const body = new PassThrough();
     const responsePromise = this.readFederatedResponseMetadata(requestStream, {
@@ -1565,7 +1682,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   }
 
   private async readFederatedResponseMetadata(
-    stream: http2.ServerHttp2Stream,
+    stream: FederationRequestStream,
     options: { readonly requestId: string; readonly targetId: string },
   ): Promise<VerserResponseEnvelopeMetadata> {
     const parsed = await readVerserEnvelopeFromStream(stream, {
@@ -1813,23 +1930,35 @@ export class NodeHttp2VerserHost implements VerserHost {
     targetId: string,
   ): Promise<boolean> {
     let hadUpstreamCandidate = false;
+    const unavailableCandidates: Array<{
+      readonly domain: string;
+      readonly originHostId: string;
+      readonly nextHopHostId: string;
+      readonly hopCount: number;
+    }> = [];
     for (const candidate of this.routeRegistry.getCandidates(targetId)) {
       if (candidate.source !== 'upstream') {
         continue;
       }
       hadUpstreamCandidate = true;
-      const requestStream = await this.tryAcquireFederatedRequestStream(
+      unavailableCandidates.push({
+        domain: candidate.domain,
+        originHostId: candidate.originHostId,
+        nextHopHostId: candidate.nextHopHostId,
+        hopCount: candidate.hopCount,
+      });
+      const acquired = await this.tryAcquireFederatedRequestStream(
         candidate.nextHopHostId,
         parseLeaseAcquireTimeoutMs(headers),
       );
-      if (requestStream === undefined) {
+      if (acquired === undefined) {
         continue;
       }
 
       await this.routeH2BrokerRequestOverFederationStream(
         stream,
         headers,
-        requestStream,
+        acquired.stream,
         requestId,
         targetId,
       );
@@ -1842,6 +1971,13 @@ export class NodeHttp2VerserHost implements VerserHost {
         'No federated route candidates are available',
         {
           targetId,
+          direction: 'federated-candidates',
+          candidateCount: unavailableCandidates.length,
+          nextHopHostIds: unavailableCandidates
+            .map((candidate) => candidate.nextHopHostId)
+            .join(','),
+          originHostIds: unavailableCandidates.map((candidate) => candidate.originHostId).join(','),
+          domains: unavailableCandidates.map((candidate) => candidate.domain).join(','),
         },
       );
     }
@@ -1852,7 +1988,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async routeH2BrokerRequestOverFederationStream(
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders,
-    requestStream: http2.ServerHttp2Stream,
+    requestStream: FederationRequestStream,
     requestId: string,
     targetId: string,
   ): Promise<void> {

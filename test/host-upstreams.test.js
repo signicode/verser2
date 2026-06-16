@@ -4,11 +4,16 @@ const { PassThrough } = require('node:stream');
 const { text } = require('node:stream/consumers');
 const { test } = require('node:test');
 
-const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
+const {
+  loadVerserGuestBun,
+  loadVerserGuestNode,
+  loadVerserHost,
+} = require('./support/verser-package-imports.cjs');
 const { trusted, clientCa, trustedClient } = require('./support/tls-fixtures.cjs');
 
 const { createVerserHost } = loadVerserHost();
 const { createVerserBroker } = loadVerserGuestNode();
+const { createVerserBroker: createVerserBunBroker } = loadVerserGuestBun();
 
 function tlsOptions(clientAuth) {
   return {
@@ -870,7 +875,13 @@ test('Federated HA reports upstream unavailable when all local Broker candidates
           headers: { host: 'ha-unavailable-local.verser.test' },
           leaseAcquireTimeoutMs: 10,
         }),
-      (error) => error.code === 'upstream-unavailable',
+      (error) => {
+        assert.equal(error.code, 'upstream-unavailable');
+        assert.equal(error.context?.targetId, 'guest-ha-unavailable-local');
+        assert.equal(error.context?.direction, 'federated-candidates');
+        assert.equal(error.context?.nextHopHostIds, 'host-stale-runner');
+        return true;
+      },
     );
   } finally {
     await broker?.close();
@@ -911,7 +922,13 @@ test('Federated HA reports upstream unavailable when all H2 Broker candidates ar
           path: '/ha-unavailable',
           headers: { host: 'ha-unavailable-h2.verser.test' },
         }),
-      (error) => error.code === 'upstream-unavailable',
+      (error) => {
+        assert.equal(error.code, 'upstream-unavailable');
+        assert.equal(error.context?.targetId, 'guest-ha-unavailable-h2');
+        assert.equal(error.context?.direction, 'federated-candidates');
+        assert.equal(error.context?.nextHopHostIds, 'host-stale-runner');
+        return true;
+      },
     );
   } finally {
     await broker?.close();
@@ -961,8 +978,193 @@ test('Federated forwarding preserves downstream structured error codes', async (
           headers: { host: 'leaf-unavailable.verser.test' },
           leaseAcquireTimeoutMs: 10,
         }),
-      (error) => error.code === 'upstream-unavailable',
+      (error) => {
+        assert.equal(error.code, 'upstream-unavailable');
+        assert.equal(error.context?.targetId, 'guest-leaf-unavailable');
+        assert.equal(error.context?.direction, 'federated-candidates');
+        assert.equal(error.context?.nextHopHostIds, 'host-leaf');
+        return true;
+      },
     );
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Downstream Broker requests imported upstream Guest route through federation', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await manager.attachLocalGuest({
+      guestId: 'guest-manager-upstream',
+      routedDomains: ['manager-upstream.verser.test'],
+      listener: async (request, response) => {
+        const body = await text(request);
+        response.writeHead(200, { 'x-upstream-handler': 'manager' });
+        response.end(`${request.method}:${request.url}:${body}`);
+      },
+    });
+
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        runner.getFederatedRouteCandidates('guest-manager-upstream', 'manager-upstream.verser.test')
+          .length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(runner),
+      brokerId: 'broker-on-runner',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('manager-upstream.verser.test');
+
+    const response = await broker.request({
+      targetId: 'guest-manager-upstream',
+      method: 'POST',
+      path: '/upstream-path?q=1',
+      headers: { host: 'manager-upstream.verser.test' },
+      body: [Buffer.from('upstream-body')],
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['x-upstream-handler'], 'manager');
+    assert.equal(await text(response.body), 'POST:/upstream-path?q=1:upstream-body');
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Downstream Broker follows 308 redirect through upstream federation chain', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await manager.attachLocalGuest({
+      guestId: 'guest-manager-redirect',
+      routedDomains: ['manager-redirect.verser.test'],
+      listener: (_request, response) => {
+        response.writeHead(308, {
+          location: 'http://manager-final.verser.test/final?via=upstream',
+        });
+        response.end();
+      },
+    });
+    await manager.attachLocalGuest({
+      guestId: 'guest-manager-final',
+      routedDomains: ['manager-final.verser.test'],
+      listener: async (request, response) => {
+        const body = await text(request);
+        response.writeHead(200, { 'x-upstream-handler': 'final' });
+        response.end(`${request.method}:${request.url}:${body}`);
+      },
+    });
+
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        runner.getFederatedRouteCandidates('guest-manager-redirect', 'manager-redirect.verser.test')
+          .length,
+        1,
+      ),
+    );
+    await assertEventually(() =>
+      assert.equal(
+        runner.getFederatedRouteCandidates('guest-manager-final', 'manager-final.verser.test')
+          .length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(runner),
+      brokerId: 'broker-redirect-on-runner',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('manager-redirect.verser.test');
+    await broker.waitForRoute('manager-final.verser.test');
+
+    const response = await broker.request({
+      targetId: 'guest-manager-redirect',
+      method: 'POST',
+      path: '/redirect-me',
+      headers: { host: 'manager-redirect.verser.test' },
+      body: [Buffer.from('redirect-body')],
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['x-upstream-handler'], 'final');
+    assert.equal(await text(response.body), 'POST:/final?via=upstream:redirect-body');
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Bun-facing Broker fetch reaches imported upstream route through federation', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await manager.attachLocalGuest({
+      guestId: 'guest-manager-bun-fetch',
+      routedDomains: ['manager-bun-fetch.verser.test'],
+      listener: async (request, response) => {
+        const body = await text(request);
+        response.writeHead(202, { 'x-bun-facing': request.method });
+        response.end(`${request.url}:${body}`);
+      },
+    });
+
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    broker = createVerserBunBroker({
+      hostUrl: hostUrl(runner),
+      brokerId: 'broker-bun-facing-upstream',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('manager-bun-fetch.verser.test');
+
+    const fetch = broker.createFetch();
+    const response = await fetch('http://manager-bun-fetch.verser.test/from-bun?via=fetch', {
+      method: 'POST',
+      body: 'bun-fetch-body',
+    });
+
+    assert.equal(response.status, 202);
+    assert.equal(response.headers.get('x-bun-facing'), 'POST');
+    assert.equal(await response.text(), '/from-bun?via=fetch:bun-fetch-body');
   } finally {
     await broker?.close();
     await runner.close();
