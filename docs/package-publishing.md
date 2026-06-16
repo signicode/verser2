@@ -182,6 +182,7 @@ For both publish paths, the workflow:
 
 - Uses `actions/setup-node` with `registry-url: https://npm.pkg.github.com` and `scope: @signicode`.
 - Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for publish.
+- Publishes GitHub Packages with `npm publish --access public` so package pages and installs can be public after the repository launch.
 - Uploads the validation job's `dist/packages` tree and Python distribution directory, then downloads those artifacts in the publish job instead of running a second full `npm run build` / `npm run stage:packages` cycle.
 - Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
 - Runs automated tarball behavior tests before the pull-request validation job completes.

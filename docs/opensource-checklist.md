@@ -89,7 +89,7 @@ Current `.github/workflows/package-publish.yml` behavior:
 - Pushes to `main` run validation and publish SHA-derived versions to GitHub Packages with the `next` dist-tag.
 - Tags matching `v*` run validation and publish tag-derived versions to GitHub Packages with the policy-selected dist-tag.
 - Pull requests never publish.
-- Publishing uses `secrets.GITHUB_TOKEN`, `packages: write`, and `npm publish --access restricted --registry https://npm.pkg.github.com`.
+- Publishing uses `secrets.GITHUB_TOKEN`, `packages: write`, and `npm publish --access public --registry https://npm.pkg.github.com`.
 - Python distributions are uploaded as workflow artifacts and attached to GitHub Releases for `v*` tags; no PyPI publish exists.
 
 Checklist:

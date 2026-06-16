@@ -310,7 +310,7 @@ jobs:
         run: |
           for packageDirectory in dist/packages/*;
           do
-            (cd "$packageDirectory" && npm publish --access restricted --tag "${{ steps.publish-metadata.outputs.dist_tag }}" --registry https://npm.pkg.github.com)
+            (cd "$packageDirectory" && npm publish --access public --tag "${{ steps.publish-metadata.outputs.dist_tag }}" --registry https://npm.pkg.github.com)
           done
 
       - name: Upload Python distribution artifact
