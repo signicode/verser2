@@ -72,7 +72,7 @@ Phase 2 validation notes:
 - Deduplication result: not applicable; no repeated runtime code was added.
 - Validation: `npm run lint` passed; signoff enforcement was checked for the exempt `MichalCz` path and the non-exempt unsigned-commit rejection path.
 - Coverage: not applicable for governance documents, repository safeguard configuration, and GitHub templates.
-- Review branch push: Phase 2 review state pushed to `track/opensource-npm-publishing_20260616` at commit `f173f18` before manual verification.
+- Review branch push: Phase 2 review state pushed to `track/opensource-npm-publishing_20260616` at commit `cc18db8` before manual verification.
 - Phase checkpoint commit: pending manual verification.
 - Phase 2 review correction: added `scripts/check-pr-signoffs.js`, `.github/workflows/signoff.yml`, and governance/template notes requiring DCO-style `Signed-off-by` trailers for external contributors unless the PR comes from `MichalCz` or the configured Signicode maintainer team.
 
