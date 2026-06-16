@@ -146,7 +146,7 @@ jobs:
           cache: npm
 
       - name: Setup Python uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: npm ci
@@ -202,7 +202,7 @@ jobs:
           cache: npm
 
       - name: Setup Python uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: npm ci
@@ -358,7 +358,7 @@ jobs:
           cache: npm
 
       - name: Setup Python uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
         run: npm ci
