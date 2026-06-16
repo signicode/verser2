@@ -27,7 +27,7 @@ on:
         type: string
         required: true
       npmjs_dry_run:
-        description: 'Run npm publish with --dry-run instead of publishing.'
+        description: 'Validate npmjs staging inputs without creating npm package stages.'
         type: boolean
         required: true
         default: true
@@ -415,14 +415,14 @@ jobs:
           npm run test:package-consumers -- --source=tarball
           npm run test:package-tarballs
 
-      - name: Publish staged packages to npmjs.org
+      - name: Stage packages on npmjs.org
         run: |
-          publishFlags=""
           if [ "${{ inputs.npmjs_dry_run }}" = "true" ]; then
-            publishFlags="--dry-run"
+            echo "npmjs_dry_run is true; validated staged packages without creating npm package stages."
+            exit 0
           fi
 
           for packageDirectory in dist/packages/*;
           do
-            (cd "$packageDirectory" && npm publish --access public --tag "${{ steps.npmjs-metadata.outputs.dist_tag }}" --registry https://registry.npmjs.org/ --provenance $publishFlags)
+            (cd "$packageDirectory" && npm stage publish --tag "${{ steps.npmjs-metadata.outputs.dist_tag }}" --registry https://registry.npmjs.org/)
           done

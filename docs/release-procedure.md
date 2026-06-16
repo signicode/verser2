@@ -70,15 +70,15 @@ Prerelease tags such as `v0.2.1-rc.1` publish to GitHub Packages with the `next`
 
 ## Manual npmjs publication boundary
 
-Automatic `main`, nightly, and pull-request workflow paths never publish to npmjs.org. Tag pushes matching `v*` publish to npmjs.org automatically after validation when the resolved version is not a SHA build version, but the npmjs job still requires approval through the `npmjs-release` environment. Maintainers can also use the manual `workflow_dispatch` path in `.github/workflows/package-publish.yml` for an explicitly selected version.
+Automatic `main`, nightly, and pull-request workflow paths never publish to npmjs.org. Tag pushes matching `v*` stage packages on npmjs.org automatically after validation when the resolved version is not a SHA build version, but the npmjs job still requires approval through the `npmjs-release` environment. Maintainers can also use the manual `workflow_dispatch` path in `.github/workflows/package-publish.yml` for an explicitly selected version.
 
 Before the first real npmjs publication:
 
 1. Configure the `npmjs-release` GitHub environment with required reviewers.
-2. Configure npm trusted publishing for each `@signicode` package with publisher `GitHub Actions`, organization `signicode`, repository `verser2`, workflow `package-publish.yml`, environment `npmjs-release`, and an allowed action that includes `npm publish`.
+2. Configure npm trusted publishing for each `@signicode` package with publisher `GitHub Actions`, organization `signicode`, repository `verser2`, workflow `package-publish.yml`, environment `npmjs-release`, and an allowed action that includes npm stage publishing.
 3. Confirm package access settings for public scoped packages.
-4. For manual dry runs, run the workflow with `publish_npmjs: true`, the intended `npmjs_version`, and `npmjs_dry_run: true`.
-5. Review the dry-run output. For real releases, push a `v*` tag or re-run manual dispatch with `npmjs_dry_run: false` only when maintainers approve the public publish.
+4. For manual validation-only runs, run the workflow with `publish_npmjs: true`, the intended `npmjs_version`, and `npmjs_dry_run: true`.
+5. Review the validation-only output. For real releases, push a `v*` tag or re-run manual dispatch with `npmjs_dry_run: false` only when maintainers approve creating npm package stages.
 
 The npmjs path uses the same stable/prerelease dist-tag policy: stable versions publish with `latest`, and prerelease versions publish with `next`.
 
@@ -91,7 +91,7 @@ gh run list --workflow "Package publish readiness" --limit 5
 gh run watch <run-id> --exit-status
 ```
 
-If the tag, SHA, or nightly publish succeeds, confirm that GitHub Packages installation validation passed in the workflow logs. If the manual npmjs path is used, confirm that staged/tarball validation passed before the npmjs publish step and that the run was approved through `npmjs-release`.
+If the tag, SHA, or nightly publish succeeds, confirm that GitHub Packages installation validation passed in the workflow logs. If the manual npmjs path is used, confirm that staged/tarball validation passed before the npmjs stage-publish step and that the run was approved through `npmjs-release`.
 
 ## After publishing
 

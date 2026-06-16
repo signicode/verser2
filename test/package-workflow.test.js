@@ -138,11 +138,9 @@ test('workflow supports maintainer-gated npmjs publishing', () => {
   assert.match(content, /npm install --global npm@latest/);
   assert.doesNotMatch(content, /secrets\.NPM_TOKEN/);
   assert.match(content, /npmjs publishing is not allowed for SHA build versions/);
-  assert.match(
-    content,
-    /npm publish --access public --tag .* --registry https:\/\/registry\.npmjs\.org\//,
-  );
-  assert.match(content, /--provenance/);
+  assert.match(content, /npm stage publish --tag .* --registry https:\/\/registry\.npmjs\.org\//);
+  assert.doesNotMatch(content, /npmjs-publish:[\s\S]*?--provenance/);
+  assert.match(content, /npmjs_dry_run is true; validated staged packages/);
 });
 
 test('workflow resolves publish kind for tag, merged PR SHA, and nightly publication', () => {
@@ -226,7 +224,7 @@ test('workflow runs tarball automated tests during pull request validation', () 
 
 test('workflow runs tarball automated tests after publish versioning and before publishing', () => {
   assertHas(
-    /Apply publish version to staged packages[\s\S]*?npm run test:package-tarballs[\s\S]*?npm publish --access public/,
-    'Expected publish flow to run tarball automated tests after version mutation and before npm publish.',
+    /Apply publish version to staged packages[\s\S]*?npm run test:package-tarballs[\s\S]*?npm stage publish/,
+    'Expected publish flow to run tarball automated tests after version mutation and before npm stage publish.',
   );
 });
