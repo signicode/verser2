@@ -132,7 +132,7 @@ interface FederatedRequestStreamWaiter {
 
 const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 1000;
 
-const FEDERATION_REQUEST_STREAM_MODE_HEADER = 'x-verser-federation-request-stream-mode';
+const FEDERATION_DISPATCH_REQUEST_PATH = '/verser/host/federation/dispatch-request';
 
 /**
  * TLS HTTP/2 server implementation of the {@link VerserHost} interface.
@@ -146,8 +146,9 @@ const FEDERATION_REQUEST_STREAM_MODE_HEADER = 'x-verser-federation-request-strea
  * - Listens on `127.0.0.1` port `0` (ephemeral) by default.
  * - Handles only the Verser protocol paths (`/verser/register`,
  *   `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`,
- *   `/verser/host/federation`, `/verser/host/federation/routes`, and
- *   `/verser/host/federation/request`).
+ *   `/verser/host/federation`, `/verser/host/federation/routes`,
+ *   `/verser/host/federation/request`, and
+ *   `/verser/host/federation/dispatch-request`).
  * - Peer sessions are tracked for lifecycle management; duplicate peer IDs
  *   are rejected at registration time.
  * - Lease streams are managed as an idle pool; when a Broker request arrives,
@@ -550,6 +551,11 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
+    if (path === FEDERATION_DISPATCH_REQUEST_PATH) {
+      this.handleHostFederationDispatchRequestStream(stream, headers);
+      return;
+    }
+
     if (path !== '/verser/register') {
       throw createVerserError('protocol-error', 'Unsupported Host stream path', {
         path,
@@ -792,9 +798,8 @@ export class NodeHttp2VerserHost implements VerserHost {
   ): Promise<http2.ClientHttp2Stream> {
     const stream = link.session.request({
       ':method': 'POST',
-      ':path': '/verser/host/federation/request',
+      ':path': FEDERATION_DISPATCH_REQUEST_PATH,
       'x-verser-host-id': localHostId,
-      [FEDERATION_REQUEST_STREAM_MODE_HEADER]: 'dispatch',
     });
     const headers = await this.waitForUpstreamHandshakeResponse(stream, link.upstreamId);
     const statusCode = Number(headers[':status'] ?? 0);
@@ -829,19 +834,6 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
     }
 
-    const mode = String(headers[FEDERATION_REQUEST_STREAM_MODE_HEADER] ?? 'idle');
-    if (mode === 'dispatch') {
-      stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
-      void this.handleFederatedIncomingRequestStream(stream, hostId);
-      return;
-    }
-    if (mode !== 'idle') {
-      throw createVerserError('protocol-error', 'Unknown federated request stream mode', {
-        hostId,
-        mode,
-      });
-    }
-
     this.inboundFederationHosts.set(hostId, { ...link, requestStream: stream, requestBusy: false });
     stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
     this.resolveNextFederatedRequestStreamWaiter(hostId);
@@ -855,6 +847,24 @@ export class NodeHttp2VerserHost implements VerserHost {
         });
       }
     });
+  }
+
+  private handleHostFederationDispatchRequestStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): void {
+    const hostId = String(headers['x-verser-host-id'] ?? '').trim();
+    const link = this.inboundFederationHosts.get(hostId);
+    if (hostId.length === 0 || link === undefined || link.session !== stream.session) {
+      throw createVerserError(
+        'disconnected-target',
+        'Federated Host dispatch request stream is not registered',
+        { hostId },
+      );
+    }
+
+    stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
+    void this.handleFederatedIncomingRequestStream(stream, hostId);
   }
 
   private async handleUpstreamRequestStream(

@@ -38,7 +38,7 @@
     - [x] Compare inbound federation request acquisition with upstream link request stream state.
     - [x] Identify reusable route candidate, lease, cleanup, and fallback logic.
     - [x] Decide whether to adapt existing helpers or introduce shared internal helpers while preserving public API behavior.
-    - Design: preserve the existing idle `/verser/host/federation/request` stream for upstream-to-downstream dispatch and add a one-shot dispatch mode for downstream-to-upstream requests over a healthy `UpstreamLink.session`, keyed by route-candidate `nextHopHostId` matching `UpstreamLink.remoteHostId`.
+    - Design: preserve the existing idle `/verser/host/federation/request` stream for upstream-to-downstream dispatch and add a distinct one-shot `/verser/host/federation/dispatch-request` path for downstream-to-upstream requests over a healthy `UpstreamLink.session`, keyed by route-candidate `nextHopHostId` matching `UpstreamLink.remoteHostId`.
 - [x] Task: Implement upstream request stream acquisition
     - [x] Add support for acquiring a request stream from an upstream link when a route candidate’s next hop is available through `upstreamLinks`.
     - [x] Preserve existing inbound federation request acquisition and fallback behavior.
@@ -92,27 +92,31 @@
     - [x] Record the commit SHA and validation results in this plan.
     - Validation: `npm run lint` initially found session-introduced formatting in Host/Python test edits; formatting was fixed and rerun successfully.
     - Phase 3 checkpoint commit: `414ca05` pushed to `track/upstream-broker-dispatch_20260616`.
-- [~] Task: Conductor - User Manual Verification 'Phase 3: Downstream Broker dispatch, redirects, and runtime validation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Downstream Broker dispatch, redirects, and runtime validation' (Protocol in workflow.md)
 
 ## Phase 4: Finalization, documentation, and full validation
 
-- [ ] Task: Update documentation
-    - [ ] Update Host federation/request-routing docs to describe downstream-Broker-to-upstream-route dispatch.
-    - [ ] Document native 307/308 redirect behavior across imported upstream routes and any limits.
-    - [ ] Keep Host/Guest/Broker/Peer terminology precise and avoid unsupported runtime or HTTP/3 claims.
-- [ ] Task: Final deduplication and code review
-    - [ ] Review changed Host federation code for duplicated inbound/upstream request-routing logic.
-    - [ ] Move repeated protocol-neutral logic into existing common/shared helpers where appropriate.
-    - [ ] Confirm public APIs remain compatible and no unrelated Host/Guest/Broker behavior changed.
-- [ ] Task: Full validation pass
-    - [ ] Run `npm run lint`.
-    - [ ] Run `npm test` or narrower documented equivalents if full validation is not necessary.
-    - [ ] Run package staging, consumer, and tarball validations if package output or public behavior documentation changed.
-    - [ ] Record skipped validation, failures, or manual-only checks with reasons.
-- [ ] Task: Close issue and PR handoff readiness
-    - [ ] Confirm all acceptance criteria are met against GitHub issue #24.
-    - [ ] Ensure the PR body or comments summarize tests, validation, and any runtime-specific limitations.
-    - [ ] Reference issue #24 for closure once the PR merges.
+- [x] Task: Update documentation
+    - [x] Update Host federation/request-routing docs to describe downstream-Broker-to-upstream-route dispatch.
+    - [x] Document native 307/308 redirect behavior across imported upstream routes and any limits.
+    - [x] Keep Host/Guest/Broker/Peer terminology precise and avoid unsupported runtime or HTTP/3 claims.
+    - Docs updated: `docs/host-federation.md`, `docs/making-requests.md`, Host public JSDoc, and Host codemap now describe downstream-to-upstream dispatch using the distinct `/verser/host/federation/dispatch-request` one-shot path.
+- [x] Task: Final deduplication and code review
+    - [x] Review changed Host federation code for duplicated inbound/upstream request-routing logic.
+    - [x] Move repeated protocol-neutral logic into existing common/shared helpers where appropriate.
+    - [x] Confirm public APIs remain compatible and no unrelated Host/Guest/Broker behavior changed.
+    - Review result: @oracle found no blockers after replacing the header mode with a distinct dispatch path. Common extraction remains intentionally minimal; inbound and upstream request-stream handling shares incoming federation dispatch while local/H2 candidate loops remain separate for clarity.
+- [x] Task: Full validation pass
+    - [x] Run `npm run lint`.
+    - [x] Run `npm test` or narrower documented equivalents if full validation is not necessary.
+    - [x] Run package staging, consumer, and tarball validations if package output or public behavior documentation changed.
+    - [x] Record skipped validation, failures, or manual-only checks with reasons.
+    - Validation: `npm run lint` passes. `npm test` passes the full source validation suite after building and staging packages. `npm run test:package-consumers -- --source=staging` passes consumer import checks for all public packages. `npm run test:package-consumers -- --source=tarball` passes consumer import checks for all public package tarballs. `npm run test:package-tarballs` passes 48 tarball-mode tests. No final validation was skipped.
+- [x] Task: Close issue and PR handoff readiness
+    - [x] Confirm all acceptance criteria are met against GitHub issue #24.
+    - [x] Ensure the PR body or comments summarize tests, validation, and any runtime-specific limitations.
+    - [x] Reference issue #24 for closure once the PR merges.
+    - Handoff readiness: issue #24 requested downstream Broker dispatch to imported upstream routes, native 308 redirect-following across upstream routes, and avoidance of a Transform Hub proxy workaround. The added Host/Node Broker, Bun-facing Broker, and Python Broker integration coverage validates the supported route-aware upstream request path; the PR body references `Closes #24`.
 - [ ] Task: Commit and push Phase 4 before manual validation
     - [ ] Commit Phase 4 changes with a scoped message.
     - [ ] Push the phase commit to the track PR branch.
