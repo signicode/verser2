@@ -86,15 +86,24 @@ test('publish kinds resolve deterministic versions and channel-safe dist-tags', 
   assert.notEqual(nightly.distTag, 'next');
 });
 
-test('manual npmjs candidates are described but not automatically allowed', () => {
+test('manual npmjs candidates are intentionally allowed with safe dist-tags', () => {
   const npmCandidate = policy.getPolicySummary({
     version: '1.2.3',
     publishKind: 'manual-npmjs-candidate',
   });
 
   assert.equal(npmCandidate.computedVersion, '1.2.3');
-  assert.equal(npmCandidate.npmJsPublishAllowed, false);
-  assert.equal(npmCandidate.registry, 'npmjs-manual');
+  assert.equal(npmCandidate.npmJsPublishAllowed, true);
+  assert.equal(npmCandidate.distTag, 'latest');
+  assert.equal(npmCandidate.registry, 'npmjs');
+
+  const prereleaseCandidate = policy.getPolicySummary({
+    version: '1.2.3-rc.1',
+    publishKind: 'manual-npmjs-candidate',
+  });
+  assert.equal(prereleaseCandidate.npmJsPublishAllowed, true);
+  assert.equal(prereleaseCandidate.distTag, 'next');
+  assert.equal(prereleaseCandidate.registry, 'npmjs');
 });
 
 test('main-build version strips prerelease and appends sha', () => {
@@ -126,9 +135,9 @@ test('sha normalization lowercases and strips non-alphanumerics', () => {
   assert.throws(() => policy.normalizeShortSha('!@#$', 12), /Invalid short SHA/);
 });
 
-test('no npmjs publish is performed by design in this track', () => {
+test('npmjs publishing support is policy-only and never runs npm publish', () => {
   const source = fs.readFileSync(scriptPath, 'utf8');
-  assert.equal(policy.NPMJS_PUBLISH_ALLOWED, false);
+  assert.equal(policy.NPMJS_PUBLISH_ALLOWED, true);
   assert.equal(/npm\s+publish/.test(source), false);
 });
 

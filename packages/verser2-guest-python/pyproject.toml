@@ -12,6 +12,12 @@ license = { text = "MIT" }
 authors = [{ name = "Signicode" }]
 dependencies = ["cryptography>=42,<47", "h2>=4.1,<5"]
 
+[project.urls]
+Homepage = "https://github.com/signicode/verser2#readme"
+Repository = "https://github.com/signicode/verser2"
+Issues = "https://github.com/signicode/verser2/issues"
+Documentation = "https://github.com/signicode/verser2/tree/main/docs"
+
 [tool.verser2]
 node-package = "@signicode/verser2-guest-python"
 role = "guest"

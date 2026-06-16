@@ -8,8 +8,8 @@ const STABLE_TAG = 'latest';
 const PRERELEASE_TAG = 'next';
 const MAIN_SHA_TAG = 'main-sha';
 const NIGHTLY_TAG = 'nightly';
-const MANUAL_NPMJS_REGISTRY = 'npmjs-manual';
-const NPMJS_PUBLISH_ALLOWED = false;
+const MANUAL_NPMJS_REGISTRY = 'npmjs';
+const NPMJS_PUBLISH_ALLOWED = true;
 
 const semverRegex =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -336,7 +336,7 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
       inputVersion: version,
       distTag: determineDistTag(version),
       computedVersion: version,
-      npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      npmJsPublishAllowed: false,
       pythonVersion: toPythonVersion(version),
     };
   }
@@ -347,7 +347,7 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
       inputVersion: version,
       distTag: MAIN_SHA_TAG,
       computedVersion: mainVersion,
-      npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      npmJsPublishAllowed: false,
       pythonVersion: toPythonVersion(mainVersion),
     };
   }
@@ -358,7 +358,7 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
       inputVersion: version,
       distTag: NIGHTLY_TAG,
       computedVersion: nightlyVersion,
-      npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      npmJsPublishAllowed: false,
       pythonVersion: toPythonVersion(nightlyVersion),
     };
   }
@@ -378,7 +378,7 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
     inputVersion: version,
     distTag: determineDistTag(version),
     computedVersion: version,
-    npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+    npmJsPublishAllowed: false,
     pythonVersion: toPythonVersion(version),
   };
 
@@ -440,8 +440,8 @@ function main() {
     if (options.mainBuild) {
       console.log(`Main-build version: ${summary.computedVersion}`);
     }
-    if (!NPMJS_PUBLISH_ALLOWED) {
-      console.log('npmjs publish not supported in this track');
+    if (summary.npmJsPublishAllowed) {
+      console.log('npmjs publish supported for this manually gated candidate');
     }
 
     if (applyResult) {

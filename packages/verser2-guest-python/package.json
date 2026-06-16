@@ -6,6 +6,23 @@
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/signicode/verser2.git",
+    "directory": "packages/verser2-guest-python"
+  },
+  "homepage": "https://github.com/signicode/verser2#readme",
+  "bugs": {
+    "url": "https://github.com/signicode/verser2/issues"
+  },
+  "keywords": ["verser2", "reverse-http", "http2", "guest", "broker", "python"],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "venv": "uv sync --project .",

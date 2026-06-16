@@ -25,7 +25,8 @@ Build packages first with npm run build, then run this command to create
 publish-ready package directories under dist/packages/<safe-package-name>.
 
 Generated staged packages include built entrypoints, TypeScript declarations,
-licenses, and publish-only package.json metadata for GitHub Packages.`);
+licenses, and publish-only package.json metadata. Set VERSER_PACKAGE_REGISTRY
+to override the staged publish registry for GitHub Packages previews.`);
   process.exit(0);
 }
 
@@ -86,6 +87,11 @@ function rewriteReadmeLinksForPublishedPackage(readme, packageDirectory, docsRef
 }
 
 function buildStagedManifest(sourceManifest) {
+  const publishConfig = {
+    ...(sourceManifest.publishConfig || {}),
+    registry: process.env.VERSER_PACKAGE_REGISTRY || 'https://registry.npmjs.org/',
+  };
+
   const stagedManifest = {
     name: sourceManifest.name,
     version: sourceManifest.version,
@@ -99,9 +105,7 @@ function buildStagedManifest(sourceManifest) {
         default: './dist/index.js',
       },
     },
-    publishConfig: {
-      registry: 'https://npm.pkg.github.com',
-    },
+    publishConfig,
   };
 
   if (sourceManifest.license) {
@@ -110,6 +114,22 @@ function buildStagedManifest(sourceManifest) {
 
   if (sourceManifest.repository) {
     stagedManifest.repository = sourceManifest.repository;
+  }
+
+  if (sourceManifest.homepage) {
+    stagedManifest.homepage = sourceManifest.homepage;
+  }
+
+  if (sourceManifest.bugs) {
+    stagedManifest.bugs = sourceManifest.bugs;
+  }
+
+  if (sourceManifest.keywords) {
+    stagedManifest.keywords = sourceManifest.keywords;
+  }
+
+  if (sourceManifest.engines) {
+    stagedManifest.engines = sourceManifest.engines;
   }
 
   if (sourceManifest.dependencies) {
