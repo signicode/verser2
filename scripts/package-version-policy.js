@@ -6,6 +6,9 @@ const path = require('node:path');
 const PRESET_SHA_LENGTH = 12;
 const STABLE_TAG = 'latest';
 const PRERELEASE_TAG = 'next';
+const MAIN_SHA_TAG = 'main-sha';
+const NIGHTLY_TAG = 'nightly';
+const MANUAL_NPMJS_REGISTRY = 'npmjs-manual';
 const NPMJS_PUBLISH_ALLOWED = false;
 
 const semverRegex =
@@ -92,6 +95,38 @@ function parseArgs(argv) {
 
       options.sha = next;
       index += 1;
+      continue;
+    }
+
+    if (arg === '--publish-kind') {
+      const next = argv[index + 1];
+      if (!next || next.startsWith('--')) {
+        throw new Error('Missing value for --publish-kind');
+      }
+
+      options.publishKind = next;
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--publish-kind=')) {
+      options.publishKind = arg.slice('--publish-kind='.length);
+      continue;
+    }
+
+    if (arg === '--nightly-date') {
+      const next = argv[index + 1];
+      if (!next || next.startsWith('--')) {
+        throw new Error('Missing value for --nightly-date');
+      }
+
+      options.nightlyDate = next;
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--nightly-date=')) {
+      options.nightlyDate = arg.slice('--nightly-date='.length);
       continue;
     }
 
@@ -207,6 +242,25 @@ function deriveMainBuildVersion(version, sha, options = {}) {
   return `${baseVersion}-sha.${shortSha}`;
 }
 
+function getDefaultDateString() {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}`;
+}
+
+function deriveNightlyVersion(version, sha, date) {
+  if (!isValidSemver(version)) {
+    throw new Error(`Invalid semver version: ${version}`);
+  }
+
+  const baseVersion = getBaseVersion(version);
+  const shortSha = normalizeShortSha(sha, PRESET_SHA_LENGTH);
+  const nightlyDate = date || getDefaultDateString();
+  return `${baseVersion}-nightly.${nightlyDate}.${shortSha}`;
+}
+
 function getStagingRootDirectory() {
   return path.resolve(__dirname, '..', 'dist', 'packages');
 }
@@ -276,7 +330,50 @@ function rewriteInternalDependencies(manifest, internalPackageNames, version) {
   }
 }
 
-function getPolicySummary({ version, sha, mainBuild }) {
+function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate }) {
+  if (publishKind === 'tag-release') {
+    return {
+      inputVersion: version,
+      distTag: determineDistTag(version),
+      computedVersion: version,
+      npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      pythonVersion: toPythonVersion(version),
+    };
+  }
+
+  if (publishKind === 'merged-pr-sha') {
+    const mainVersion = deriveMainBuildVersion(version, sha);
+    return {
+      inputVersion: version,
+      distTag: MAIN_SHA_TAG,
+      computedVersion: mainVersion,
+      npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      pythonVersion: toPythonVersion(mainVersion),
+    };
+  }
+
+  if (publishKind === 'nightly') {
+    const nightlyVersion = deriveNightlyVersion(version, sha, nightlyDate);
+    return {
+      inputVersion: version,
+      distTag: NIGHTLY_TAG,
+      computedVersion: nightlyVersion,
+      npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      pythonVersion: toPythonVersion(nightlyVersion),
+    };
+  }
+
+  if (publishKind === 'manual-npmjs-candidate') {
+    return {
+      inputVersion: version,
+      distTag: determineDistTag(version),
+      computedVersion: version,
+      npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      registry: MANUAL_NPMJS_REGISTRY,
+      pythonVersion: toPythonVersion(version),
+    };
+  }
+
   const summary = {
     inputVersion: version,
     distTag: determineDistTag(version),
@@ -308,7 +405,13 @@ function main() {
   }
 
   try {
-    const summary = getPolicySummary(options);
+    const summary = getPolicySummary({
+      version: options.version,
+      sha: options.sha,
+      mainBuild: options.mainBuild,
+      publishKind: options.publishKind,
+      nightlyDate: options.nightlyDate,
+    });
     let applyResult;
 
     if (options.applyStaged) {
@@ -355,6 +458,8 @@ function main() {
 module.exports = {
   determineDistTag,
   deriveMainBuildVersion,
+  deriveNightlyVersion,
+  getDefaultDateString,
   normalizeShortSha,
   getPolicySummary,
   applyVersionToStagedPackages,
@@ -369,6 +474,9 @@ module.exports = {
   PRESET_SHA_LENGTH,
   STABLE_TAG,
   PRERELEASE_TAG,
+  MAIN_SHA_TAG,
+  NIGHTLY_TAG,
+  MANUAL_NPMJS_REGISTRY,
   NPMJS_PUBLISH_ALLOWED,
   usage,
 };

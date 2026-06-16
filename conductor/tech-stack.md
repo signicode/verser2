@@ -46,7 +46,7 @@ Future package targets:
 - Package staging command: `npm run stage:packages`, which writes publish-ready package directories under `dist/packages` from built workspace artifacts and copies package READMEs with repository-relative documentation links rewritten to GitHub `blob/<sha-or-tag>/...` URLs. The default docs ref is the current Git SHA and can be overridden with `VERSER_PACKAGE_DOCS_REF` for tag-based releases.
 - Package consumer validation command: `npm run test:package-consumers -- --source=<source|staging|tarball|github>`.
 - Package tarball behavior validation command: `npm run test:package-tarballs`, which packs staged packages, installs the tarballs into an isolated temporary consumer project, and runs reusable automated tests against package-name imports from `node_modules`.
-- Package version policy command: `npm run package:version-policy`, which maps stable versions to `latest`, prereleases to `next`, and computes SHA-labeled main-build versions for GitHub Packages.
+- Package version policy command: `npm run package:version-policy`, which maps stable tag releases to `latest`, prerelease tag releases to `next`, computes SHA-labeled merged-PR builds for the non-channel `main-sha` dist-tag, computes deterministic nightly builds for the non-channel `nightly` dist-tag, and describes manual npmjs candidates without enabling automated npmjs publication.
 - Test command: `npm run test` (builds, stages packages, then runs `node:test`).
 - Lint command: `npm run lint`.
 - Formatting/linting: Biome.
@@ -55,7 +55,7 @@ Future package targets:
 - Type declarations: generated during package builds.
 - Package bundling: `tsup` bundles each TypeScript package entrypoint to a single CommonJS `dist/index.js` and rolled-up `dist/index.d.ts` artifact after sources are split into internal modules.
 - Package publish staging: generated publish-only package manifests retain runtime metadata and omit development scripts, private/workspace fields, and test-only metadata.
-- GitHub Actions: `.github/workflows/package-publish.yml` validates package build/stage/pack/consumer/tarball behavior for pull requests and publishes staged packages to GitHub Packages on main/tag push events using scoped npm registry configuration for `@signicode` after versioned tarball behavior tests pass.
+- GitHub Actions: `.github/workflows/package-publish.yml` validates package build/stage/pack/consumer/tarball behavior for relevant pull requests, skips package validation for Conductor-only changes, publishes merged package-affecting main updates as SHA-versioned GitHub Packages under `main-sha`, publishes scheduled nightly builds under `nightly`, publishes explicit `v*` tag releases to `latest` or `next` according to semver, and never publishes automatically to npmjs.org.
 - Documentation: package publishing and release-engineering workflow details live in `docs/package-publishing.md`.
 - Documentation: TLS certificate generation and reload guidance lives in `docs/certificates.md`.
 - Documentation: task-focused user guidance lives under `docs/`, repository development guidance lives in `docs/development.md`, and codemap state lives in `.slim/codemap.json` with the root atlas at `codemap.md`.

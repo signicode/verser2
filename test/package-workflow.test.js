@@ -22,16 +22,44 @@ test('package publish workflow is defined', () => {
   );
 });
 
-test('workflow supports pull request and unfiltered main/tag push triggers', () => {
+test('workflow supports pull request, main push, tag, and nightly triggers', () => {
   const content = loadWorkflow();
   assert.match(content, /\non:\s*\n[\s\S]*?pull_request:/);
   assert.match(content, /pull_request:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
+  assert.match(
+    content,
+    /pull_request:\n[\s\S]*?types:[\s\S]*?-\s*opened[\s\S]*?-\s*synchronize[\s\S]*?-\s*reopened/,
+  );
   assert.match(content, /push:\n[\s\S]*?branches:[\s\S]*?-\s*main/);
   assert.match(content, /tags:\n[\s\S]*?-\s*'v\*'/);
+  assert.match(content, /schedule:\n[\s\S]*?-\s*cron:/);
   assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'packages\/\*\/src\/\*\*'/);
+  assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'docs\/release-procedure\.md'/);
+  assert.match(content, /pull_request:[\s\S]*?paths:[\s\S]*?-\s*'docs\/package-publishing\.md'/);
   assert.equal(/push:[\s\S]*?paths:/.test(content), false);
   assert.equal(/conductor\/\*\*/.test(content), false);
-  assert.equal(/docs\/\*\*/.test(content), false);
+});
+
+test('workflow detects package-affecting changes before validation or SHA publishing', () => {
+  const content = loadWorkflow();
+  assert.match(content, /detect-package-changes:/);
+  assert.match(content, /package-affecting/);
+  assert.match(content, /release-docs/);
+  assert.match(content, /conductor-only/);
+  assert.match(content, /docs-only/);
+  assert.match(content, /github\.event\.before/);
+  assert.match(content, /git diff --name-only "\$BASE_SHA"/);
+  assert.match(content, /docs\/release-procedure\.md/);
+  assert.match(content, /docs\/package-publishing\.md/);
+  assert.match(content, /docs\/\*\)[\s\S]*?should_publish_sha=false/);
+  assert.match(
+    content,
+    /package-validation:[\s\S]*?if:\s*\$\{\{[\s\S]*?needs\.detect-package-changes\.outputs\.should_validate\s*==\s*'true'/,
+  );
+  assert.match(
+    content,
+    /package-publish:[\s\S]*?needs\.detect-package-changes\.outputs\.should_publish_sha\s*==\s*'true'/,
+  );
 });
 
 test('workflow sets required permissions for publish', () => {
@@ -94,6 +122,17 @@ test('workflow applies package version policy and publishes to GitHub Packages',
   );
 });
 
+test('workflow resolves publish kind for tag, merged PR SHA, and nightly publication', () => {
+  const content = loadWorkflow();
+  assert.match(content, /publish_kind=tag-release/);
+  assert.match(content, /publish_kind=merged-pr-sha/);
+  assert.match(content, /publish_kind=nightly/);
+  assert.match(content, /--publish-kind "\$\{publishKind\}"/);
+  assert.match(content, /dist_tag=\$\{summary\.distTag\}/);
+  assert.match(content, /cron:/);
+  assert.match(content, /--tag "\$\{\{ steps\.publish-metadata\.outputs\.dist_tag \}\}"/);
+});
+
 test('workflow publishes Python distributions through GitHub artifacts and releases', () => {
   const content = loadWorkflow();
   assert.match(content, /Apply publish version to Python project/);
@@ -116,10 +155,7 @@ test('workflow publishes Python distributions through GitHub artifacts and relea
 
 test('workflow never publishes packages from pull request runs', () => {
   const content = loadWorkflow();
-  assert.match(
-    content,
-    /if:\s*github\.event_name\s*!=\s*'pull_request'\s*&&\s*github\.event_name\s*==\s*'push'/,
-  );
+  assert.match(content, /if:\s*\$\{\{[\s\S]*?github\.event_name\s*!=\s*'pull_request'/);
   assert.match(content, /Confirm validation job never publishes packages/);
 });
 

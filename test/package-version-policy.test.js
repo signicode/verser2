@@ -49,6 +49,54 @@ test('prerelease semver resolves to next dist-tag', () => {
   assert.equal(policy.determineDistTag('1.2.3-rc.0'), 'next');
 });
 
+test('publish kinds resolve deterministic versions and channel-safe dist-tags', () => {
+  const stableRelease = policy.getPolicySummary({
+    version: '1.2.3',
+    publishKind: 'tag-release',
+  });
+  assert.equal(stableRelease.computedVersion, '1.2.3');
+  assert.equal(stableRelease.distTag, 'latest');
+
+  const prerelease = policy.getPolicySummary({
+    version: '1.2.3-rc.1',
+    publishKind: 'tag-release',
+  });
+  assert.equal(prerelease.computedVersion, '1.2.3-rc.1');
+  assert.equal(prerelease.distTag, 'next');
+
+  const shaBuild = policy.getPolicySummary({
+    version: '1.2.3-next.0',
+    publishKind: 'merged-pr-sha',
+    sha: 'ABCDEF1234567890',
+  });
+  assert.equal(shaBuild.computedVersion, '1.2.3-sha.abcdef123456');
+  assert.equal(shaBuild.distTag, 'main-sha');
+  assert.notEqual(shaBuild.distTag, 'latest');
+  assert.notEqual(shaBuild.distTag, 'next');
+
+  const nightly = policy.getPolicySummary({
+    version: '1.2.3-rc.1',
+    publishKind: 'nightly',
+    sha: 'fedcba9876543210',
+    nightlyDate: '20260616',
+  });
+  assert.equal(nightly.computedVersion, '1.2.3-nightly.20260616.fedcba987654');
+  assert.equal(nightly.distTag, 'nightly');
+  assert.notEqual(nightly.distTag, 'latest');
+  assert.notEqual(nightly.distTag, 'next');
+});
+
+test('manual npmjs candidates are described but not automatically allowed', () => {
+  const npmCandidate = policy.getPolicySummary({
+    version: '1.2.3',
+    publishKind: 'manual-npmjs-candidate',
+  });
+
+  assert.equal(npmCandidate.computedVersion, '1.2.3');
+  assert.equal(npmCandidate.npmJsPublishAllowed, false);
+  assert.equal(npmCandidate.registry, 'npmjs-manual');
+});
+
 test('main-build version strips prerelease and appends sha', () => {
   const stable = policy.deriveMainBuildVersion('1.2.3', 'AbCdEf1234567890');
   assert.equal(stable, '1.2.3-sha.abcdef123456');
@@ -158,4 +206,45 @@ test('CLI --json returns deterministic version and tag', () => {
   assert.equal(payload.inputVersion, '1.2.3-next.0');
   assert.equal(payload.computedVersion, '1.2.3-next.0');
   assert.equal(payload.npmJsPublishAllowed, false);
+});
+
+test('CLI --json supports merged PR SHA and nightly publish kinds', () => {
+  const command = process.execPath;
+  const shaOutput = execFileSync(
+    command,
+    [
+      scriptPath,
+      '--version',
+      '1.2.3-next.0',
+      '--publish-kind',
+      'merged-pr-sha',
+      '--sha',
+      'ABCDEF1234567890',
+      '--json',
+    ],
+    { encoding: 'utf8' },
+  );
+  const shaPayload = JSON.parse(shaOutput);
+  assert.equal(shaPayload.computedVersion, '1.2.3-sha.abcdef123456');
+  assert.equal(shaPayload.distTag, 'main-sha');
+
+  const nightlyOutput = execFileSync(
+    command,
+    [
+      scriptPath,
+      '--version',
+      '1.2.3',
+      '--publish-kind',
+      'nightly',
+      '--sha',
+      'fedcba9876543210',
+      '--nightly-date',
+      '20260616',
+      '--json',
+    ],
+    { encoding: 'utf8' },
+  );
+  const nightlyPayload = JSON.parse(nightlyOutput);
+  assert.equal(nightlyPayload.computedVersion, '1.2.3-nightly.20260616.fedcba987654');
+  assert.equal(nightlyPayload.distTag, 'nightly');
 });
