@@ -17,19 +17,19 @@ This checklist captures the current repository state and the work to complete be
 
 ## Publish decision gates
 
-- [ ] Decide whether open sourcing means source visibility only, GitHub Packages publishing, npmjs.org publishing, PyPI publishing, or all of these.
+- [x] Decide whether open sourcing means source visibility only, GitHub Packages publishing, npmjs.org publishing, PyPI publishing, or all of these. Current repository-file support covers public source readiness, GitHub Packages previews/releases, and maintainer-gated npmjs.org publishing; PyPI remains out of scope.
 - [ ] Decide whether `conductor/`, `opencode.jsonc`, and `.slim/` should stay public, move to private tooling, or be documented as internal project-management/tooling artifacts.
-- [ ] Decide whether package publication remains under `@signicode` and whether public package names are final.
-- [ ] Confirm every roadmap claim is still accurate; do not imply HTTP/3, browser, Rust, Go, Java, or Python Host implementations are shipped.
-- [ ] Confirm the README states that applications remain responsible for authentication, authorization, and routing policy.
+- [x] Decide whether package publication remains under `@signicode` and whether public package names are final. Repository metadata and workflows keep the `@signicode` scope.
+- [x] Confirm every roadmap claim is still accurate; do not imply HTTP/3, browser, Rust, Go, Java, or Python Host implementations are shipped.
+- [x] Confirm the README states that applications remain responsible for authentication, authorization, and routing policy.
 
 ## Safety precautions before changing visibility
 
 - [ ] Run a full secret scan on the complete git history, not only the working tree.
-- [ ] Treat `test/fixtures/generated-tls/` certificates and keys as test-only; document this if they remain in the public repo.
-- [ ] Review commit history for credentials, private hostnames, customer names, private URLs, unpublished business plans, and personal data.
-- [ ] Review `conductor/` for internal planning details that should not be public.
-- [ ] Review `.github/workflows/package-publish.yml` and all scripts for tokens, registry assumptions, and publish side effects.
+- [x] Treat `test/fixtures/generated-tls/` certificates and keys as test-only; document this if they remain in the public repo.
+- [ ] Review commit history for credentials, private hostnames, customer names, private URLs, unpublished business plans, and personal data. Suggested command: `docker run --rm -v $(pwd):/repo ghcr.io/gitleaks/gitleaks:latest detect --source=/repo --verbose --report-path=/tmp/gitleaks-report.json`.
+- [x] Review `conductor/` for internal planning details that should not be public.
+- [x] Review `.github/workflows/package-publish.yml` and all scripts for tokens, registry assumptions, and publish side effects.
 - [ ] Confirm `.gitignore` excludes generated output (`dist/`, coverage, virtualenvs, caches, local cert locks, and dependency folders).
 - [ ] Rotate any credential that ever appeared in the repository, even if it was later removed.
 - [ ] Make the repository public only after branch protection, required checks, and security scanning are configured.
@@ -47,10 +47,10 @@ Current state:
 Checklist:
 
 - [ ] Confirm MIT is the intended license for source, JavaScript packages, and the Python package.
-- [ ] Add `NOTICE` if any dependency or bundled asset requires attribution beyond MIT license text.
-- [ ] Add `CONTRIBUTING.md` with development setup, test commands, coding style, issue/PR expectations, and release boundaries.
-- [ ] Add `SECURITY.md` with vulnerability reporting contact, supported versions, and disclosure expectations.
-- [ ] Add `CODE_OF_CONDUCT.md`, such as Contributor Covenant.
+- [x] Add `NOTICE` if any dependency or bundled asset requires attribution beyond MIT license text. No `NOTICE` file is currently required because no bundled third-party source/assets needing extra attribution were identified.
+- [x] Add `CONTRIBUTING.md` with development setup, test commands, coding style, issue/PR expectations, and release boundaries.
+- [x] Add `SECURITY.md` with vulnerability reporting contact, supported versions, and disclosure expectations.
+- [x] Add `CODE_OF_CONDUCT.md`, such as Contributor Covenant.
 - [ ] Confirm third-party licenses for npm and Python dependencies are compatible with MIT distribution.
 
 ## Package readiness checks
@@ -63,9 +63,9 @@ Root workspace:
 
 All JavaScript workspace packages:
 
-- [ ] Remove `"private": true` before public npm publishing, or keep it if GitHub source release is the only goal.
-- [ ] Add `publishConfig` for the intended registry and access level.
-- [ ] Add `repository`, `homepage`, `bugs`, `keywords`, and `engines` metadata.
+- [x] Remove `"private": true` before public npm publishing, or keep it if GitHub source release is the only goal. Source workspace manifests keep `private: true`; staged publish manifests omit it before packing/publishing.
+- [x] Add `publishConfig` for the intended registry and access level.
+- [x] Add `repository`, `homepage`, `bugs`, `keywords`, and `engines` metadata.
 - [ ] Confirm `main` and `types` point to built files included in package tarballs.
 - [ ] Confirm each package README is consumer-facing and has links that work after `scripts/stage-packages.js` rewrites them.
 - [ ] Run `npm run build`, `npm run stage:packages`, `npm run test:package-consumers`, and `npm run test:package-tarballs` before first public publish.
@@ -94,13 +94,13 @@ Current `.github/workflows/package-publish.yml` behavior:
 
 Checklist:
 
-- [ ] Add a separate always-on PR CI workflow for build, tests, lint, package consumer checks, and package tarball checks.
-- [ ] Revisit PR `paths` filters; current filters can skip docs-only, root config, or governance changes that should still receive basic checks.
-- [ ] Add `workflow_dispatch` for explicit release dry runs if maintainers need manual validation.
+- [x] Add a separate always-on PR CI workflow for build, tests, lint, package consumer checks, and package tarball checks.
+- [x] Revisit PR `paths` filters; current filters can skip docs-only, root config, or governance changes that should still receive basic checks.
+- [x] Add `workflow_dispatch` for explicit release dry runs if maintainers need manual validation.
 - [ ] Pin or audit third-party GitHub Actions (`actions/checkout`, `actions/setup-node`, `actions/upload-artifact`, `actions/download-artifact`, `astral-sh/setup-uv`, `softprops/action-gh-release`).
 - [ ] Use environments or required reviewers for publishing jobs.
 - [ ] Confirm `packages: write` and `contents: write` are granted only to publish jobs, not validation jobs.
-- [ ] If publishing to npmjs.org, change registry configuration, add `NPM_TOKEN`, and update `scripts/package-version-policy.js` where `NPMJS_PUBLISH_ALLOWED` is currently false.
+- [x] If publishing to npmjs.org, change registry configuration, add `NPM_TOKEN`, and update `scripts/package-version-policy.js` where `NPMJS_PUBLISH_ALLOWED` is currently false. Manual setup of `NPM_TOKEN` or trusted publishing remains required.
 - [ ] If publishing to PyPI, add trusted publishing or scoped API token release steps for `packages/verser2-guest-python`.
 - [ ] Add release notes validation and changelog requirements before tag publishing.
 
@@ -113,11 +113,11 @@ Checklist:
 - [ ] Restrict who can push tags matching `v*` or create releases.
 - [ ] Enable delete branch on merge if that matches maintainer workflow.
 - [ ] Decide which merge method to allow; allowing all three is flexible but can make history conventions inconsistent.
-- [ ] Enable Dependabot alerts and add `.github/dependabot.yml` for npm and GitHub Actions.
+- [x] Enable Dependabot alerts and add `.github/dependabot.yml` for npm and GitHub Actions. Dependabot alerts still require repository setting enablement.
 - [ ] Enable secret scanning after making the repository public, and enable push protection if available.
-- [ ] Enable CodeQL or another code scanning workflow for TypeScript and Python.
-- [ ] Add `.github/CODEOWNERS` for package, docs, scripts, and workflow ownership.
-- [ ] Add issue templates and a pull request template.
+- [x] Enable CodeQL or another code scanning workflow for TypeScript and Python.
+- [x] Add `.github/CODEOWNERS` for package, docs, scripts, and workflow ownership.
+- [x] Add issue templates and a pull request template.
 - [ ] Consider enabling Discussions only if maintainers intend to support community Q&A there.
 
 ## Code safeguards
@@ -135,9 +135,9 @@ Current state:
 Checklist:
 
 - [ ] Add a local pre-commit or pre-push path for `npm run lint` and focused tests.
-- [ ] Add repository-level secret scanning configuration such as Gitleaks or TruffleHog for CI and local use.
-- [ ] Add CodeQL, Semgrep, or equivalent static analysis for TypeScript and Python.
-- [ ] Add dependency review for pull requests.
+- [x] Add repository-level secret scanning configuration such as Gitleaks or TruffleHog for CI and local use.
+- [x] Add CodeQL, Semgrep, or equivalent static analysis for TypeScript and Python.
+- [x] Add dependency review for pull requests.
 - [ ] Add CI coverage reporting only if maintainers will enforce it.
 - [ ] Keep `dist/` and generated build artifacts out of source commits.
 - [ ] Add a documented maintainer checklist for changing public API exports.
