@@ -43,7 +43,7 @@ jobs:
       should_publish_sha: ${{ steps.check.outputs.should_publish_sha }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -135,7 +135,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node for GitHub Packages
         uses: actions/setup-node@v4
@@ -191,7 +191,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node for GitHub Packages
         uses: actions/setup-node@v4
@@ -347,7 +347,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node for npmjs.org
         uses: actions/setup-node@v4
