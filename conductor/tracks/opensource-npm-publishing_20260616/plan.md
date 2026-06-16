@@ -35,7 +35,7 @@ Phase 1 validation notes:
 - Validation: `node --test test/package-publish-readiness.test.js --test-name-pattern "staged package manifests are publish-only consumer metadata"` passed, confirming staged manifests omit `private` and other source-only fields.
 - Coverage: not applicable for behavior-neutral Conductor planning and release documentation notes.
 - Manual verification: approved after correcting the staged-manifest `private` note and adding the package-publishing runbook note.
-- Phase checkpoint commit: pending.
+- Phase checkpoint commit: `716f78b`.
 
 ## Phase 2: Governance and repository safeguard files
 
