@@ -118,8 +118,8 @@ test('workflow applies package version policy and preserves GitHub Packages publ
     'Expected package-version-policy to be part of publish flow.',
   );
   assertHas(
-    /npm publish --access restricted --tag .* --registry https:\/\/npm\.pkg\.github\.com/,
-    'Expected npm publish to target npm.pkg.github.com.',
+    /npm publish --access public --tag .* --registry https:\/\/npm\.pkg\.github\.com/,
+    'Expected npm publish to target npm.pkg.github.com with public access.',
   );
 });
 
@@ -215,7 +215,7 @@ test('workflow runs tarball automated tests during pull request validation', () 
 
 test('workflow runs tarball automated tests after publish versioning and before publishing', () => {
   assertHas(
-    /Apply publish version to staged packages[\s\S]*?npm run test:package-tarballs[\s\S]*?npm publish --access restricted/,
+    /Apply publish version to staged packages[\s\S]*?npm run test:package-tarballs[\s\S]*?npm publish --access public/,
     'Expected publish flow to run tarball automated tests after version mutation and before npm publish.',
   );
 });
