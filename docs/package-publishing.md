@@ -187,9 +187,9 @@ For both publish paths, the workflow:
 
 - Uses `actions/setup-node` with the registry URL and `scope: @signicode` for the active publish target.
 - Uses `NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` for GitHub Packages publish.
-- Uses npm trusted publishing with `id-token: write` for npmjs.org publish.
+- Uses npm trusted publishing with `id-token: write` and a current npm CLI on Node 22 for npmjs.org publish.
 - Publishes GitHub Packages with `npm publish --access public` so package pages and installs can be public after the repository launch.
-- Uploads the validation job's `dist/packages` tree and Python distribution directory, then downloads those artifacts in the publish job instead of running a second full `npm run build` / `npm run stage:packages` cycle.
+- Uploads the validation job's `dist/packages` tree and Python wheel/source-distribution artifacts, then downloads those artifacts in the publish job instead of running a second full `npm run build` / `npm run stage:packages` cycle.
 - Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
 - Runs automated tarball behavior tests before the pull-request validation job completes.
 - Re-runs staged consumer validation, import-only tarball consumer validation, and automated tarball behavior tests after applying the publish version so internal package dependencies point at the same published version.

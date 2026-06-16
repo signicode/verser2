@@ -75,7 +75,7 @@ Automatic `main`, nightly, and pull-request workflow paths never publish to npmj
 Before the first real npmjs publication:
 
 1. Configure the `npmjs-release` GitHub environment with required reviewers.
-2. Configure npm trusted publishing for the `@signicode` packages with publisher `GitHub Actions`, organization `signicode`, repository `verser2`, workflow `package-publish.yml`, and environment `npmjs-release`.
+2. Configure npm trusted publishing for each `@signicode` package with publisher `GitHub Actions`, organization `signicode`, repository `verser2`, workflow `package-publish.yml`, environment `npmjs-release`, and an allowed action that includes `npm publish`.
 3. Confirm package access settings for public scoped packages.
 4. For manual dry runs, run the workflow with `publish_npmjs: true`, the intended `npmjs_version`, and `npmjs_dry_run: true`.
 5. Review the dry-run output. For real releases, push a `v*` tag or re-run manual dispatch with `npmjs_dry_run: false` only when maintainers approve the public publish.
