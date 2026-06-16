@@ -157,7 +157,7 @@ jobs:
           npm run stage:packages
 
       - name: Upload reusable package build output
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-build-output
           path: |
@@ -314,7 +314,7 @@ jobs:
           done
 
       - name: Upload Python distribution artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: verser2-guest-python-${{ steps.publish-metadata.outputs.publish_version }}
           path: packages/verser2-guest-python/dist/python/*
