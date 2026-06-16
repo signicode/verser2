@@ -67,6 +67,8 @@ npm run package:version-policy -- --version 1.2.3 --publish-kind merged-pr-sha -
 
 This mutates only generated package manifests under `dist/packages`. It does not mutate source workspace `package.json` files.
 
+The staging script builds a publish-only manifest from selected source fields instead of copying the source manifest wholesale. Source workspace packages may retain development-only fields such as `private`, `scripts`, `devDependencies`, or `workspaces`; staged package manifests omit those fields before packing or publishing. `test/package-publish-readiness.test.js` verifies that staged manifests do not contain `private: true`.
+
 The publish workflow also converts the computed npm-style publish version to a
 PEP 440-compatible Python version before building the Python distribution. For
 example, `1.2.3-sha.abcdef123456` becomes
