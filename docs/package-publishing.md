@@ -6,7 +6,7 @@ For the end-to-end release commit, tag, publish, and post-release bump procedure
 
 ## Version and dist-tag policy
 
-Use `npm run package:version-policy` to inspect how a package version maps to publish metadata.
+Use `npm run package:version-policy` to inspect how a package version maps to publish metadata. The helper can describe tag releases, merged-PR SHA builds, nightly builds, and manual npmjs candidates; automated workflows only publish to GitHub Packages.
 
 Stable versions use the `latest` dist-tag:
 
@@ -22,10 +22,10 @@ npm run package:version-policy -- --version 1.2.3-beta.1 --json
 npm run package:version-policy -- --version 1.2.3-rc.0 --json
 ```
 
-Main-merge GitHub Packages builds use a deterministic SHA prerelease version. The helper strips any prerelease from the current package version and appends a normalized short SHA:
+Merged-PR GitHub Packages builds use a deterministic SHA prerelease version and the non-channel `main-sha` dist-tag. The helper strips any prerelease from the current package version and appends a normalized short SHA:
 
 ```sh
-npm run package:version-policy -- --version 1.2.3 --main-build --sha abcdef1234567890 --json
+npm run package:version-policy -- --version 1.2.3 --publish-kind merged-pr-sha --sha abcdef1234567890 --json
 ```
 
 The computed version uses this shape:
@@ -36,6 +36,20 @@ The computed version uses this shape:
 
 For example, `1.2.3-next.0` and SHA `ABCDEF1234567890` become `1.2.3-sha.abcdef123456`.
 
+Nightly GitHub Packages builds use a deterministic nightly prerelease version and the non-channel `nightly` dist-tag:
+
+```sh
+npm run package:version-policy -- --version 1.2.3 --publish-kind nightly --sha abcdef1234567890 --nightly-date 20260616 --json
+```
+
+The computed version uses this shape:
+
+```text
+<base-version>-nightly.<yyyymmdd>.<shortsha>
+```
+
+SHA and nightly dist-tags never advance `latest` or `next`; only explicit `v*` tag releases advance those GitHub Packages channels.
+
 ## Applying versions to staged packages
 
 Build and stage packages first:
@@ -45,10 +59,10 @@ npm run build
 npm run stage:packages
 ```
 
-Then apply a computed main-build version to staged manifests only:
+Then apply a computed SHA or nightly version to staged manifests only:
 
 ```sh
-npm run package:version-policy -- --version 1.2.3 --main-build --sha abcdef1234567890 --apply-staged --json
+npm run package:version-policy -- --version 1.2.3 --publish-kind merged-pr-sha --sha abcdef1234567890 --apply-staged --json
 ```
 
 This mutates only generated package manifests under `dist/packages`. It does not mutate source workspace `package.json` files.
@@ -127,9 +141,15 @@ The GitHub mode exits successfully with a skip report unless `VERSER_RUN_GITHUB_
 
 ## npmjs publishing boundary
 
-This track prepares the repository for future npmjs publishing, but npmjs publish execution is out of scope. The version-policy helper does not run `npm publish` and reports `npmJsPublishAllowed: false`.
+This repository keeps npmjs publishing manual. The automated GitHub Actions package workflow never publishes to npmjs.org. The version-policy helper can describe a manual npmjs candidate, but it does not run `npm publish` and reports `npmJsPublishAllowed: false`:
 
-Future npmjs release work should reuse the same stable/prerelease tag policy:
+```sh
+npm run package:version-policy -- --version 1.2.3 --publish-kind manual-npmjs-candidate --json
+```
+
+Manual npmjs publication should use an explicitly selected version that is already available and validated in GitHub Packages.
+
+Manual npmjs release work should reuse the same stable/prerelease tag policy:
 
 - stable versions publish with `latest`;
 - prerelease versions publish with `next`.
@@ -142,9 +162,10 @@ A GitHub Actions workflow publishes staged artifacts to GitHub Packages:
 
 Behavior summary:
 
-- Pull requests to `main`: build, stage, pack, run local package-consumer tests, and run automated tarball behavior tests. Pull-request workflow runs must never publish packages to GitHub Packages.
-- Pushes to `main`: run the same validation flow, upload the validated build/staging output for reuse by the publish job, compute a deterministic main-build version, re-run staged, import-only tarball, and automated tarball behavior tests after applying that version, then publish with `next` dist-tag. Pull-request commits do not publish; only accepted main updates publish SHA-labeled package versions.
-- Pushes for tags matching `v*`: run the same flow, reuse the validated build/staging output, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish using stable/pre-release dist-tags from policy.
+- Pull requests to `main`: build, stage, pack, run local package-consumer tests, and run automated tarball behavior tests only for relevant source, package metadata, test, workflow, script, and release-engineering documentation changes. Pull-request workflow runs must never publish packages to GitHub Packages. Conductor-only pull requests do not run the package validation jobs.
+- Pushes to `main`: classify changed files before package validation. Package-affecting merges run the validation flow, upload the validated build/staging output for reuse by the publish job, compute a deterministic SHA version, re-run staged, import-only tarball, and automated tarball behavior tests after applying that version, then publish with the non-channel `main-sha` dist-tag. Documentation-only and Conductor-only merges do not publish packages; release-procedure/package-publishing docs can trigger validation without publication.
+- Scheduled nightly runs: run independently of the latest changed files, validate package output, compute a deterministic nightly version, then publish to GitHub Packages with the non-channel `nightly` dist-tag.
+- Pushes for tags matching `v*`: run the same flow, reuse the validated build/staging output, re-run staged, import-only tarball, and automated tarball behavior tests after applying the tag-decoded version, then publish using stable/pre-release dist-tags from policy (`latest` for stable semver, `next` for prereleases).
 
 For both publish paths, the workflow:
 
@@ -167,9 +188,12 @@ Python package index.
 
 Manual validation steps (first-time publish):
 
-1. Push a normal commit to `main` and confirm publish job uses the SHA build version.
-2. Push a release-style tag like `v1.2.3` and confirm stable publish metadata.
-3. Push a prerelease tag like `v1.2.3-next.0` and confirm the `next` dist-tag behavior.
-4. Set `VERSER_RUN_GITHUB_CONSUMER_TESTS=1` and verify GitHub Packages install checks pass from the workflow logs.
+1. Merge a package-affecting pull request to `main` and confirm the publish job uses the SHA build version with the `main-sha` dist-tag.
+2. Confirm a Conductor-only pull request does not run package build/test/publish jobs.
+3. Confirm release-procedure or package-publishing documentation changes run validation without publishing packages.
+4. Trigger or observe a scheduled nightly run and confirm the `nightly` dist-tag behavior.
+5. Push a release-style tag like `v1.2.3` and confirm stable publish metadata.
+6. Push a prerelease tag like `v1.2.3-next.0` and confirm the `next` dist-tag behavior.
+7. Set `VERSER_RUN_GITHUB_CONSUMER_TESTS=1` and verify GitHub Packages install checks pass from the workflow logs.
 
 If GitHub Packages validation is intentionally disabled, confirm the step logs a skip reason instead of failing.
