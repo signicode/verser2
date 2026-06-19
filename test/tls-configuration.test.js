@@ -616,8 +616,9 @@ test('Node Broker supports TLS config with CA file path', async () => {
 
 test('Node Guest dispatches through plain HTTP/1 attachment without HTTPS setup', async () => {
   const server = http.createServer((request, response) => {
+    assert.equal(request.url, '/http1');
     response.writeHead(202, { 'x-server': 'attached' });
-    response.end(request.url);
+    response.end('/http1');
   });
 
   const guest = createVerserNodeGuest({

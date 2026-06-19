@@ -324,8 +324,9 @@ test('Node Guest maps failed Host registration to an actionable error', async ()
 
 test('Node Guest can attach an http.Server without listening', async () => {
   const server = http.createServer((request, response) => {
+    assert.equal(request.url, '/server');
     response.writeHead(202, { 'x-server': 'attached' });
-    response.end(request.url);
+    response.end('/server');
   });
   const guest = createGuest({
     hostUrl: 'https://localhost:1',
