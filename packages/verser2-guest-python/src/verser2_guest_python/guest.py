@@ -21,7 +21,12 @@ from .asgi import (
     build_http_scope,
     dispatch_asgi_request,
 )
-from .protocol import VERSER_ENVELOPE_PREFIX_BYTES, decode_envelope, encode_envelope
+from .protocol import (
+    VERSER_ENVELOPE_PREFIX_BYTES,
+    decode_envelope,
+    encode_envelope,
+    sanitize_http2_response_headers,
+)
 
 
 class VerserGuest:
@@ -418,10 +423,12 @@ class VerserGuest:
                         {
                             "requestId": str((metadata or {}).get("requestId") or ""),
                             "statusCode": int(event.get("status") or 200),
-                            "headers": {
-                                name.decode("ascii", "ignore").lower(): value.decode("latin-1")
-                                for name, value in event.get("headers", [])
-                            },
+                            "headers": sanitize_http2_response_headers(
+                                {
+                                    name.decode("ascii", "ignore").lower(): value.decode("latin-1")
+                                    for name, value in event.get("headers", [])
+                                }
+                            ),
                         },
                     ),
                     False,

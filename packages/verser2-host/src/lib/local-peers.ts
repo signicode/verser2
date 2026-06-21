@@ -8,6 +8,7 @@ import {
   createRoutedResponseEnvelope,
   createVerserError,
   flattenVerserHeaders,
+  sanitizeHttp2ResponseHeaders,
   validateVerserHeaders,
 } from '@signicode/verser-common';
 import type {
@@ -129,10 +130,11 @@ class LocalServerResponse extends EventEmitter {
   }
 
   public toBrokerResponse(requestId: string): VerserLocalBrokerResponse {
+    const sanitizedHeaders = sanitizeHttp2ResponseHeaders(Object.fromEntries(this.headers));
     const envelope = createRoutedResponseEnvelope({
       requestId,
       statusCode: this.statusCode,
-      headers: flattenVerserHeaders(validateVerserHeaders(Object.fromEntries(this.headers))),
+      headers: flattenVerserHeaders(validateVerserHeaders(sanitizedHeaders)),
     });
     return {
       requestId: envelope.requestId,

@@ -1172,6 +1172,65 @@ test('Bun-facing Broker fetch reaches imported upstream route through federation
   }
 });
 
+test('Federated forwarding strips transfer-encoding and connection-listed response headers', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-federated-headers',
+      routedDomains: ['federated-headers.verser.test'],
+      listener: (_request, response) => {
+        response.setHeader('transfer-encoding', 'chunked');
+        response.setHeader('connection', 'x-foo');
+        response.setHeader('x-foo', 'should-be-stripped');
+        response.setHeader('x-end-to-end', 'preserved');
+        response.end('ok');
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-federated-headers',
+          'federated-headers.verser.test',
+        ).length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-federated-headers',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('federated-headers.verser.test');
+
+    const response = await broker.request({
+      targetId: 'guest-federated-headers',
+      method: 'GET',
+      path: '/federated-headers',
+      headers: { host: 'federated-headers.verser.test' },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['x-end-to-end'], 'preserved');
+    assert.equal(response.headers['transfer-encoding'], undefined);
+    assert.equal(response.headers.connection, undefined);
+    assert.equal(response.headers['x-foo'], undefined);
+    await text(response.body);
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
 async function assertEventually(assertion) {
   let lastError;
   for (let attempt = 0; attempt < 50; attempt += 1) {

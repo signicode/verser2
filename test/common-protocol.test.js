@@ -564,6 +564,86 @@ test('shared body normalization rejects unsupported bodies', () => {
   );
 });
 
+test('shared sanitizeHttp2ResponseHeaders strips standard hop-by-hop response headers', () => {
+  const sanitized = common.sanitizeHttp2ResponseHeaders({
+    'content-type': 'text/plain',
+    connection: 'close',
+    'keep-alive': 'timeout=5',
+    'proxy-authenticate': 'Basic',
+    'proxy-authorization': 'token',
+    te: 'trailers',
+    trailer: 'x-custom',
+    'transfer-encoding': 'chunked',
+    upgrade: 'websocket',
+    'x-end-to-end': 'preserved',
+  });
+
+  assert.equal(sanitized['content-type'], 'text/plain');
+  assert.equal(sanitized['x-end-to-end'], 'preserved');
+  assert.equal(sanitized.connection, undefined);
+  assert.equal(sanitized['keep-alive'], undefined);
+  assert.equal(sanitized['proxy-authenticate'], undefined);
+  assert.equal(sanitized['proxy-authorization'], undefined);
+  assert.equal(sanitized.te, undefined);
+  assert.equal(sanitized.trailer, undefined);
+  assert.equal(sanitized['transfer-encoding'], undefined);
+  assert.equal(sanitized.upgrade, undefined);
+});
+
+test('shared sanitizeHttp2ResponseHeaders strips headers named in Connection value', () => {
+  const sanitized = common.sanitizeHttp2ResponseHeaders({
+    connection: 'x-foo, x-bar',
+    'x-foo': 'should-be-stripped',
+    'x-bar': 'also-stripped',
+    'x-baz': 'preserved',
+    'x-end-to-end': 'kept',
+  });
+
+  assert.equal(sanitized['x-baz'], 'preserved');
+  assert.equal(sanitized['x-end-to-end'], 'kept');
+  assert.equal(sanitized.connection, undefined);
+  assert.equal(sanitized['x-foo'], undefined);
+  assert.equal(sanitized['x-bar'], undefined);
+});
+
+test('shared sanitizeHttp2ResponseHeaders preserves end-to-end headers', () => {
+  const sanitized = common.sanitizeHttp2ResponseHeaders({
+    'content-type': 'application/json',
+    'content-length': '42',
+    'x-custom': 'value',
+  });
+
+  assert.equal(sanitized['content-type'], 'application/json');
+  assert.equal(sanitized['content-length'], '42');
+  assert.equal(sanitized['x-custom'], 'value');
+});
+
+test('shared sanitizeHttp2ResponseHeaders handles empty and absent Connection header', () => {
+  const noConnection = common.sanitizeHttp2ResponseHeaders({
+    'x-value': 'one',
+    'transfer-encoding': 'chunked',
+  });
+  assert.equal(noConnection['x-value'], 'one');
+  assert.equal(noConnection['transfer-encoding'], undefined);
+
+  const emptyConnection = common.sanitizeHttp2ResponseHeaders({
+    connection: '',
+    'x-value': 'two',
+  });
+  assert.equal(emptyConnection['x-value'], 'two');
+  assert.equal(emptyConnection.connection, undefined);
+});
+
+test('shared sanitizeHttp2ResponseHeaders handles array values', () => {
+  const sanitized = common.sanitizeHttp2ResponseHeaders({
+    'x-multi': ['a', 'b'],
+    connection: 'close',
+  });
+
+  assert.equal(sanitized['x-multi'], 'a,b');
+  assert.equal(sanitized.connection, undefined);
+});
+
 test('shared certificate helpers expose and verify a pinned certificate', () => {
   const fingerprint = common.getCertificateFingerprint(trusted.certificate);
 

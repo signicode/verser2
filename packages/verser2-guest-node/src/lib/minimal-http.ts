@@ -6,6 +6,7 @@ import {
   createRoutedResponseEnvelope,
   createVerserError,
   encodeVerserEnvelope,
+  sanitizeHttp2ResponseHeaders,
   validateVerserHeaders,
 } from '@signicode/verser-common';
 
@@ -225,11 +226,12 @@ export class MinimalServerResponse extends EventEmitter {
    * @returns A fully buffered dispatch response.
    */
   public toDispatchResponse(requestId: string): VerserNodeGuestDispatchResponse {
+    const rawHeaders = Object.fromEntries(this.headers);
     return {
       ...createRoutedResponseEnvelope({
         requestId,
         statusCode: this.statusCode,
-        headers: Object.fromEntries(this.headers),
+        headers: sanitizeHttp2ResponseHeaders(rawHeaders),
       }),
       body: Buffer.concat(this.chunks),
     };
@@ -247,7 +249,9 @@ export class MinimalServerResponse extends EventEmitter {
         metadata: {
           requestId: this.requestId ?? '',
           statusCode: this.statusCode,
-          headers: validateVerserHeaders(Object.fromEntries(this.headers)),
+          headers: validateVerserHeaders(
+            sanitizeHttp2ResponseHeaders(Object.fromEntries(this.headers)),
+          ),
         },
       }),
     );

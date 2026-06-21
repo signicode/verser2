@@ -211,3 +211,74 @@ export function validateVerserHeaders(headers: VerserHeaders): Record<string, st
 
   return validatedHeaders;
 }
+
+/**
+ * Standard HTTP/1 hop-by-hop headers that MUST NOT be forwarded over HTTP/2.
+ *
+ * @internal
+ */
+const HOP_BY_HOP_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+/**
+ * Sanitizes response headers for HTTP/2 transport by removing hop-by-hop
+ * headers that have no meaning in HTTP/2.
+ *
+ * Removes:
+ * - Standard hop-by-hop headers (`connection`, `keep-alive`,
+ *   `proxy-authenticate`, `proxy-authorization`, `te`, `trailer`,
+ *   `transfer-encoding`, `upgrade`).
+ * - Any header whose name appears as a value in the `Connection` header
+ *   (parsed as a comma-separated list of tokens).
+ *
+ * @param headers - Response headers to sanitize.
+ * @returns A new headers object with hop-by-hop headers removed.
+ * @public
+ */
+export function sanitizeHttp2ResponseHeaders(headers: VerserHeaders): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  const connectionTokens = new Set<string>();
+
+  // Collect connection tokens from the Connection header value.
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() === 'connection' && value !== null && value !== undefined) {
+      const rawValue = Array.isArray(value)
+        ? value.map((entry) => String(entry)).join(',')
+        : String(value);
+      for (const token of rawValue.split(',')) {
+        const trimmed = token.trim().toLowerCase();
+        if (trimmed.length > 0) {
+          connectionTokens.add(trimmed);
+        }
+      }
+    }
+  }
+
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+    const normalizedName = name.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(normalizedName)) {
+      // Skip hop-by-hop headers.
+      continue;
+    }
+    if (connectionTokens.has(normalizedName)) {
+      // Skip headers listed in the Connection header value.
+      continue;
+    }
+    sanitized[name] = Array.isArray(value)
+      ? value.map((entry) => String(entry)).join(',')
+      : String(value);
+  }
+
+  return sanitized;
+}

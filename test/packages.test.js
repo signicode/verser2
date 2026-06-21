@@ -122,6 +122,7 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'readVerserEnvelopeFromStream',
     'resolveRouteForHostname',
     'resolveRouteForUrl',
+    'sanitizeHttp2ResponseHeaders',
     'stripHttp2PseudoHeaders',
     'toHttp2RequestHeaders',
     'toHttp2ResponseHeaders',

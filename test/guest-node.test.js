@@ -460,6 +460,62 @@ test('Node Guest never exceeds maxOpenStreams while opening leases', async () =>
   }
 });
 
+test('Node Guest strips hop-by-hop response headers from direct dispatch', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-node-strip-hop',
+  });
+  guest.attach((_request, response) => {
+    response.setHeader('transfer-encoding', 'chunked');
+    response.setHeader('connection', 'close');
+    response.setHeader('x-custom', 'preserved');
+    response.end('ok');
+  });
+
+  const result = await guest.dispatchRoutedRequest({
+    requestId: 'req-strip-hop',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-strip-hop',
+    method: 'GET',
+    path: '/strip-hop',
+    headers: {},
+    body: [],
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.headers['x-custom'], 'preserved');
+  assert.equal(result.headers['transfer-encoding'], undefined);
+  assert.equal(result.headers.connection, undefined);
+});
+
+test('Node Guest strips connection-listed extension headers from direct dispatch', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-node-strip-connection',
+  });
+  guest.attach((_request, response) => {
+    response.setHeader('connection', 'x-keep');
+    response.setHeader('x-keep', 'should-be-stripped');
+    response.setHeader('x-normal', 'kept');
+    response.end('ok');
+  });
+
+  const result = await guest.dispatchRoutedRequest({
+    requestId: 'req-strip-connection',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-strip-connection',
+    method: 'GET',
+    path: '/strip-connection',
+    headers: {},
+    body: [],
+  });
+
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.headers['x-normal'], 'kept');
+  assert.equal(result.headers['x-keep'], undefined);
+  assert.equal(result.headers.connection, undefined);
+});
+
 test('Node Guest replenishes leases after an idle lease closes', async () => {
   const host = await createLeaseTrackingHost();
   const guest = createGuest({
