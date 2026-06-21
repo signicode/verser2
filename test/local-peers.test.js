@@ -177,6 +177,98 @@ test('Host rejects duplicate peer ids across local and HTTP/2 peers', async () =
   }
 });
 
+test('Local Guest flushHeaders commits headers before body is written', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    let headersResolve;
+    const headersCommitted = new Promise((resolve) => {
+      headersResolve = resolve;
+    });
+
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-guest-flush-1',
+      routedDomains: ['local-flush.local.test'],
+      listener: (request, response) => {
+        response.writeHead(201, { 'x-flushed': 'yes' });
+        response.flushHeaders();
+        headersResolve();
+        request.on('end', () => {
+          response.end('body-after-flush');
+        });
+        request.resume();
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-flush-1' });
+    await localBroker.waitForRoute('local-flush.local.test');
+
+    // Use a controlled PassThrough body that is NOT ended yet
+    const body = new PassThrough();
+    const responsePromise = localBroker.request({
+      targetId: 'local-guest-flush-1',
+      method: 'POST',
+      path: '/flush',
+      headers: { 'content-type': 'text/plain' },
+      body,
+    });
+
+    // Wait until the handler has called writeHead + flushHeaders
+    await headersCommitted;
+
+    // Response promise should resolve with headers BEFORE the request body is ended
+    const response = await responsePromise;
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.headers['x-flushed'], 'yes');
+
+    // Now end the request body — the handler will receive 'end' and call response.end()
+    body.end(Buffer.from('trigger'));
+    assert.deepEqual(await readBody(response.body), Buffer.from('body-after-flush'));
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Guest flushHeaders without subsequent body end still completes', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-guest-flush-2',
+      routedDomains: ['local-flush-no-body.local.test'],
+      listener: (request, response) => {
+        response.writeHead(204, { 'x-flush-only': 'true' });
+        response.flushHeaders();
+        response.end();
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-broker-flush-2' });
+    await localBroker.waitForRoute('local-flush-no-body.local.test');
+
+    const response = await localBroker.request({
+      targetId: 'local-guest-flush-2',
+      method: 'GET',
+      path: '/flush-no-body',
+    });
+
+    assert.equal(response.statusCode, 204);
+    assert.equal(response.headers['x-flush-only'], 'true');
+    const body = await readBody(response.body);
+    assert.equal(body.length, 0);
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Host authorizes local peer registration with Host-owned local metadata', async () => {
   const contexts = [];
   const host = createHost({

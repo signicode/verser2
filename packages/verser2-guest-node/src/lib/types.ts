@@ -256,7 +256,8 @@ export interface VerserNodeGuest {
  * socket access, trailers, upgrade support, and informational responses.
  *
  * @param request - Minimal incoming request with `method`, `url`, `headers`, and `on` for body events.
- * @param response - Minimal server response with `statusCode`, `setHeader`, `writeHead`, `write`, `end`.
+ * @param response - Minimal server response with `statusCode`, `setHeader`, `getHeader`, `writeHead`, `write`,
+ *                   `end`, and `flushHeaders`.
  *
  * @public
  */
@@ -274,6 +275,7 @@ export type NodeRequestListener = (
     writeHead: (statusCode: number, headers?: Record<string, string | number | boolean>) => unknown;
     write: (chunk: string | Buffer, encoding?: BufferEncoding) => boolean;
     end: (chunk?: string | Buffer, encoding?: BufferEncoding) => unknown;
+    flushHeaders: () => void;
     once?: (eventName: string | symbol, listener: (...args: unknown[]) => void) => unknown;
   },
 ) => void;

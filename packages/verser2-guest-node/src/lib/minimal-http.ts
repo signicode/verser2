@@ -196,6 +196,21 @@ export class MinimalServerResponse extends EventEmitter {
   }
 
   /**
+   * Commits response headers to the output stream without writing body data
+   * or ending the response.
+   *
+   * When a lease stream is available the response envelope is written
+   * immediately, enabling early header delivery to the Host and Broker.
+   *
+   * When no lease stream is available (buffered path) this is a no-op,
+   * consistent with the current lazy dispatch behaviour where headers are
+   * committed on the first `write()` or `end()` call.
+   */
+  public flushHeaders(): void {
+    this.startStreamingResponse();
+  }
+
+  /**
    * Finalises the response.
    *
    * If a chunk is provided it is written first. The underlying output stream
