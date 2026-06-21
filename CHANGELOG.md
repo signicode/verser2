@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.4 - HTTP/2 response header sanitization
+
+- Strips HTTP/1 hop-by-hop response headers before forwarding bridged responses through HTTP/2.
+- Removes headers named by the `Connection` header so local handlers can safely return ordinary HTTP/1-style streaming responses.
+- Adds Node, Python, leased-routing, and federated forwarding regression coverage for streamed responses with `transfer-encoding: chunked`.
+
 ## v0.4.1 - Upstream Broker dispatch
 
 - Enables Brokers connected to downstream Hosts to dispatch requests to routes imported from upstream Host federation links.
