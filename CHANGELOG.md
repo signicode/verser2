@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.5 - Local response header flushing
+
+- Adds `flushHeaders()` to Host local Guest responses so Node HTTP stream handlers can commit headers before body bytes are available.
+- Adds `flushHeaders()` to Node Guest minimal responses for leased streaming response compatibility.
+- Adds regression coverage for early header delivery before request body completion.
+
 ## v0.4.4 - HTTP/2 response header sanitization
 
 - Strips HTTP/1 hop-by-hop response headers before forwarding bridged responses through HTTP/2.
