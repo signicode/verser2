@@ -160,7 +160,7 @@ export {
   parseLeaseAcquireTimeoutMs,
 } from './lib/protocol-headers';
 
-export { validateVerserHeaders } from './lib/headers';
+export { sanitizeHttp2ResponseHeaders, validateVerserHeaders } from './lib/headers';
 
 export {
   toHttp2RequestHeaders,

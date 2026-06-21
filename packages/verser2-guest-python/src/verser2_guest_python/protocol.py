@@ -112,3 +112,52 @@ def normalize_headers(headers: dict[str, Any] | None) -> dict[str, str]:
             continue
         normalized[str(name).lower()] = str(value)
     return normalized
+
+
+# Standard HTTP/1 hop-by-hop headers that MUST NOT be forwarded over HTTP/2.
+_HOP_BY_HOP_HEADERS: set[str] = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+def sanitize_http2_response_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Remove HTTP/1 hop-by-hop headers from *headers* for HTTP/2 transport.
+
+    Strips:
+    - Standard hop-by-hop headers (connection, keep-alive,
+      proxy-authenticate, proxy-authorization, te, trailer,
+      transfer-encoding, upgrade).
+    - Any header whose name appears as a value in the ``Connection`` header
+      (parsed as a comma-separated list of tokens).
+
+    Parameters
+    ----------
+    headers : dict[str, str]
+        Response headers (lowercased keys).
+
+    Returns
+    -------
+    dict[str, str]
+        Sanitized headers with hop-by-hop entries removed.
+    """
+    connection_tokens: set[str] = set()
+    for name, value in headers.items():
+        if name.lower() == "connection":
+            for token in value.split(","):
+                trimmed = token.strip().lower()
+                if trimmed:
+                    connection_tokens.add(trimmed)
+
+    return {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in _HOP_BY_HOP_HEADERS
+        and name.lower() not in connection_tokens
+    }

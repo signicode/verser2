@@ -901,11 +901,11 @@ test('Host maps leased error envelopes to Broker request errors', async () => {
   }
 });
 
-test('Host validates leased response metadata headers before forwarding', async () => {
+test('Host silently strips hop-by-hop response headers from leased metadata', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-response-header-validation-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-response-header-sanitize-1' });
   const rawGuest = await connectRawClient(host.address.port);
 
   try {
@@ -913,18 +913,18 @@ test('Host validates leased response metadata headers before forwarding', async 
     assert.equal(
       (
         await requestJson(rawGuest, {
-          peerId: 'guest-response-header-validation-1',
+          peerId: 'guest-response-header-sanitize-1',
           role: 'guest',
-          routedDomains: ['response-header-validation.local.test'],
+          routedDomains: ['response-header-sanitize.local.test'],
         })
       ).status,
       'registered',
     );
-    await broker.waitForRoute('response-header-validation.local.test');
+    await broker.waitForRoute('response-header-sanitize.local.test');
     await openRawLease(
       rawGuest,
-      'guest-response-header-validation-1',
-      'raw-lease-response-header-validation-1',
+      'guest-response-header-sanitize-1',
+      'raw-lease-response-header-sanitize-1',
       (metadata, _body, lease) => {
         lease.end(
           common.encodeVerserEnvelope({
@@ -932,26 +932,84 @@ test('Host validates leased response metadata headers before forwarding', async 
             metadata: {
               requestId: metadata.requestId,
               statusCode: 200,
-              headers: { connection: 'close' },
+              headers: {
+                connection: 'close',
+                'x-guest': 'ok',
+                'transfer-encoding': 'chunked',
+              },
             },
           }),
         );
       },
     );
 
-    await assert.rejects(
-      () =>
-        broker.request({
-          targetId: 'guest-response-header-validation-1',
-          method: 'GET',
-          path: '/invalid-response-header',
-        }),
-      (error) => {
-        assert.equal(error.code, 'protocol-error');
-        assert.match(error.message, /forbidden header/i);
-        return true;
+    const response = await broker.request({
+      targetId: 'guest-response-header-sanitize-1',
+      method: 'GET',
+      path: '/sanitized-response-header',
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['x-guest'], 'ok');
+    assert.equal(response.headers.connection, undefined);
+    assert.equal(response.headers['transfer-encoding'], undefined);
+    await readBody(response.body);
+  } finally {
+    await broker.close('test-complete');
+    rawGuest.destroy();
+    await host.close('test-complete');
+  }
+});
+
+test('Host strips transfer-encoding from streaming leased responses', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-streaming-sanitize-1' });
+  const rawGuest = await connectRawClient(host.address.port);
+
+  try {
+    await broker.connect();
+    assert.equal(
+      (
+        await requestJson(rawGuest, {
+          peerId: 'guest-streaming-sanitize-1',
+          role: 'guest',
+          routedDomains: ['streaming-sanitize.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    await broker.waitForRoute('streaming-sanitize.local.test');
+    await openRawLease(
+      rawGuest,
+      'guest-streaming-sanitize-1',
+      'raw-lease-streaming-sanitize-1',
+      (metadata, _body, lease) => {
+        lease.write(
+          common.encodeVerserEnvelope({
+            type: 'response',
+            metadata: {
+              requestId: metadata.requestId,
+              statusCode: 200,
+              headers: { 'transfer-encoding': 'chunked', 'x-streamed': 'yes' },
+            },
+          }),
+        );
+        lease.end(Buffer.from('streamed-body'));
       },
     );
+
+    const response = await broker.request({
+      targetId: 'guest-streaming-sanitize-1',
+      method: 'GET',
+      path: '/streaming-sanitize',
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['x-streamed'], 'yes');
+    assert.equal(response.headers['transfer-encoding'], undefined);
+    assert.deepEqual(await readBody(response.body), Buffer.from('streamed-body'));
   } finally {
     await broker.close('test-complete');
     rawGuest.destroy();

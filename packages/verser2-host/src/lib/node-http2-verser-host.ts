@@ -40,6 +40,7 @@ import {
   readLeaseResponseMetadataFromStream,
   readNdjsonLines,
   readVerserEnvelopeFromStream,
+  sanitizeHttp2ResponseHeaders,
   toVerserErrorCode,
   validateVerserHeaders,
 } from '@signicode/verser-common';
@@ -913,7 +914,9 @@ export class NodeHttp2VerserHost implements VerserHost {
           metadata: {
             requestId: response.requestId,
             statusCode: response.statusCode,
-            headers: flattenVerserHeaders(validateVerserHeaders(response.headers)),
+            headers: flattenVerserHeaders(
+              validateVerserHeaders(sanitizeHttp2ResponseHeaders(response.headers)),
+            ),
           },
         }),
       );
@@ -1661,7 +1664,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     return {
       requestId: request.requestId,
       statusCode: metadata.statusCode,
-      headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),
+      headers: flattenVerserHeaders(
+        validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
+      ),
       body,
     };
   }
@@ -1758,7 +1763,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       return {
         requestId: request.requestId,
         statusCode: metadata.statusCode,
-        headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),
+        headers: flattenVerserHeaders(
+          validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
+        ),
         body: lease.stream,
       };
     } finally {
@@ -2037,7 +2044,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       const responseMetadata = await responsePromise;
       stream.respond({
         ':status': responseMetadata.statusCode,
-        ...validateVerserHeaders(responseMetadata.headers),
+        ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
       });
       requestStream.once('error', () => {
         if (!stream.closed) {
@@ -2094,7 +2101,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       });
       stream.respond({
         ':status': response.statusCode,
-        ...validateVerserHeaders(response.headers),
+        ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(response.headers)),
       });
       response.body.once('error', () => {
         if (!stream.closed) {
@@ -2153,7 +2160,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     const responseMetadata = await responsePromise;
     stream.respond({
       ':status': responseMetadata.statusCode,
-      ...validateVerserHeaders(responseMetadata.headers),
+      ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
     });
     lease.stream.once('error', () => {
       if (!stream.closed) {

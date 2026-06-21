@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote, unquote, urlsplit
 
-from .protocol import normalize_headers
+from .protocol import normalize_headers, sanitize_http2_response_headers
 
 
 ASGIApp = Callable[[dict[str, Any], Callable[[], Awaitable[dict[str, Any]]], Callable[[dict[str, Any]], Awaitable[None]]], Awaitable[None]]
@@ -233,6 +233,6 @@ async def dispatch_asgi_request(
     return DispatchResponse(
         request_id=request_id,
         status_code=status_code,
-        headers=response_headers,
+        headers=sanitize_http2_response_headers(response_headers),
         body=b"".join(response_chunks),
     )

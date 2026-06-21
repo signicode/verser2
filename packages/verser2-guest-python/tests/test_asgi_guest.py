@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import h2.events
 
 from verser2_guest_python import create_verser_guest
-from verser2_guest_python.protocol import decode_envelope, encode_envelope, normalize_headers
+from verser2_guest_python.protocol import (
+    decode_envelope,
+    encode_envelope,
+    normalize_headers,
+    sanitize_http2_response_headers,
+)
 
 
 class FakeReader:
@@ -272,6 +277,46 @@ class AsgiDispatchTest(unittest.TestCase):
 
         self.assertEqual(response.headers, {"x-binary": "é"})
 
+    def test_dispatch_sanitizes_hop_by_hop_response_headers(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"transfer-encoding", b"chunked"),
+                        (b"connection", b"close"),
+                        (b"x-end-to-end", b"preserved"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1",
+            guest_id="python-sanitize-response",
+            app=app,
+        )
+
+        response = asyncio.run(
+            guest.dispatch_routed_request(
+                {
+                    "requestId": "req-python-sanitize",
+                    "sourceId": "broker-unit",
+                    "targetId": "python-sanitize-response",
+                    "method": "GET",
+                    "path": "/sanitize",
+                    "headers": {},
+                },
+                b"",
+            )
+        )
+
+        self.assertEqual(response.headers.get("x-end-to-end"), "preserved")
+        self.assertIsNone(response.headers.get("transfer-encoding"))
+        self.assertIsNone(response.headers.get("connection"))
+
 
 class ProtocolEnvelopeTest(unittest.TestCase):
     def test_encode_response_envelope_matches_verser_prefix(self) -> None:
@@ -314,6 +359,54 @@ class ProtocolEnvelopeTest(unittest.TestCase):
 
     def test_normalize_headers_joins_lists_without_spaces_for_node_parity(self) -> None:
         self.assertEqual(normalize_headers({"x-list": ["one", "two"]}), {"x-list": "one,two"})
+
+    def test_sanitize_http2_response_headers_strips_standard_hop_by_hop(self) -> None:
+        sanitized = sanitize_http2_response_headers(
+            {
+                "content-type": "text/plain",
+                "connection": "close",
+                "keep-alive": "timeout=5",
+                "proxy-authenticate": "Basic",
+                "proxy-authorization": "token",
+                "te": "trailers",
+                "trailer": "x-custom",
+                "transfer-encoding": "chunked",
+                "upgrade": "websocket",
+                "x-end-to-end": "preserved",
+            }
+        )
+        self.assertEqual(sanitized.get("content-type"), "text/plain")
+        self.assertEqual(sanitized.get("x-end-to-end"), "preserved")
+        self.assertIsNone(sanitized.get("connection"))
+        self.assertIsNone(sanitized.get("keep-alive"))
+        self.assertIsNone(sanitized.get("proxy-authenticate"))
+        self.assertIsNone(sanitized.get("proxy-authorization"))
+        self.assertIsNone(sanitized.get("te"))
+        self.assertIsNone(sanitized.get("trailer"))
+        self.assertIsNone(sanitized.get("transfer-encoding"))
+        self.assertIsNone(sanitized.get("upgrade"))
+
+    def test_sanitize_http2_response_headers_strips_connection_named_headers(self) -> None:
+        sanitized = sanitize_http2_response_headers(
+            {
+                "connection": "x-foo, x-bar",
+                "x-foo": "should-be-stripped",
+                "x-bar": "also-stripped",
+                "x-baz": "preserved",
+            }
+        )
+        self.assertEqual(sanitized.get("x-baz"), "preserved")
+        self.assertIsNone(sanitized.get("connection"))
+        self.assertIsNone(sanitized.get("x-foo"))
+        self.assertIsNone(sanitized.get("x-bar"))
+
+    def test_sanitize_http2_response_headers_preserves_end_to_end_headers(self) -> None:
+        sanitized = sanitize_http2_response_headers(
+            {"content-type": "application/json", "content-length": "42", "x-custom": "value"}
+        )
+        self.assertEqual(sanitized.get("content-type"), "application/json")
+        self.assertEqual(sanitized.get("content-length"), "42")
+        self.assertEqual(sanitized.get("x-custom"), "value")
 
 
 class LeaseTaskTest(unittest.TestCase):
