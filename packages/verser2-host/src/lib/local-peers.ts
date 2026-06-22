@@ -118,6 +118,10 @@ class LocalServerResponse extends EventEmitter {
     return this.bodyStream.write(buffer);
   }
 
+  public flushHeaders(): void {
+    this.start();
+  }
+
   public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
     if (chunk !== undefined) {
       this.write(chunk, encoding);

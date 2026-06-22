@@ -82,6 +82,7 @@ export interface VerserLocalGuestResponse {
   writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): this;
   write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
   end(chunk?: string | Buffer, encoding?: BufferEncoding): this;
+  flushHeaders(): void;
 }
 
 /**

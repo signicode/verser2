@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const http2 = require('node:http2');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
@@ -187,9 +188,100 @@ test('Node Guest uses the guest id as the automatic attach domain', async () => 
     ]);
   } finally {
     await guest.close('test-complete');
+    await host.close();
+  }
+});
+
+test('Node Guest direct dispatch succeeds when handler calls flushHeaders before end', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-node-flush-headers',
+  });
+  guest.attach((request, response) => {
+    response.writeHead(202, { 'x-flush': 'called' });
+    response.flushHeaders();
+    response.end('body');
+  });
+
+  const result = await guest.dispatchRoutedRequest({
+    requestId: 'req-flush-headers',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-flush-headers',
+    method: 'GET',
+    path: '/flush-headers',
+    headers: {},
+    body: [],
+  });
+
+  assert.equal(result.statusCode, 202);
+  assert.equal(result.headers['x-flush'], 'called');
+  assert.deepEqual(result.body, Buffer.from('body'));
+});
+
+test('Node Guest flushHeaders works through streaming lease path with early header delivery', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let localBroker;
+
+  try {
+    let headersResolve;
+    const headersCommitted = new Promise((resolve) => {
+      headersResolve = resolve;
+    });
+
+    guest = createGuest({ hostUrl, guestId: 'guest-stream-flush' });
+    guest.attach((request, response) => {
+      response.writeHead(208, { 'x-stream-flush': 'yes' });
+      response.flushHeaders();
+      headersResolve();
+      request.on('end', () => {
+        response.end('streamed-body');
+      });
+      request.resume();
+    }, 'stream-flush.local.test');
+
+    localBroker = await host.attachLocalBroker({ brokerId: 'node-stream-flush-broker' });
+    await guest.connect();
+    await localBroker.waitForRoute('stream-flush.local.test');
+
+    // Use a controlled PassThrough body that is NOT ended yet
+    const body = new PassThrough();
+    const responsePromise = localBroker.request({
+      targetId: 'guest-stream-flush',
+      method: 'POST',
+      path: '/stream-flush',
+      headers: { 'content-type': 'text/plain' },
+      body,
+    });
+
+    // Wait until the handler has called writeHead + flushHeaders
+    await headersCommitted;
+
+    // Response promise should resolve with headers BEFORE the request body is ended
+    const response = await responsePromise;
+    assert.equal(response.statusCode, 208);
+    assert.equal(response.headers['x-stream-flush'], 'yes');
+
+    // Now end the request body — the handler will receive 'end' and call response.end()
+    body.end(Buffer.from('trigger'));
+    assert.deepEqual(await readBody(response.body), Buffer.from('streamed-body'));
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
     await host.close('test-complete');
   }
 });
+
+function readBody(stream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', reject);
+  });
+}
 
 test('Node Guest rejects invalid setup and missing handlers with contextual errors', async () => {
   assert.throws(() => createGuest({ hostUrl: 'https://localhost:1', guestId: '' }), /guest id/i);

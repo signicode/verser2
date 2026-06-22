@@ -1,6 +1,6 @@
 {
   "name": "@signicode/verser2-guest-python",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "private": true,
   "description": "Python ASGI Guest package for Verser2.",
   "license": "MIT",
