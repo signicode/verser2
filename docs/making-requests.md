@@ -200,6 +200,33 @@ Each Broker-to-Host request uses a separate HTTP/2 stream. The Guest leg uses
 an assigned one-use lease stream for raw body bytes while the control stream
 remains available for coordination.
 
+## Observing route changes
+
+Brokers can observe route lifecycle events reactively without polling:
+
+```ts
+// Node / Bun
+const unsubscribe = broker.onRouteChange((event) => {
+  console.log(event.type, event.domain, event.reason);
+});
+
+// Python
+def on_change(event):
+    print(event["type"], event["domain"], event.get("reason"))
+
+unsubscribe = broker.on_route_change(on_change)
+```
+
+Event payloads contain `type` (`added`, `removed`, `changed`, `degraded`),
+`targetId`, `domain`, and optional `reason` and `generation` metadata. The
+route snapshot (`getRoutes()`) is updated before the listener fires.
+
+The Broker is observational-only — there is no Broker-level revoke API. Route
+revocation is a Guest operation (see [Routes — revocation](./routes.md#route-revocation)).
+
+See the [Lifecycle and errors](./lifecycle-and-errors.md) doc for the full
+event and degraded-route reference.
+
 ## Wait for route
 
 Before sending requests, wait for the target route to be advertised:

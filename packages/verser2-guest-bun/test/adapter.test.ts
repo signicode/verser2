@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createVerserBunGuest } from '../src/index';
+import { createVerserBroker, createVerserBunGuest } from '../src/index';
 import { createNodeStyleHandler, dispatchVerserBunRequestInternal } from '../src/lib/adapter';
 
 type StreamEventHandler = (chunk?: unknown) => void;
@@ -398,6 +398,44 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
       Response.prototype.text = originalText;
       Response.prototype.json = originalJson;
     }
+  });
+
+  describe('Bun wrapper revokeRoutes exposure', () => {
+    test('exposes revokeRoutes as a function on the Bun Guest wrapper', () => {
+      const guest = createVerserBunGuest({
+        hostUrl: 'https://localhost:1',
+        guestId: 'bun-revoke-test',
+      });
+      expect(typeof guest.revokeRoutes).toBe('function');
+    });
+
+    test('revokeRoutes rejects with an error when not connected', async () => {
+      const guest = createVerserBunGuest({
+        hostUrl: 'https://localhost:1',
+        guestId: 'bun-revoke-not-connected',
+      });
+      await expect(guest.revokeRoutes(['example.com'])).rejects.toThrow();
+    });
+  });
+
+  describe('Bun wrapper onRouteChange exposure', () => {
+    test('exposes onRouteChange as a function on the Broker', () => {
+      const broker = createVerserBroker({
+        hostUrl: 'https://localhost:1',
+        brokerId: 'bun-routechange-test',
+      });
+      expect(typeof broker.onRouteChange).toBe('function');
+    });
+
+    test('onRouteChange returns an unsubscribe function', () => {
+      const broker = createVerserBroker({
+        hostUrl: 'https://localhost:1',
+        brokerId: 'bun-routechange-unsub-test',
+      });
+      const unsub = broker.onRouteChange(() => {});
+      expect(typeof unsub).toBe('function');
+      unsub();
+    });
   });
 
   test('preserves streamed Node request bodies as Bun Request.body for non-GET methods', async () => {

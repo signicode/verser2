@@ -1,0 +1,18 @@
+exceptions:
+  halt: conservative
+
+delegation:
+  mode: omo-slim
+  strategy: specialists
+  agents:
+    implementation: fixer
+    research: explorer
+    review: oracle
+    documentation: librarian
+    design: designer
+
+workflow:
+  supervision: semi-automatic
+
+branching:
+  mode: branched

@@ -351,6 +351,9 @@ test('shared lifecycle names and contextual errors are exported', () => {
     requestCompleted: 'request-completed',
     error: 'error',
     closed: 'closed',
+    routeRevoked: 'route-revoked',
+    routeDegraded: 'route-degraded',
+    routeRestored: 'route-restored',
   });
 
   const error = common.createVerserError('missing-guest', 'Target guest is not connected', {
@@ -768,4 +771,219 @@ test('shared certificate identity extraction summarizes peer certificate metadat
       '1.2.3.4': 'verser-extension-value',
     },
   });
+});
+
+test('shared route lifecycle constants are exported', () => {
+  assert.deepEqual(common.VERSER_ROUTE_LIFECYCLE_EVENT_TYPES, {
+    added: 'added',
+    removed: 'removed',
+    changed: 'changed',
+    degraded: 'degraded',
+  });
+  assert.deepEqual(common.VERSER_ROUTE_EVENT_REASONS, {
+    registered: 'registered',
+    revoked: 'revoked',
+    disconnected: 'disconnected',
+    reconnected: 'reconnected',
+    restored: 'restored',
+    timeout: 'timeout',
+    updated: 'updated',
+  });
+  assert.equal(common.DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS, 5000);
+  assert.equal(common.VERSER_GUEST_REVOCATION_PATH, '/verser/guest/revoke');
+  assert.equal(common.VERSER_LIFECYCLE_EVENTS.routeRevoked, 'route-revoked');
+  assert.equal(common.VERSER_LIFECYCLE_EVENTS.routeDegraded, 'route-degraded');
+  assert.equal(common.VERSER_LIFECYCLE_EVENTS.routeRestored, 'route-restored');
+});
+
+test('shared route lifecycle control frame preserves event types and reasons', () => {
+  const frame = common.createBrokerRouteLifecycleControlFrame([
+    {
+      type: 'added',
+      targetId: 'guest-alpha',
+      domain: 'alpha.verser.test',
+      reason: 'registered',
+      generation: { generationId: 'gen-1' },
+    },
+    {
+      type: 'removed',
+      targetId: 'guest-alpha',
+      domain: 'alpha.verser.test',
+      reason: 'revoked',
+    },
+    {
+      type: 'changed',
+      targetId: 'guest-alpha',
+      domain: 'alpha.verser.test',
+      reason: 'restored',
+    },
+    {
+      type: 'degraded',
+      targetId: 'guest-alpha',
+      domain: 'alpha.verser.test',
+      reason: 'disconnected',
+    },
+  ]);
+
+  assert.equal(frame.type, 'route-lifecycle');
+  assert.equal(frame.events.length, 4);
+  assert.equal(frame.events[0].type, 'added');
+  assert.equal(frame.events[0].reason, 'registered');
+  assert.equal(frame.events[0].generation.generationId, 'gen-1');
+  assert.equal(frame.events[1].type, 'removed');
+  assert.equal(frame.events[1].reason, 'revoked');
+  assert.equal(frame.events[2].type, 'changed');
+  assert.equal(frame.events[2].reason, 'restored');
+  assert.equal(frame.events[3].type, 'degraded');
+  assert.equal(frame.events[3].reason, 'disconnected');
+  assert.equal(frame.events[3].generation, undefined);
+});
+
+test('shared route lifecycle control frame validates event type and reason', () => {
+  assert.throws(
+    () =>
+      common.createBrokerRouteLifecycleControlFrame([
+        { type: 'unknown', targetId: 'g', domain: 'd' },
+      ]),
+    /Invalid route lifecycle event type/,
+  );
+  assert.throws(
+    () =>
+      common.createBrokerRouteLifecycleControlFrame([
+        { type: 'added', targetId: 'g', domain: 'd', reason: 'unknown-reason' },
+      ]),
+    /Invalid route lifecycle event reason/,
+  );
+  assert.throws(
+    () =>
+      common.createBrokerRouteLifecycleControlFrame([{ type: 'added', targetId: '', domain: 'd' }]),
+    /targetId must not be empty/,
+  );
+  assert.throws(
+    () =>
+      common.createBrokerRouteLifecycleControlFrame([{ type: 'added', targetId: 'g', domain: '' }]),
+    /domain must not be empty/,
+  );
+});
+
+test('shared broker control frame union includes route lifecycle frame', () => {
+  const routesFrame = common.createBrokerRoutesControlFrame([
+    { targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+  ]);
+  const lifecycleFrame = common.createBrokerRouteLifecycleControlFrame([
+    { type: 'added', targetId: 'guest-alpha', domain: 'alpha.verser.test' },
+  ]);
+
+  // Both frame shapes should be valid control frames
+  assert.equal(routesFrame.type, 'routes');
+  assert.equal(lifecycleFrame.type, 'route-lifecycle');
+  assert.equal(lifecycleFrame.events.length, 1);
+  assert.equal(lifecycleFrame.events[0].type, 'added');
+
+  // Legacy broker route compatibility preserved
+  assert.deepEqual(routesFrame, {
+    type: 'routes',
+    routes: [{ targetId: 'guest-alpha', domain: 'alpha.verser.test' }],
+  });
+});
+
+test('shared guest revocation request validates domains', () => {
+  const request = common.createGuestRevocationRequest({
+    domains: ['alpha.verser.test', 'beta.verser.test'],
+  });
+
+  assert.deepEqual(request.domains, ['alpha.verser.test', 'beta.verser.test']);
+
+  assert.throws(() => common.createGuestRevocationRequest({ domains: [] }), /at least one domain/);
+  assert.throws(
+    () => common.createGuestRevocationRequest({ domains: [''] }),
+    /domain must not be empty/,
+  );
+});
+
+test('shared guest revocation response shapes are stable', () => {
+  const ack = common.createGuestRevocationResponse({ status: 'ack' });
+  assert.deepEqual(ack, { status: 'ack' });
+
+  const partial = common.createGuestRevocationResponse({
+    status: 'partial',
+    message: 'Some domains failed',
+    failedDomains: [{ domain: 'alpha.verser.test', error: 'Not found' }],
+  });
+  assert.deepEqual(partial, {
+    status: 'partial',
+    message: 'Some domains failed',
+    failedDomains: [{ domain: 'alpha.verser.test', error: 'Not found' }],
+  });
+
+  const error = common.createGuestRevocationResponse({
+    status: 'error',
+    message: 'Request rejected',
+  });
+  assert.deepEqual(error, {
+    status: 'error',
+    message: 'Request rejected',
+  });
+
+  assert.throws(
+    () => common.createGuestRevocationResponse({ status: 'invalid' }),
+    /Invalid revocation response status/,
+  );
+});
+
+test('shared guest revocation response omits optional fields when empty', () => {
+  const ack = common.createGuestRevocationResponse({ status: 'ack' });
+  assert.equal(ack.message, undefined);
+  assert.equal(ack.failedDomains, undefined);
+
+  const withEmptyFailed = common.createGuestRevocationResponse({
+    status: 'ack',
+    failedDomains: [],
+  });
+  assert.equal(withEmptyFailed.failedDomains, undefined);
+});
+
+test('shared route generation metadata is created with default and custom ids', () => {
+  const gen = common.createVerserRouteGeneration();
+  assert.ok(gen.generationId);
+  assert.ok(gen.generationId.startsWith('gen-'));
+  assert.equal(gen.sessionId, undefined);
+
+  const genCustom = common.createVerserRouteGeneration({
+    generationId: 'gen-42',
+    sessionId: 'session-abc',
+  });
+  assert.equal(genCustom.generationId, 'gen-42');
+  assert.equal(genCustom.sessionId, 'session-abc');
+
+  const genNoSession = common.createVerserRouteGeneration({
+    generationId: 'gen-7',
+  });
+  assert.equal(genNoSession.generationId, 'gen-7');
+  assert.equal(genNoSession.sessionId, undefined);
+
+  assert.throws(
+    () => common.createVerserRouteGeneration({ generationId: '' }),
+    /generationId must be a non-empty string/,
+  );
+});
+
+test('shared route generation metadata propagates through lifecycle events', () => {
+  const event = common.createRouteLifecycleEvent({
+    type: 'added',
+    targetId: 'guest-alpha',
+    domain: 'alpha.verser.test',
+    generation: { generationId: 'gen-1', sessionId: 'sess-1' },
+  });
+
+  assert.equal(event.generation.generationId, 'gen-1');
+  assert.equal(event.generation.sessionId, 'sess-1');
+
+  const eventNoGen = common.createRouteLifecycleEvent({
+    type: 'added',
+    targetId: 'guest-alpha',
+    domain: 'beta.verser.test',
+  });
+
+  assert.equal(eventNoGen.generation, undefined);
 });

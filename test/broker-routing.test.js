@@ -70,6 +70,23 @@ function requestJson(session, payload, path = '/verser/register') {
   });
 }
 
+function requestJsonWithHeaders(session, headers, payload = '') {
+  return new Promise((resolve, reject) => {
+    const stream = session.request(headers);
+    let body = '';
+
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk) => {
+      body += chunk;
+    });
+    stream.on('end', () => {
+      resolve(body.length === 0 ? undefined : JSON.parse(body));
+    });
+    stream.on('error', reject);
+    stream.end(payload);
+  });
+}
+
 function openRawLease(session, peerId, leaseId, onRequest) {
   return new Promise((resolve, reject) => {
     const lease = session.request({
@@ -605,25 +622,43 @@ test('Broker uses one session with separate concurrent routed request streams', 
   }
 });
 
-test('Broker receives route retraction after Guest disconnect', async () => {
-  const host = createHost({ port: 0 });
+test('Broker receives route degradation after Guest disconnect and route removal after timeout', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 500 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-retraction-1' });
-  const guest = createGuest({ hostUrl, guestId: 'guest-retraction-1' });
-  guest.attach((_request, response) => response.end('ok'), 'retraction.local.test');
+  const broker = createBroker({ hostUrl, brokerId: 'broker-degraded-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-degraded-1' });
+  guest.attach((_request, response) => response.end('ok'), 'degraded.local.test');
 
   try {
     await broker.connect();
     await guest.connect();
-    await broker.waitForRoute('retraction.local.test');
+    await broker.waitForRoute('degraded.local.test');
     assert.deepEqual(broker.getRoutes(), [
-      { targetId: 'guest-retraction-1', domain: 'retraction.local.test' },
+      { targetId: 'guest-degraded-1', domain: 'degraded.local.test' },
     ]);
 
     await guest.close('test-disconnect');
+
+    // Route should become degraded but still visible in broker routes
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('route retraction timed out')), 5000);
+      const timeout = setTimeout(() => reject(new Error('degraded route not visible')), 2000);
+      const check = setInterval(() => {
+        if (broker.getRoutes().length >= 1) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-degraded-1', domain: 'degraded.local.test' },
+    ]);
+
+    // After timeout, route should be removed
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('route removal timed out')), 3000);
       const check = setInterval(() => {
         if (broker.getRoutes().length === 0) {
           clearTimeout(timeout);
@@ -632,6 +667,8 @@ test('Broker receives route retraction after Guest disconnect', async () => {
         }
       }, 10);
     });
+
+    assert.deepEqual(broker.getRoutes(), []);
   } finally {
     await broker.close('test-complete');
     await guest.close('test-complete');
@@ -1435,6 +1472,786 @@ test('Guest handler failure after response start cancels the Broker response str
     await closed;
   } finally {
     rawBroker.destroy();
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+// ================ Phase 3: Route Revocation & Lifecycle Events ================
+
+test('Guest revokeRoutes sends revocation request and receives ACK from Host', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    guest = createGuest({ hostUrl, guestId: 'guest-revoke-ack-1' });
+    guest.attach((_req, res) => res.end('ok'), 'revoke-ack-a.local.test');
+    broker = createBroker({ hostUrl, brokerId: 'broker-revoke-ack-1' });
+
+    await guest.connect();
+    await broker.connect();
+    await broker.waitForRoute('revoke-ack-a.local.test');
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-revoke-ack-1', domain: 'revoke-ack-a.local.test' },
+    ]);
+
+    // Revoke one route
+    const response = await guest.revokeRoutes(['revoke-ack-a.local.test']);
+
+    assert.equal(response.status, 'ack');
+    assert.equal(response.message, undefined);
+
+    // Route should be removed from broker snapshot
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('route removal not propagated')), 2000);
+      const check = setInterval(() => {
+        if (broker.getRoutes().length === 0) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+    assert.deepEqual(broker.getRoutes(), []);
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Guest revokeRoutes rejects for unregistered domains', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+
+  try {
+    guest = createGuest({ hostUrl, guestId: 'guest-revoke-error-1' });
+    guest.attach((_req, res) => res.end('ok'), 'revoke-error-a.local.test');
+    await guest.connect();
+
+    // Revoke a domain that is not registered
+    const response = await guest.revokeRoutes(['not-registered.local.test']);
+
+    // Should return error status with failed domains
+    assert.equal(response.status, 'error');
+    assert.ok(response.failedDomains);
+    assert.equal(response.failedDomains.length, 1);
+    assert.equal(response.failedDomains[0].domain, 'not-registered.local.test');
+  } finally {
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Guest revokeRoutes rejects for empty domain list', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+
+  try {
+    guest = createGuest({ hostUrl, guestId: 'guest-revoke-empty-1' });
+    guest.attach((_req, res) => res.end('ok'), 'revoke-empty.local.test');
+    await guest.connect();
+
+    // Revoke with empty list should reject
+    await assert.rejects(
+      () => guest.revokeRoutes([]),
+      (error) => {
+        assert.equal(error.code, 'revocation-failed');
+        return true;
+      },
+    );
+  } finally {
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Guest revokeRoutes rejects when Guest is not connected', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const guest = createGuest({ hostUrl, guestId: 'guest-revoke-disconnected-1' });
+
+  await assert.rejects(
+    () => guest.revokeRoutes(['any.local.test']),
+    (error) => {
+      assert.equal(error.code, 'disconnected-target');
+      return true;
+    },
+  );
+
+  await host.close('test-complete');
+});
+
+test('Broker onRouteChange receives added and removed lifecycle events', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    const routeChanges = [];
+    broker = createBroker({ hostUrl, brokerId: 'broker-lifecycle-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-lifecycle-1' });
+    guest.attach((_req, res) => res.end('ok'), 'lifecycle-a.local.test');
+
+    await broker.connect();
+
+    broker.onRouteChange((event) => {
+      routeChanges.push(event);
+    });
+
+    await guest.connect();
+
+    // Wait for the 'added' event
+    await broker.waitForRoute('lifecycle-a.local.test');
+
+    // Check that we received an 'added' event
+    assert.ok(routeChanges.length >= 1);
+    const addedEvent = routeChanges.find((e) => e.type === 'added');
+    assert.ok(addedEvent, 'Should have received an added event');
+    assert.equal(addedEvent.domain, 'lifecycle-a.local.test');
+    assert.equal(addedEvent.targetId, 'guest-lifecycle-1');
+
+    // Revoke and check for 'removed' event
+    await guest.revokeRoutes(['lifecycle-a.local.test']);
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('removed event not received')), 2000);
+      const check = setInterval(() => {
+        if (routeChanges.some((e) => e.type === 'removed')) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+
+    const removedEvent = routeChanges.find((e) => e.type === 'removed');
+    assert.ok(removedEvent, 'Should have received a removed event');
+    assert.equal(removedEvent.domain, 'lifecycle-a.local.test');
+    assert.equal(removedEvent.reason, 'revoked');
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker onRouteChange receives degraded event on Guest disconnect', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 5000 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    const routeChanges = [];
+    broker = createBroker({ hostUrl, brokerId: 'broker-lifecycle-degraded-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-lifecycle-degraded-1' });
+    guest.attach((_req, res) => res.end('ok'), 'lifecycle-degraded.local.test');
+
+    await broker.connect();
+    broker.onRouteChange((event) => {
+      routeChanges.push(event);
+    });
+
+    await guest.connect();
+    await broker.waitForRoute('lifecycle-degraded.local.test');
+
+    // Clear any initial 'added' events
+    routeChanges.length = 0;
+
+    // Disconnect the guest
+    await guest.close('test-disconnect');
+
+    // Wait for the 'degraded' event
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('degraded event not received')), 2000);
+      const check = setInterval(() => {
+        if (routeChanges.some((e) => e.type === 'degraded')) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+
+    const degradedEvent = routeChanges.find((e) => e.type === 'degraded');
+    assert.ok(degradedEvent, 'Should have received a degraded event');
+    assert.equal(degradedEvent.domain, 'lifecycle-degraded.local.test');
+    assert.equal(degradedEvent.reason, 'disconnected');
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker request fails fast for degraded route (Guest disconnected)', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 5000 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-degraded-request-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-degraded-request-1' });
+    guest.attach((_req, res) => res.end('ok'), 'degraded-request.local.test');
+
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('degraded-request.local.test');
+
+    // Disconnect the guest
+    await guest.close('test-disconnect');
+
+    // Wait a brief moment for degradation to propagate
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Request to degraded guest should fail fast
+    await assert.rejects(
+      () => broker.request({ targetId: 'guest-degraded-request-1', method: 'GET', path: '/test' }),
+      (error) => {
+        assert.equal(error.code, 'missing-guest');
+        return true;
+      },
+    );
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Same Guest reconnection before timeout restores degraded routes', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 5000 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-restore-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-restore-1' });
+    guest.attach((_req, res) => res.end('ok'), 'restore.local.test');
+
+    await broker.connect();
+    const routeChanges = [];
+    broker.onRouteChange((event) => {
+      routeChanges.push(event);
+    });
+
+    await guest.connect();
+    await broker.waitForRoute('restore.local.test');
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-restore-1', domain: 'restore.local.test' },
+    ]);
+
+    // Should have received an 'added' event on initial connection
+    assert.ok(
+      routeChanges.some((e) => e.type === 'added' && e.domain === 'restore.local.test'),
+      'Should have received an added event',
+    );
+
+    routeChanges.length = 0; // Clear for the next phase
+
+    // Disconnect the guest
+    await guest.close('test-disconnect');
+
+    // Wait for degradation to propagate
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Route should still be visible as degraded (not removed yet)
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-restore-1', domain: 'restore.local.test' },
+    ]);
+
+    // Should have received a 'degraded' event
+    assert.ok(
+      routeChanges.some((e) => e.type === 'degraded' && e.domain === 'restore.local.test'),
+      'Should have received a degraded event',
+    );
+
+    routeChanges.length = 0; // Clear for the next phase
+
+    // Reconnect the same guest
+    guest = createGuest({ hostUrl, guestId: 'guest-restore-1' });
+    guest.attach((_req, res) => res.end('restored'), 'restore.local.test');
+
+    await guest.connect();
+
+    // Route should be back (restored)
+    await broker.waitForRoute('restore.local.test');
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-restore-1', domain: 'restore.local.test' },
+    ]);
+
+    // Wait a bit more for any pending lifecycle events to arrive
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Should have received either a 'changed' or 'added' event for the restored route
+    const relevantEvents = routeChanges.filter(
+      (e) => (e.type === 'changed' || e.type === 'added') && e.domain === 'restore.local.test',
+    );
+    assert.ok(
+      relevantEvents.length >= 1,
+      'Should have at least one changed/added event for restoration',
+    );
+
+    // Request to the restored guest should succeed
+    const response = await broker.request({
+      targetId: 'guest-restore-1',
+      method: 'GET',
+      path: '/restored',
+    });
+    assert.equal(response.statusCode, 200);
+    const body = await readBody(response.body);
+    assert.equal(body.toString(), 'restored');
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Guest revocation enforces ownership - Guest can only revoke own routes', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest1;
+  let guest2;
+  let broker;
+
+  try {
+    guest1 = createGuest({ hostUrl, guestId: 'guest-own-1' });
+    guest1.attach((_req, res) => res.end('ok'), 'one.local.test');
+    guest2 = createGuest({ hostUrl, guestId: 'guest-own-2' });
+    guest2.attach((_req, res) => res.end('ok'), 'two.local.test');
+    broker = createBroker({ hostUrl, brokerId: 'broker-own-1' });
+
+    await guest1.connect();
+    await guest2.connect();
+    await broker.connect();
+    await broker.waitForRoute('one.local.test');
+    await broker.waitForRoute('two.local.test');
+
+    assert.equal(broker.getRoutes().length, 2);
+
+    // Guest 1 tries to revoke Guest 2's route
+    const response = await guest1.revokeRoutes(['two.local.test']);
+
+    // Should return error since guest1 doesn't own two.local.test
+    assert.equal(response.status, 'error');
+    assert.ok(response.failedDomains);
+    assert.equal(response.failedDomains[0].domain, 'two.local.test');
+
+    // Guest 2's route should still be there
+    assert.ok(broker.getRoutes().some((r) => r.domain === 'two.local.test'));
+
+    // Guest 1 can revoke its own route
+    const ownResponse = await guest1.revokeRoutes(['one.local.test']);
+    assert.equal(ownResponse.status, 'ack');
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('route removal not propagated')), 2000);
+      const check = setInterval(() => {
+        if (!broker.getRoutes().some((r) => r.domain === 'one.local.test')) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest1 !== undefined) await guest1.close('test-complete');
+    if (guest2 !== undefined) await guest2.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker onRouteChange receives lifecycle events for route added, removed, degraded, changed', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 5000 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    const routeChanges = [];
+    broker = createBroker({ hostUrl, brokerId: 'broker-lifecycle-all-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-lifecycle-all-1' });
+    guest.attach((_req, res) => res.end('ok'), 'lifecycle-all.local.test');
+
+    await broker.connect();
+    broker.onRouteChange((event) => {
+      routeChanges.push(event);
+    });
+
+    // 1. Added event
+    await guest.connect();
+    await broker.waitForRoute('lifecycle-all.local.test');
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('added event not received')), 2000);
+      const check = setInterval(() => {
+        if (routeChanges.some((e) => e.type === 'added')) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+
+    // 2. Degraded event on disconnect
+    await guest.close('test-disconnect');
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('degraded event not received')), 2000);
+      const check = setInterval(() => {
+        if (routeChanges.some((e) => e.type === 'degraded')) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+
+    // 3. Changed (restored) event on reconnect
+    guest = createGuest({ hostUrl, guestId: 'guest-lifecycle-all-1' });
+    guest.attach((_req, res) => res.end('ok'), 'lifecycle-all.local.test');
+    await guest.connect();
+    await broker.waitForRoute('lifecycle-all.local.test');
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('changed event not received')), 2000);
+      const check = setInterval(() => {
+        if (routeChanges.some((e) => e.type === 'changed')) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+
+    // 4. Removed event on revocation
+    await guest.revokeRoutes(['lifecycle-all.local.test']);
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('removed event not received')), 2000);
+      const check = setInterval(() => {
+        if (routeChanges.some((e) => e.type === 'removed')) {
+          clearTimeout(timeout);
+          clearInterval(check);
+          resolve();
+        }
+      }, 10);
+    });
+
+    // Verify we have all event types
+    const types = routeChanges.map((e) => e.type);
+    assert.ok(types.includes('added'), 'should have added event');
+    assert.ok(types.includes('degraded'), 'should have degraded event');
+    assert.ok(types.includes('changed'), 'should have changed event');
+    assert.ok(types.includes('removed'), 'should have removed event');
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+// ================ P1 Regression: spoofed revocation rejection ================
+
+test('P1: Broker cannot spoof x-verser-peer-id to revoke another Guest routes', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+  let rawBrokerSession;
+
+  try {
+    guest = createGuest({ hostUrl, guestId: 'guest-spoof-target' });
+    guest.attach((_req, res) => res.end('ok'), 'spoof-target.local.test');
+    await guest.connect();
+
+    broker = createBroker({ hostUrl, brokerId: 'broker-spoof-attacker' });
+    await broker.connect();
+    await broker.waitForRoute('spoof-target.local.test');
+    assert.equal(broker.getRoutes().length, 1);
+
+    // Attacker opens a raw H2 session (Broker/not-registered) and sends a
+    // revocation request WITH the victim's Guest ID as x-verser-peer-id.
+    // The Host finds the victim's peer entry but the stream session does
+    // NOT match the victim's registered session — session-binding must reject.
+    rawBrokerSession = await connectRawClient(host.address.port);
+    const revokeResponse = await requestJsonWithHeaders(
+      rawBrokerSession,
+      {
+        ':method': 'POST',
+        ':path': '/verser/guest/revoke',
+        'x-verser-peer-id': 'guest-spoof-target',
+        'content-type': 'application/json',
+      },
+      JSON.stringify({ domains: ['spoof-target.local.test'] }),
+    );
+
+    // Host must reject with session mismatch (peer exists but wrong session)
+    assert.equal(revokeResponse.status, 'error');
+    assert.match(
+      revokeResponse.message || '',
+      /session mismatch/i,
+      `Expected session-mismatch rejection, got: ${revokeResponse.message}`,
+    );
+
+    // Victim's route must survive
+    assert.equal(broker.getRoutes().length, 1);
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-spoof-target', domain: 'spoof-target.local.test' },
+    ]);
+  } finally {
+    if (rawBrokerSession) rawBrokerSession.destroy();
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('P1: Another H2 Guest session cannot spoof x-verser-peer-id to revoke different Guest routes', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let victimGuest;
+  let attackerGuest;
+  let broker;
+
+  try {
+    victimGuest = createGuest({ hostUrl, guestId: 'guest-spoof-victim' });
+    victimGuest.attach((_req, res) => res.end('ok'), 'victim.local.test');
+    attackerGuest = createGuest({ hostUrl, guestId: 'guest-spoof-attacker' });
+    attackerGuest.attach((_req, res) => res.end('ok'), 'attacker.local.test');
+
+    await victimGuest.connect();
+    await attackerGuest.connect();
+
+    broker = createBroker({ hostUrl, brokerId: 'broker-spoof-guest' });
+    await broker.connect();
+    await broker.waitForRoute('victim.local.test');
+    await broker.waitForRoute('attacker.local.test');
+    assert.equal(broker.getRoutes().length, 2);
+
+    // Attacker opens a raw H2 session (on a different connection) and
+    // registers as itself. Then, on that same session, sends a revocation
+    // request WITH the victim's Guest ID as x-verser-peer-id.
+    // The Host finds the victim's peer entry but the stream session (attacker's
+    // session) does NOT match the victim's registered session — session-binding
+    // must reject.
+    const rawAttacker = await connectRawClient(host.address.port);
+    await requestJson(rawAttacker, {
+      peerId: 'guest-spoof-attacker',
+      role: 'guest',
+      routedDomains: ['attacker.local.test'],
+    });
+
+    const revokeResponse = await requestJsonWithHeaders(
+      rawAttacker,
+      {
+        ':method': 'POST',
+        ':path': '/verser/guest/revoke',
+        'x-verser-peer-id': 'guest-spoof-victim',
+        'content-type': 'application/json',
+      },
+      JSON.stringify({ domains: ['victim.local.test'] }),
+    );
+
+    // Must reject with session mismatch (peer found but wrong session)
+    assert.equal(revokeResponse.status, 'error');
+    assert.match(
+      revokeResponse.message || '',
+      /session mismatch/i,
+      `Expected session-mismatch rejection, got: ${revokeResponse.message}`,
+    );
+
+    // Both routes must survive
+    assert.ok(broker.getRoutes().some((r) => r.domain === 'victim.local.test'));
+    assert.ok(broker.getRoutes().some((r) => r.domain === 'attacker.local.test'));
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (victimGuest !== undefined) await victimGuest.close('test-complete');
+    if (attackerGuest !== undefined) await attackerGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+// ================ Duplicate domain revocation ================
+
+test('Revocation with duplicate domain inputs returns deterministic response', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-dup-revoke-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-dup-revoke-1' });
+    guest.attach((_req, res) => res.end('ok'), 'dup.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('dup.local.test');
+
+    // Revoke with duplicate domain entries
+    const response = await guest.revokeRoutes(['dup.local.test', 'dup.local.test']);
+
+    // The duplicate is silently deduplicated by the host route registry:
+    // only one revocation attempt is recorded. The comparison against
+    // the original request length (2) triggers a 'partial' status with
+    // no failedDomains because all unique domains succeeded.
+    assert.equal(response.status, 'partial');
+    assert.equal(
+      response.failedDomains,
+      undefined,
+      'Deduplication should not produce failedDomains',
+    );
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+// ================ P1 Regression: reconnect restore domain changes ================
+
+test('P1: Guest reconnects with empty routedDomains — no stale route restoration', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 5000 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-reconnect-empty-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-reconnect-empty' });
+    guest.attach((_req, res) => res.end('ok'), 'stale.local.test');
+
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('stale.local.test');
+    assert.equal(broker.getRoutes().length, 1);
+
+    // Disconnect
+    await guest.close('test-disconnect');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Route should be degraded but still visible
+    assert.equal(broker.getRoutes().length, 1);
+
+    // Reconnect with NO routes (empty routedDomains, no attach)
+    guest = createGuest({
+      hostUrl,
+      guestId: 'guest-reconnect-empty',
+      routedDomains: [],
+    });
+
+    await guest.connect();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Stale route must NOT be restored
+    assert.equal(
+      broker.getRoutes().length,
+      0,
+      'Stale degraded route must not be restored when Guest reconnects with empty routedDomains',
+    );
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('P1: Guest reconnects with different domains — emits correct lifecycle events', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 5000 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let broker;
+
+  try {
+    const routeChanges = [];
+    broker = createBroker({ hostUrl, brokerId: 'broker-reconnect-diff-1' });
+    guest = createGuest({ hostUrl, guestId: 'guest-reconnect-diff' });
+    guest.attach((_req, res) => res.end('ok'), 'alpha.local.test');
+
+    await broker.connect();
+    broker.onRouteChange((event) => routeChanges.push(event));
+
+    await guest.connect();
+    await broker.waitForRoute('alpha.local.test');
+    assert.equal(broker.getRoutes().length, 1);
+
+    // Disconnect
+    await guest.close('test-disconnect');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Route should be degraded
+    assert.equal(broker.getRoutes().length, 1);
+    routeChanges.length = 0;
+
+    // Reconnect with a DIFFERENT domain
+    guest = createGuest({ hostUrl, guestId: 'guest-reconnect-diff' });
+    guest.attach((_req, res) => res.end('ok'), 'beta.local.test');
+
+    await guest.connect();
+    await broker.waitForRoute('beta.local.test');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Broker should see only beta.local.test
+    const routes = broker.getRoutes();
+    assert.equal(routes.length, 1);
+    assert.equal(
+      routes[0].domain,
+      'beta.local.test',
+      `Expected only beta.local.test, got: ${JSON.stringify(routes)}`,
+    );
+
+    // alpha.local.test must get a 'removed' event, beta.local.test an 'added' event,
+    // and alpha must NOT get a 'changed' event
+    const removedEvents = routeChanges.filter(
+      (e) => e.type === 'removed' && e.domain === 'alpha.local.test',
+    );
+    const addedEvents = routeChanges.filter(
+      (e) => e.type === 'added' && e.domain === 'beta.local.test',
+    );
+    const changedAlphaEvents = routeChanges.filter(
+      (e) => e.type === 'changed' && e.domain === 'alpha.local.test',
+    );
+
+    assert.ok(
+      removedEvents.length >= 1,
+      `Should have removed event for stale alpha.local.test, got: ${JSON.stringify(routeChanges)}`,
+    );
+    assert.ok(
+      addedEvents.length >= 1,
+      `Should have added event for new beta.local.test, got: ${JSON.stringify(routeChanges)}`,
+    );
+    assert.equal(
+      changedAlphaEvents.length,
+      0,
+      'Should NOT have changed event for stale alpha.local.test',
+    );
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
     if (guest !== undefined) await guest.close('test-complete');
     await host.close('test-complete');
   }

@@ -33,6 +33,8 @@ export type {
   VerserBrokerRequest,
   /** Response returned by a Broker. */
   VerserBrokerResponse,
+  /** Route change event emitted by the Broker. */
+  VerserBrokerRouteChangeEvent,
   /** Envelope of a routed request dispatched to a local Guest handler. */
   VerserNodeGuestDispatchRequest,
   /** Envelope of a response produced by a local Guest handler. */

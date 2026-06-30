@@ -31,11 +31,11 @@ The product uses the repo nomenclature:
 The implemented foundation includes the TypeScript/Node.js package path, a Bun Guest/Broker package, and a Python ASGI Guest/Broker package:
 
 - A shared `@signicode/verser-common` package for reusable protocol-neutral primitives, types, constants, and helpers.
-- A configurable TLS HTTP/2 Host that accepts outbound Guest and Broker connections, optionally enforces trusted client certificates for mTLS transport, registers routed domains, and advertises route updates.
+- A configurable TLS HTTP/2 Host that accepts outbound Guest and Broker connections, optionally enforces trusted client certificates for mTLS transport, registers routed domains, supports Guest-owned route revocation, and advertises route lifecycle updates.
 - A Node Guest that owns or receives a normal `http.Server` or request listener without calling `listen()`.
 - A Bun Guest that adapts Bun/Fetch-style handlers and local Bun-style routes without calling `Bun.serve()` or opening an inbound port, plus a Bun-facing Broker API that reuses the existing transport internally.
 - A Python Guest that connects outbound to the existing Host and dispatches routed requests into an ASGI 3 app without opening an inbound port.
-- Node, Bun-facing, and Python Broker APIs that can present client certificate identity when configured and route requests through the Host into a connected Guest's local handler; Node Broker request paths also follow eligible internal `307`/`308` redirects for advertised routes with bounded body replay.
+- Node, Bun-facing, and Python Broker APIs that can present client certificate identity when configured, observe route lifecycle changes, and route requests through the Host into a connected Guest's local handler; Node Broker request paths also follow eligible internal `307`/`308` redirects for advertised routes with bounded body replay.
 - A minimal plain `node:http` Agent path for Host-advertised domains.
 - End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
 
@@ -75,4 +75,5 @@ Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Ja
 - Shared primitives needed by multiple packages are provided by `@signicode/verser-common` instead of duplicated in package-local implementations.
 - Concurrent request or multiplexing behavior is proven only when a track explicitly introduces that transport behavior.
 - Errors include enough context to diagnose connection, target, protocol, path, stream, timeout, and close-reason failures.
+- Guest-owned route revocation, degraded/disconnected route state, route restoration, and Broker route-change observation are explicit across implemented runtimes.
 - Optional Host mTLS registration policy can identify Guest and Broker clients with certificate metadata without changing non-mTLS deployments.

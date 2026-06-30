@@ -5,12 +5,15 @@ import { text as readStreamText } from 'node:stream/consumers';
 import type { TLSSocket } from 'node:tls';
 
 import {
+  DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS,
   type FederatedRouteRegistration,
   type RoutedDomainRegistration,
+  VERSER_GUEST_REVOCATION_PATH,
   VERSER_LIFECYCLE_EVENTS,
   type VerserCertificateIdentity,
   type VerserError,
   type VerserErrorEnvelopeMetadata,
+  type VerserGuestRevocationRequest,
   type VerserHostFederationHandshake,
   type VerserHostId,
   type VerserPeerId,
@@ -19,9 +22,14 @@ import {
   type VerserRegistrationRequest,
   type VerserRegistrationResponse,
   type VerserResponseEnvelopeMetadata,
+  type VerserRouteLifecycleEvent,
+  createBrokerRouteLifecycleControlFrame,
   createBrokerRoutesControlFrame,
   createFederatedRoutesControlFrame,
+  createGuestRevocationRequest,
+  createGuestRevocationResponse,
   createPeerId,
+  createRouteLifecycleEvent,
   createRoutedDomainRegistration,
   createVerserError,
   createVerserHostFederationHandshake,
@@ -52,6 +60,7 @@ import {
   closeLocalBrokerState,
   createLocalBrokerState,
   dispatchLocalGuestRequest,
+  emitLocalBrokerRouteChange,
   extractLocalGuestListener,
   toReadableBody,
   updateLocalBrokerRoutes,
@@ -276,6 +285,7 @@ export class NodeHttp2VerserHost implements VerserHost {
    * {@inheritDoc VerserHost.close}
    */
   public async close(reason = 'host-close'): Promise<void> {
+    this.stopDegradedRouteCleanupTimer();
     const server = this.server;
     this.server = undefined;
 
@@ -426,12 +436,124 @@ export class NodeHttp2VerserHost implements VerserHost {
       transport: 'local',
       localGuest: { listener: extractLocalGuestListener(peerId, options.listener) },
     });
-    this.routeRegistry.setLocalRoutes(
-      peerId,
-      (options.routedDomains ?? []).map((domain) =>
-        createRoutedDomainRegistration({ targetId: peerId, domain }),
-      ),
-    );
+
+    const newDomains = options.routedDomains ?? [];
+    const degradedDomains = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
+    const hasDegraded = degradedDomains.length > 0;
+
+    if (hasDegraded) {
+      // Re-attachment after degradation: compute diff between old degraded
+      // state and new registration state, emit consistent lifecycle events.
+      const newDomainSet = new Set(newDomains);
+      const oldDegradedSet = new Set(degradedDomains.map((r) => r.domain));
+
+      // Domains present in degraded but absent from new registration: remove
+      const removedDegraded: string[] = [];
+      // Domains present in new registration but absent from degraded: add
+      const addedNew: string[] = [];
+
+      for (const domain of oldDegradedSet) {
+        if (!newDomainSet.has(domain as string)) {
+          removedDegraded.push(domain as string);
+        }
+      }
+      for (const domain of newDomainSet) {
+        if (!oldDegradedSet.has(domain as string)) {
+          addedNew.push(domain as string);
+        }
+      }
+
+      // Clear degraded state and apply the authoritative new domain list
+      this.routeRegistry.restoreRoutes(peerId);
+      if (newDomains.length > 0) {
+        this.routeRegistry.removeLocalRoutes(peerId);
+        this.routeRegistry.setLocalRoutes(
+          peerId,
+          newDomains.map((domain: string) =>
+            createRoutedDomainRegistration({ targetId: peerId, domain }),
+          ),
+        );
+      } else {
+        this.routeRegistry.removeLocalRoutes(peerId);
+      }
+
+      // Stop the degraded cleanup timer if no degraded routes remain
+      if (!this.routeRegistry.hasAnyDegradedRoutes()) {
+        this.stopDegradedRouteCleanupTimer();
+      }
+
+      // Emit lifecycle events consistent with actual changes
+      const lifecycleEvents: VerserRouteLifecycleEvent[] = [];
+
+      for (const domain of removedDegraded) {
+        lifecycleEvents.push(
+          createRouteLifecycleEvent({
+            type: 'removed',
+            targetId: peerId,
+            domain,
+            reason: 'reconnected',
+          }),
+        );
+      }
+
+      for (const domain of oldDegradedSet) {
+        if (newDomainSet.has(domain)) {
+          // Domain was degraded and is now restored
+          lifecycleEvents.push(
+            createRouteLifecycleEvent({
+              type: 'changed',
+              targetId: peerId,
+              domain,
+              reason: 'restored',
+            }),
+          );
+        }
+      }
+
+      for (const domain of addedNew) {
+        lifecycleEvents.push(
+          createRouteLifecycleEvent({
+            type: 'added',
+            targetId: peerId,
+            domain,
+            reason: 'registered',
+          }),
+        );
+      }
+
+      if (lifecycleEvents.length > 0) {
+        this.advertiseRouteLifecycleEvents(lifecycleEvents);
+      }
+
+      this.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.routeRestored,
+        peerId,
+        role: 'guest',
+        reason: 'local-guest-reconnect',
+      });
+    } else {
+      // Fresh registration — standard route setup
+      this.routeRegistry.setLocalRoutes(
+        peerId,
+        newDomains.map((domain: string) =>
+          createRoutedDomainRegistration({ targetId: peerId, domain }),
+        ),
+      );
+
+      // Emit lifecycle events for newly added routes
+      if (newDomains.length > 0) {
+        const addedEvents = newDomains.map((domain) =>
+          createRouteLifecycleEvent({
+            type: 'added',
+            targetId: peerId,
+            domain,
+            reason: 'registered',
+          }),
+        );
+        this.advertiseRouteLifecycleEvents(addedEvents);
+      }
+    }
+
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'guest' });
     this.advertiseRoutes();
     this.advertiseFederatedRoutes();
@@ -444,6 +566,26 @@ export class NodeHttp2VerserHost implements VerserHost {
         }
         closed = true;
         this.detachLocalPeer(peerId, reason);
+      },
+      revokeRoutes: (domains: string[]) => {
+        if (closed) {
+          return { revoked: [], notFound: [...domains] };
+        }
+        const result = this.routeRegistry.revokeRoutes(peerId, domains);
+        if (result.revoked.length > 0) {
+          const revokedEvents = result.revoked.map((domain) =>
+            createRouteLifecycleEvent({
+              type: 'removed',
+              targetId: peerId,
+              domain,
+              reason: 'revoked',
+            }),
+          );
+          this.advertiseRouteLifecycleEvents(revokedEvents);
+          this.advertiseRoutes();
+          this.advertiseFederatedRoutes();
+        }
+        return result;
       },
     };
   }
@@ -475,6 +617,10 @@ export class NodeHttp2VerserHost implements VerserHost {
       waitForRoute: (domain: string) => waitForLocalBrokerRoute(localBroker, domain),
       request: (request: VerserLocalBrokerRequest) =>
         this.routeLocalBrokerRequest(peerId, localBroker, request),
+      onRouteChange: (listener: (event: VerserRouteLifecycleEvent) => void) => {
+        localBroker.routeChangeEmitter.on('route-change', listener);
+        return () => localBroker.routeChangeEmitter.off('route-change', listener);
+      },
       close: async (reason = 'local-broker-close') => {
         if (localBroker.closed) {
           return;
@@ -529,6 +675,11 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     if (path === '/verser/guest/lease') {
       this.attachGuestLeaseStream(stream, headers);
+      return;
+    }
+
+    if (path === VERSER_GUEST_REVOCATION_PATH) {
+      await this.handleGuestRevocation(stream, headers);
       return;
     }
 
@@ -605,12 +756,111 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
 
     if (registration.role === 'guest') {
-      this.routeRegistry.setLocalRoutes(
-        peerId,
-        (registration.routedDomains ?? []).map((domain: string) =>
-          createRoutedDomainRegistration({ targetId: peerId, domain }),
-        ),
-      );
+      const degradedDomains = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
+      const hasDegraded = degradedDomains.length > 0;
+      const newDomains = registration.routedDomains ?? [];
+
+      if (hasDegraded) {
+        // The re-registration route list is authoritative: compute the diff
+        // between old degraded state and new registration state, then emit
+        // consistent lifecycle events.
+        const newDomainSet = new Set(newDomains);
+        const oldDegradedSet = new Set(degradedDomains.map((r) => r.domain));
+
+        // Domains present in degraded but absent from new registration: remove
+        const removedDegraded: string[] = [];
+        // Domains present in new registration but absent from degraded: add
+        const addedNew: string[] = [];
+
+        for (const domain of oldDegradedSet) {
+          if (!newDomainSet.has(domain as string)) {
+            removedDegraded.push(domain as string);
+          }
+        }
+        for (const domain of newDomainSet) {
+          if (!oldDegradedSet.has(domain as string)) {
+            addedNew.push(domain as string);
+          }
+        }
+
+        // Clear degraded state and apply the authoritative new domain list
+        this.routeRegistry.restoreRoutes(peerId);
+        if (newDomains.length > 0) {
+          this.routeRegistry.removeLocalRoutes(peerId);
+          this.routeRegistry.setLocalRoutes(
+            peerId,
+            newDomains.map((domain: string) =>
+              createRoutedDomainRegistration({ targetId: peerId, domain }),
+            ),
+          );
+        } else {
+          // Re-registered with empty routedDomains: remove old degraded routes
+          this.routeRegistry.removeLocalRoutes(peerId);
+        }
+
+        // Stop the degraded cleanup timer if no degraded routes remain
+        if (!this.routeRegistry.hasAnyDegradedRoutes()) {
+          this.stopDegradedRouteCleanupTimer();
+        }
+
+        // Emit lifecycle events consistent with actual changes
+        const lifecycleEvents: VerserRouteLifecycleEvent[] = [];
+
+        for (const domain of removedDegraded) {
+          lifecycleEvents.push(
+            createRouteLifecycleEvent({
+              type: 'removed',
+              targetId: peerId,
+              domain,
+              reason: 'reconnected',
+            }),
+          );
+        }
+
+        for (const domain of oldDegradedSet) {
+          if (newDomainSet.has(domain)) {
+            // Domain was degraded and is now restored
+            lifecycleEvents.push(
+              createRouteLifecycleEvent({
+                type: 'changed',
+                targetId: peerId,
+                domain,
+                reason: 'restored',
+              }),
+            );
+          }
+        }
+
+        for (const domain of addedNew) {
+          lifecycleEvents.push(
+            createRouteLifecycleEvent({
+              type: 'added',
+              targetId: peerId,
+              domain,
+              reason: 'registered',
+            }),
+          );
+        }
+
+        if (lifecycleEvents.length > 0) {
+          this.advertiseRouteLifecycleEvents(lifecycleEvents);
+        }
+
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.routeRestored,
+          peerId,
+          role: 'guest',
+          reason: 'guest-reconnect',
+        });
+      } else {
+        // Fresh registration — standard route setup
+        this.routeRegistry.setLocalRoutes(
+          peerId,
+          newDomains.map((domain: string) =>
+            createRoutedDomainRegistration({ targetId: peerId, domain }),
+          ),
+        );
+      }
     }
 
     const response: VerserRegistrationResponse = {
@@ -984,19 +1234,70 @@ export class NodeHttp2VerserHost implements VerserHost {
   }
 
   private handleFederatedRouteFrame(ownerId: string, frame: unknown): void {
-    if (
-      typeof frame !== 'object' ||
-      frame === null ||
-      !('type' in frame) ||
-      frame.type !== 'federated-routes' ||
-      !('routes' in frame) ||
-      !Array.isArray(frame.routes)
-    ) {
+    if (typeof frame !== 'object' || frame === null || !('type' in frame)) {
       throw createVerserError('protocol-error', 'Invalid federated routes control frame', {
         ownerId,
       });
     }
-    this.setImportedFederatedRoutes(ownerId, frame.routes as FederatedRouteRegistration[]);
+
+    if (frame.type === 'federated-routes') {
+      if (!('routes' in frame) || !Array.isArray(frame.routes)) {
+        throw createVerserError(
+          'protocol-error',
+          'Invalid federated routes control frame: missing routes array',
+          { ownerId },
+        );
+      }
+      this.setImportedFederatedRoutes(ownerId, frame.routes as FederatedRouteRegistration[]);
+      return;
+    }
+
+    if (frame.type === 'route-lifecycle') {
+      const lifecycleFrame = frame as { events?: readonly unknown[] };
+      if (!lifecycleFrame.events || !Array.isArray(lifecycleFrame.events)) {
+        throw createVerserError(
+          'protocol-error',
+          'Invalid federated route-lifecycle control frame: missing events array',
+          { ownerId },
+        );
+      }
+
+      // Validate and forward events to local Brokers (skip federation to prevent loops)
+      const events: VerserRouteLifecycleEvent[] = [];
+      for (const rawEvent of lifecycleFrame.events) {
+        if (
+          typeof rawEvent !== 'object' ||
+          rawEvent === null ||
+          !('type' in rawEvent) ||
+          typeof (rawEvent as Record<string, unknown>).type !== 'string' ||
+          !('targetId' in rawEvent) ||
+          !('domain' in rawEvent)
+        ) {
+          throw createVerserError('protocol-error', 'Invalid federated route-lifecycle event', {
+            ownerId,
+          });
+        }
+        events.push(rawEvent as VerserRouteLifecycleEvent);
+      }
+
+      // Forward lifecycle events to local Brokers only (skip federation loop)
+      this.advertiseRouteLifecycleEvents(events, true);
+
+      // For 'removed' events, eagerly remove the route from our imported
+      // set so it is no longer available for routing between the lifecycle
+      // event and the next full federated-routes snapshot.
+      for (const event of events) {
+        if (event.type === 'removed') {
+          this.routeRegistry.removeImportedRoute(ownerId, event.targetId, event.domain);
+        }
+      }
+      return;
+    }
+
+    throw createVerserError('protocol-error', 'Invalid federated routes control frame', {
+      ownerId,
+      type: String(frame.type),
+    });
   }
 
   private advertiseFederatedRoutes(): void {
@@ -1351,24 +1652,54 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     this.peers.delete(peerId);
-    const shouldAdvertiseRoutes = peer.role === 'guest';
-    if (shouldAdvertiseRoutes) {
-      this.routeRegistry.removeLocalRoutes(peerId);
+
+    if (peer.role === 'guest') {
+      // Move routes to degraded state instead of removing immediately.
+      // This matches the remote Guest disconnect behavior.
+      this.routeRegistry.setDegraded(peerId);
       this.closeGuestLeases(peerId);
       this.failQueuedLeaseAcquisitions(peerId, reason);
       this.abortLocalRequestsForPeer(peerId);
+
+      // Emit degraded lifecycle events for local and remote Brokers
+      const degradedRoutes = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
+      if (degradedRoutes.length > 0) {
+        const lifecycleEvents = degradedRoutes.map((r) =>
+          createRouteLifecycleEvent({
+            type: 'degraded',
+            targetId: peerId,
+            domain: r.domain,
+            reason: 'disconnected',
+          }),
+        );
+        this.advertiseRouteLifecycleEvents(lifecycleEvents);
+
+        // Schedule degraded route timeout timer if not already running
+        this.startDegradedRouteCleanupTimer();
+      }
+
+      this.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.routeDegraded,
+        peerId,
+        role: peer.role,
+        reason,
+      });
     }
+
     if (peer.localBroker !== undefined) {
       closeLocalBrokerState(peer.localBroker, reason);
       this.abortLocalRequestsForPeer(peerId);
     }
+
     this.emitLifecycle({
       name: VERSER_LIFECYCLE_EVENTS.disconnected,
       peerId,
       role: peer.role,
       reason,
     });
-    if (shouldAdvertiseRoutes) {
+
+    // Advertise routes after a guest disconnect (degraded routes still visible)
+    if (peer.role === 'guest') {
       this.advertiseRoutes();
       this.advertiseFederatedRoutes();
     }
@@ -1834,6 +2165,126 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
+  /**
+   * Broadcasts route lifecycle events to all connected Brokers and,
+   * unless `skipFederation` is true, to all federated route streams.
+   *
+   * @param events - The lifecycle events to propagate.
+   * @param skipFederation - If true, only local/remote Brokers are notified;
+   *   federated peers are skipped. Use when forwarding events **received from**
+   *   a federated peer to prevent loops.
+   */
+  private advertiseRouteLifecycleEvents(
+    events: VerserRouteLifecycleEvent[],
+    skipFederation = false,
+  ): void {
+    if (events.length === 0) {
+      return;
+    }
+
+    const frame = createBrokerRouteLifecycleControlFrame(events);
+
+    // Forward to all registered Brokers (both remote and local)
+    for (const peer of this.peers.values()) {
+      if (peer.role !== 'broker') {
+        continue;
+      }
+
+      if (peer.controlStream !== undefined && !peer.controlStream.closed) {
+        writeJsonLine(peer.controlStream, frame);
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
+          peerId: peer.peerId,
+          role: peer.role,
+        });
+      }
+
+      if (peer.transport === 'local' && peer.localBroker !== undefined) {
+        for (const event of events) {
+          emitLocalBrokerRouteChange(peer.localBroker, event);
+        }
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
+          peerId: peer.peerId,
+          role: peer.role,
+        });
+      }
+    }
+
+    // Propagate to federated peers unless explicitly skipped (loop prevention)
+    if (!skipFederation) {
+      const lifecycleJson = encodeJsonLine(frame);
+      for (const link of this.upstreamLinks.values()) {
+        if (!link.routeStream.closed) {
+          link.routeStream.write(lifecycleJson);
+        }
+      }
+      for (const link of this.inboundFederationHosts.values()) {
+        if (link.routeStream !== undefined && !link.routeStream.closed) {
+          link.routeStream.write(lifecycleJson);
+        }
+      }
+    }
+  }
+
+  /**
+   * Starts the degraded route cleanup timer if not already running.
+   * Checked periodically to remove routes whose degraded timeout has expired.
+   */
+  private degradedCleanupTimer: ReturnType<typeof setInterval> | undefined;
+  private startDegradedRouteCleanupTimer(): void {
+    if (this.degradedCleanupTimer !== undefined) {
+      return;
+    }
+    const timeoutMs = this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS;
+    // Use a shorter check interval so we don't overshoot by much
+    const checkInterval = Math.max(100, Math.floor(timeoutMs / 10));
+    this.degradedCleanupTimer = setInterval(() => {
+      void this.checkExpiredDegradedRoutes();
+    }, checkInterval);
+  }
+
+  private stopDegradedRouteCleanupTimer(): void {
+    if (this.degradedCleanupTimer !== undefined) {
+      clearInterval(this.degradedCleanupTimer);
+      this.degradedCleanupTimer = undefined;
+    }
+  }
+
+  private async checkExpiredDegradedRoutes(): Promise<void> {
+    const timeoutMs = this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS;
+    const result = this.routeRegistry.removeExpiredDegradedRoutes(Date.now(), timeoutMs);
+    if (result.expiredPeers.length === 0) {
+      // Stop timer if no more degraded routes
+      if (!this.routeRegistry.hasAnyDegradedRoutes()) {
+        this.stopDegradedRouteCleanupTimer();
+      }
+      return;
+    }
+
+    // Emit lifecycle events for expired degraded routes
+    const events: VerserRouteLifecycleEvent[] = result.expiredRouteEntries.map((entry) =>
+      createRouteLifecycleEvent({
+        type: 'removed',
+        targetId: entry.peerId,
+        domain: entry.domain,
+        reason: 'timeout',
+      }),
+    );
+
+    if (events.length > 0) {
+      this.advertiseRouteLifecycleEvents(events);
+    }
+
+    this.advertiseRoutes();
+    this.advertiseFederatedRoutes();
+
+    // Stop timer if no more degraded routes
+    if (!this.routeRegistry.hasAnyDegradedRoutes()) {
+      this.stopDegradedRouteCleanupTimer();
+    }
+  }
+
   private attachGuestControlStream(
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders,
@@ -1855,6 +2306,147 @@ export class NodeHttp2VerserHost implements VerserHost {
     readNdjsonLines<unknown>(stream, () => {
       // Guest control stream body routing was removed; keep the stream open for coordination.
     });
+  }
+
+  private async handleGuestRevocation(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): Promise<void> {
+    const peerId = String(headers['x-verser-peer-id'] ?? '').trim();
+    const peer = peerId.length > 0 ? this.peers.get(peerId) : undefined;
+
+    // Validate that the requesting peer is a registered Guest
+    if (peer === undefined || peer.role !== 'guest') {
+      if (!stream.headersSent && !stream.closed) {
+        stream.respond({ ':status': 403, 'content-type': 'application/json' });
+      }
+      if (!stream.closed) {
+        stream.end(
+          JSON.stringify(
+            createGuestRevocationResponse({
+              status: 'error',
+              message: 'Only registered Guests can revoke routes',
+            }),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Enforce session binding: the requesting stream must belong to the same
+    // HTTP/2 session as the registered Guest peer. This prevents a Broker or
+    // another Guest on a different session from spoofing a Guest ID and
+    // revoking routes they do not own.
+    if (peer.transport !== 'h2' || peer.session !== stream.session) {
+      if (!stream.headersSent && !stream.closed) {
+        stream.respond({ ':status': 403, 'content-type': 'application/json' });
+      }
+      if (!stream.closed) {
+        stream.end(
+          JSON.stringify(
+            createGuestRevocationResponse({
+              status: 'error',
+              message: 'Revocation request rejected: session mismatch',
+            }),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Parse the revocation request body
+    let revocationRequest: VerserGuestRevocationRequest;
+    try {
+      const bodyText = await readStreamText(stream);
+      const parsed = JSON.parse(bodyText) as { domains?: readonly string[] };
+      revocationRequest = createGuestRevocationRequest({
+        domains: parsed.domains ?? [],
+      });
+    } catch (error) {
+      if (!stream.headersSent && !stream.closed) {
+        stream.respond({ ':status': 400, 'content-type': 'application/json' });
+      }
+      if (!stream.closed) {
+        stream.end(
+          JSON.stringify(
+            createGuestRevocationResponse({
+              status: 'error',
+              message: error instanceof Error ? error.message : 'Invalid revocation request',
+            }),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Enforce ownership: Guest can only revoke its own routes
+    const result = this.routeRegistry.revokeRoutes(peerId, revocationRequest.domains);
+
+    // Build response
+    if (result.revoked.length === revocationRequest.domains.length) {
+      // All domains revoked successfully
+      if (!stream.headersSent && !stream.closed) {
+        stream.respond({ ':status': 200, 'content-type': 'application/json' });
+      }
+      if (!stream.closed) {
+        stream.end(JSON.stringify(createGuestRevocationResponse({ status: 'ack' })));
+      }
+    } else if (result.revoked.length > 0) {
+      // Partial success
+      const failedDomains = result.notFound.map((domain) => ({
+        domain,
+        error: 'Domain is not registered for this Guest',
+      }));
+      if (!stream.headersSent && !stream.closed) {
+        stream.respond({ ':status': 200, 'content-type': 'application/json' });
+      }
+      if (!stream.closed) {
+        stream.end(
+          JSON.stringify(
+            createGuestRevocationResponse({
+              status: 'partial',
+              message: 'Some domains were not found',
+              failedDomains,
+            }),
+          ),
+        );
+      }
+    } else {
+      // All domains not found
+      if (!stream.headersSent && !stream.closed) {
+        stream.respond({ ':status': 404, 'content-type': 'application/json' });
+      }
+      if (!stream.closed) {
+        stream.end(
+          JSON.stringify(
+            createGuestRevocationResponse({
+              status: 'error',
+              message: 'None of the requested domains are registered for this Guest',
+              failedDomains: result.notFound.map((domain) => ({
+                domain,
+                error: 'Domain is not registered for this Guest',
+              })),
+            }),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Broadcast lifecycle events for revoked routes
+    if (result.revoked.length > 0) {
+      const events: VerserRouteLifecycleEvent[] = result.revoked.map((domain) =>
+        createRouteLifecycleEvent({
+          type: 'removed',
+          targetId: peerId,
+          domain,
+          reason: 'revoked',
+        }),
+      );
+      this.advertiseRouteLifecycleEvents(events);
+      this.advertiseRoutes();
+      this.advertiseFederatedRoutes();
+    }
   }
 
   private attachGuestLeaseStream(
@@ -2175,12 +2767,42 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private removeSessionPeers(session: http2.ServerHttp2Session): void {
     let shouldAdvertiseRoutes = false;
+
     for (const [peerId, peer] of this.peers) {
       if (peer.session === session) {
         this.peers.delete(peerId);
-        this.routeRegistry.removeLocalRoutes(peerId);
-        this.closeGuestLeases(peerId);
-        this.failQueuedLeaseAcquisitions(peerId, 'guest-disconnect');
+
+        if (peer.role === 'guest') {
+          // Move routes to degraded state instead of removing immediately
+          this.routeRegistry.setDegraded(peerId);
+          this.closeGuestLeases(peerId);
+          this.failQueuedLeaseAcquisitions(peerId, 'guest-disconnect');
+
+          // Emit degraded lifecycle events
+          const degradedRoutes = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
+          if (degradedRoutes.length > 0) {
+            const events: VerserRouteLifecycleEvent[] = degradedRoutes.map((r) =>
+              createRouteLifecycleEvent({
+                type: 'degraded',
+                targetId: peerId,
+                domain: r.domain,
+                reason: 'disconnected',
+              }),
+            );
+            this.advertiseRouteLifecycleEvents(events);
+
+            // Schedule degraded route timeout timer if not already running
+            this.startDegradedRouteCleanupTimer();
+          }
+
+          this.emitLifecycle({
+            name: VERSER_LIFECYCLE_EVENTS.routeDegraded,
+            peerId,
+            role: peer.role,
+            reason: 'guest-disconnect',
+          });
+        }
+
         shouldAdvertiseRoutes = shouldAdvertiseRoutes || peer.role === 'guest';
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.disconnected,

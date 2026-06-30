@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import ssl
-from collections.abc import AsyncIterable, Iterable
+from collections.abc import AsyncIterable, Callable, Iterable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -231,6 +231,7 @@ class VerserBroker:
         self._closed = False
         self._routes: list[dict[str, str]] = []
         self._route_waiters: dict[str, list[asyncio.Future[None]]] = {}
+        self._route_change_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._request_counter: int = 0
         self._control_stream_id: int | None = None
         self._control_task: asyncio.Task[None] | None = None
@@ -344,8 +345,14 @@ class VerserBroker:
                 if not waiter.done():
                     waiter.cancel()
         self._route_waiters.clear()
-        self._fail_pending_streams(RuntimeError("Broker closed while streams were pending"))
-        self._fail_window_waiters(RuntimeError("Broker closed while request body was waiting for flow-control"))
+        self._fail_pending_streams(
+            RuntimeError("Broker closed while streams were pending")
+        )
+        self._fail_window_waiters(
+            RuntimeError(
+                "Broker closed while request body was waiting for flow-control"
+            )
+        )
         writer = self._writer
         if writer is not None:
             writer.close()
@@ -380,9 +387,13 @@ class VerserBroker:
         routes = response.get("routes") if isinstance(response, dict) else None
         if routes is not None:
             self._handle_control_frame({"type": "routes", "routes": routes})
-        self._control_task = asyncio.create_task(self._consume_control_stream(stream_id))
+        self._control_task = asyncio.create_task(
+            self._consume_control_stream(stream_id)
+        )
 
-    def _parse_registration_response(self, payload: str | bytes | dict[str, Any]) -> None:
+    def _parse_registration_response(
+        self, payload: str | bytes | dict[str, Any]
+    ) -> None:
         response = self._coerce_registration_response(payload)
         status = response.get("status")
         if status == "registered":
@@ -392,7 +403,9 @@ class VerserBroker:
             f"(status={status})"
         )
 
-    def _validate_registration_response(self, payload: str | bytes | dict[str, Any]) -> None:
+    def _validate_registration_response(
+        self, payload: str | bytes | dict[str, Any]
+    ) -> None:
         self._parse_registration_response(payload)
 
     async def _read_registration_line(self, stream_id: int) -> dict[str, Any]:
@@ -403,7 +416,9 @@ class VerserBroker:
                 raise event
             if isinstance(event, h2.events.DataReceived):
                 buffer += event.data
-                await self._acknowledge_received_data(stream_id, int(event.flow_controlled_length))
+                await self._acknowledge_received_data(
+                    stream_id, int(event.flow_controlled_length)
+                )
                 if b"\n" in buffer:
                     line, remainder = buffer.split(b"\n", 1)
                     if remainder:
@@ -428,7 +443,9 @@ class VerserBroker:
                 raise event
             if isinstance(event, h2.events.DataReceived):
                 buffer += event.data
-                await self._acknowledge_received_data(stream_id, int(event.flow_controlled_length))
+                await self._acknowledge_received_data(
+                    stream_id, int(event.flow_controlled_length)
+                )
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
                     if not line.strip():
@@ -439,13 +456,17 @@ class VerserBroker:
             if isinstance(event, h2.events.StreamEnded):
                 return
 
-    def _coerce_registration_response(self, payload: str | bytes | dict[str, Any]) -> dict[str, Any]:
+    def _coerce_registration_response(
+        self, payload: str | bytes | dict[str, Any]
+    ) -> dict[str, Any]:
         if isinstance(payload, dict):
             return dict(payload)
         if isinstance(payload, bytes):
             payload = payload.decode("utf-8")
         if not isinstance(payload, str):
-            raise TypeError("Registration response must be json-compatible text or object")
+            raise TypeError(
+                "Registration response must be json-compatible text or object"
+            )
         try:
             return _json.loads(payload)
         except _json.JSONDecodeError as exc:
@@ -527,9 +548,7 @@ class VerserBroker:
                 break
 
         if not target_id:
-            raise RuntimeError(
-                f"No advertised route found for domain '{hostname}'"
-            )
+            raise RuntimeError(f"No advertised route found for domain '{hostname}'")
 
         user_headers = dict(headers or {})
         self._request_counter += 1
@@ -614,7 +633,9 @@ class VerserBroker:
             for idx, chunk in enumerate(body_iter):
                 is_last = idx == len(body_iter) - 1
                 await self._send_data(
-                    stream_id, chunk if isinstance(chunk, bytes) else bytes(chunk), end_stream=is_last
+                    stream_id,
+                    chunk if isinstance(chunk, bytes) else bytes(chunk),
+                    end_stream=is_last,
                 )
             return
 
@@ -635,11 +656,15 @@ class VerserBroker:
                 nxt = _sentinel
                 is_last = True
             await self._send_data(
-                stream_id, chunk if isinstance(chunk, bytes) else bytes(chunk), end_stream=is_last
+                stream_id,
+                chunk if isinstance(chunk, bytes) else bytes(chunk),
+                end_stream=is_last,
             )
             chunk = nxt
 
-    async def _collect_response(self, stream_id: int, request_id: str) -> VerserBrokerResponse:
+    async def _collect_response(
+        self, stream_id: int, request_id: str
+    ) -> VerserBrokerResponse:
         while True:
             event = await self._events[stream_id].get()
             if isinstance(event, Exception):
@@ -664,7 +689,9 @@ class VerserBroker:
                     body=self._response_body_iter(stream_id),
                 )
             if isinstance(event, h2.events.DataReceived):
-                await self._acknowledge_received_data(stream_id, int(event.flow_controlled_length))
+                await self._acknowledge_received_data(
+                    stream_id, int(event.flow_controlled_length)
+                )
             if isinstance(event, h2.events.StreamReset):
                 self._events.pop(stream_id, None)
                 raise RuntimeError(
@@ -684,11 +711,15 @@ class VerserBroker:
                 raise event
             if isinstance(event, h2.events.DataReceived):
                 chunks.append(event.data)
-                await self._acknowledge_received_data(stream_id, int(event.flow_controlled_length))
+                await self._acknowledge_received_data(
+                    stream_id, int(event.flow_controlled_length)
+                )
             if isinstance(event, h2.events.StreamEnded):
                 return b"".join(chunks)
             if isinstance(event, h2.events.StreamReset):
-                raise RuntimeError("Broker error response stream was reset before completion")
+                raise RuntimeError(
+                    "Broker error response stream was reset before completion"
+                )
 
     async def _response_body_iter(self, stream_id: int):
         ended = False
@@ -715,7 +746,9 @@ class VerserBroker:
                 await self._reset_stream(stream_id)
             self._events.pop(stream_id, None)
 
-    def _parse_response(self, response_bytes: bytes, request_id: str) -> VerserBrokerResponse:
+    def _parse_response(
+        self, response_bytes: bytes, request_id: str
+    ) -> VerserBrokerResponse:
         """Decode the JSON response envelope into a ``VerserBrokerResponse``."""
         try:
             data = _json.loads(response_bytes.decode("utf-8"))
@@ -756,8 +789,16 @@ class VerserBroker:
                 f"Broker request {request_id} failed with status {status}: malformed error response"
             )
         error = payload.get("error", payload) if isinstance(payload, dict) else {}
-        code = error.get("code", "protocol-error") if isinstance(error, dict) else "protocol-error"
-        message = error.get("message", "Broker request failed") if isinstance(error, dict) else "Broker request failed"
+        code = (
+            error.get("code", "protocol-error")
+            if isinstance(error, dict)
+            else "protocol-error"
+        )
+        message = (
+            error.get("message", "Broker request failed")
+            if isinstance(error, dict)
+            else "Broker request failed"
+        )
         context = error.get("context", {}) if isinstance(error, dict) else {}
         return RuntimeError(
             f"Broker request {request_id} failed with status {status} ({code}): {message}; context={context}"
@@ -811,6 +852,25 @@ class VerserBroker:
         """
         return [dict(route) for route in self._routes]
 
+    def on_route_change(
+        self, listener: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        """Register a listener for route lifecycle events.
+
+        The listener is called with a ``dict`` containing at least:
+
+        - ``type`` — one of ``"added"``, ``"removed"``, ``"changed"``,
+          ``"degraded"``.
+        - ``targetId`` — the Guest peer that owns the route.
+        - ``domain`` — the affected hostname.
+        - ``reason`` (optional) — machine-readable reason.
+        - ``generation`` (optional) — ``{"generationId": ..., "sessionId": ...}``.
+
+        Returns a zero-argument callable that removes the listener.
+        """
+        self._route_change_listeners.append(listener)
+        return lambda: self._route_change_listeners.remove(listener)
+
     async def wait_for_route(self, domain: str) -> None:
         """Wait until a route for *domain* is advertised by the Host.
 
@@ -850,11 +910,111 @@ class VerserBroker:
         await future
 
     def _handle_control_frame(self, frame: dict[str, Any]) -> None:
-        if frame.get("type") != "routes":
+        # Handle full route snapshot frames
+        if frame.get("type") == "routes":
+            routes_data = frame.get("routes", [])
+            routes = self._coerce_routes(routes_data)
+
+            # Capture old routes for diff
+            old_routes = {(r["targetId"], r["domain"]): r for r in self._routes}
+
+            # Update snapshot BEFORE emitting events
+            self._routes = routes
+            self._resolve_waiters(
+                [route.get("domain") for route in routes if isinstance(route, dict)]
+            )
+
+            # Emit 'removed' for routes no longer present
+            for key, route in old_routes.items():
+                if not any(
+                    r["targetId"] == key[0] and r["domain"] == key[1] for r in routes
+                ):
+                    self._emit_route_change(
+                        {
+                            "type": "removed",
+                            "targetId": route["targetId"],
+                            "domain": route["domain"],
+                        }
+                    )
+
+            # Emit 'added' for new routes
+            for route in routes:
+                key = (route["targetId"], route["domain"])
+                if key not in old_routes:
+                    self._emit_route_change(
+                        {
+                            "type": "added",
+                            "targetId": route["targetId"],
+                            "domain": route["domain"],
+                        }
+                    )
             return
-        routes = self._coerce_routes(frame.get("routes", []))
-        self._routes = routes
-        self._resolve_waiters([route.get("domain") for route in routes if isinstance(route, dict)])
+
+        # Handle route lifecycle frames
+        if frame.get("type") == "route-lifecycle" and isinstance(
+            frame.get("events"), list
+        ):
+            for event in frame["events"]:
+                event_type = event.get("type", "")
+                target_id = event.get("targetId", "")
+                domain = event.get("domain", "")
+
+                # Update the route snapshot based on event type
+                if event_type in ("added", "changed"):
+                    existing_index = next(
+                        (
+                            i
+                            for i, r in enumerate(self._routes)
+                            if r["targetId"] == target_id and r["domain"] == domain
+                        ),
+                        None,
+                    )
+                    if existing_index is not None:
+                        self._routes[existing_index] = {
+                            "targetId": target_id,
+                            "domain": domain,
+                        }
+                    else:
+                        self._routes.append({"targetId": target_id, "domain": domain})
+                    self._resolve_waiters([domain])
+                elif event_type == "removed":
+                    self._routes = [
+                        r
+                        for r in self._routes
+                        if not (r["targetId"] == target_id and r["domain"] == domain)
+                    ]
+                elif event_type == "degraded":
+                    # Degraded routes stay visible in the snapshot
+                    existing_index = next(
+                        (
+                            i
+                            for i, r in enumerate(self._routes)
+                            if r["targetId"] == target_id and r["domain"] == domain
+                        ),
+                        None,
+                    )
+                    if existing_index is None:
+                        self._routes.append({"targetId": target_id, "domain": domain})
+
+                # Emit route change event
+                self._emit_route_change(
+                    {
+                        "type": event_type,
+                        "targetId": target_id,
+                        "domain": domain,
+                        "reason": event.get("reason"),
+                        "generation": event.get("generation"),
+                    }
+                )
+            return
+
+    def _emit_route_change(self, event: dict[str, Any]) -> None:
+        """Notify all registered route-change listeners."""
+        for listener in self._route_change_listeners:
+            try:
+                listener(event)
+            except Exception:
+                pass
 
     async def _send_headers(
         self,
@@ -883,7 +1043,9 @@ class VerserBroker:
         while offset < len(data):
             async with self._io_lock:
                 conn = self._require_conn()
-                max_frame_size = int(getattr(conn, "max_outbound_frame_size", 16384) or 16384)
+                max_frame_size = int(
+                    getattr(conn, "max_outbound_frame_size", 16384) or 16384
+                )
                 window = int(conn.local_flow_control_window(stream_id))
                 if window > 0:
                     size = min(max_frame_size, window, len(data) - offset)
@@ -918,7 +1080,9 @@ class VerserBroker:
         if flow_controlled_length <= 0:
             return
         async with self._io_lock:
-            self._require_conn().acknowledge_received_data(flow_controlled_length, stream_id)
+            self._require_conn().acknowledge_received_data(
+                flow_controlled_length, stream_id
+            )
             await self._flush_unlocked()
 
     async def _reset_stream(self, stream_id: int) -> None:
@@ -958,7 +1122,9 @@ class VerserBroker:
                             self._notify_window_waiters()
                         if isinstance(event, h2.events.StreamReset):
                             self._fail_window_waiters(
-                                RuntimeError("Broker stream was reset while sending request body")
+                                RuntimeError(
+                                    "Broker stream was reset while sending request body"
+                                )
                             )
                         if isinstance(event, h2.events.StreamEnded):
                             self._notify_window_waiters()

@@ -49,6 +49,8 @@ export class Http2VerserBroker implements VerserBroker {
 
   private readonly frameEmitter = new EventEmitter();
 
+  private readonly routeChangeEmitter = new EventEmitter();
+
   public constructor(options: VerserBrokerOptions) {
     this.options = options;
   }
@@ -130,6 +132,13 @@ export class Http2VerserBroker implements VerserBroker {
     return new Promise((resolve) => {
       this.routeWaiters.set(domain, [...(this.routeWaiters.get(domain) ?? []), resolve]);
     });
+  }
+
+  public onRouteChange(
+    listener: (event: import('./types').VerserBrokerRouteChangeEvent) => void,
+  ): () => void {
+    this.routeChangeEmitter.on('route-change', listener);
+    return () => this.routeChangeEmitter.off('route-change', listener);
   }
 
   public request(request: VerserBrokerRequest): Promise<VerserBrokerResponse> {
@@ -415,19 +424,123 @@ export class Http2VerserBroker implements VerserBroker {
     return () => this.frameEmitter.off('frame', listener);
   }
 
-  private handleControlFrame(
-    frame: BrokerControlFrame | { readonly routes?: BrokerControlFrame['routes'] },
-  ): void {
-    const routes = Array.isArray(frame.routes) ? frame.routes : undefined;
+  private handleControlFrame(frame: BrokerControlFrame | Record<string, unknown>): void {
+    // Handle full route snapshot frames
+    const routes = Array.isArray((frame as Record<string, unknown>).routes)
+      ? ((frame as Record<string, unknown>).routes as BrokerRoute[])
+      : undefined;
     if (routes !== undefined) {
+      // Capture old routes before updating, so diff is computed against
+      // the pre-update snapshot (docs guarantee getRoutes() is updated
+      // before listeners run)
+      const oldRoutes = new Map(this.routes.map((r) => [`${r.targetId}\u0000${r.domain}`, r]));
+      const newRouteMap = new Map(routes.map((r) => [`${r.targetId}\u0000${r.domain}`, r]));
+
+      // Update snapshot BEFORE emitting events so listener reads current state
       this.routes = [...routes];
       for (const route of this.routes) {
-        for (const resolve of this.routeWaiters.get(route.domain) ?? []) {
-          resolve();
-        }
-        this.routeWaiters.delete(route.domain);
+        this.resolveRouteWaiters(route.domain);
       }
+
+      // Emit 'removed' for routes that are no longer present
+      for (const [key, route] of oldRoutes) {
+        if (!newRouteMap.has(key)) {
+          this.routeChangeEmitter.emit('route-change', {
+            type: 'removed',
+            targetId: route.targetId,
+            domain: route.domain,
+          });
+        }
+      }
+
+      // Emit 'added' for routes that are new
+      for (const [key, route] of newRouteMap) {
+        if (!oldRoutes.has(key)) {
+          this.routeChangeEmitter.emit('route-change', {
+            type: 'added',
+            targetId: route.targetId,
+            domain: route.domain,
+          });
+        }
+      }
+
+      this.frameEmitter.emit('frame');
+      return;
     }
+
+    // Handle route lifecycle frames
+    if (
+      (frame as { type?: string }).type === 'route-lifecycle' &&
+      Array.isArray((frame as { events?: unknown }).events)
+    ) {
+      const lifecycleFrame = frame as {
+        type: 'route-lifecycle';
+        events: Array<{
+          type: string;
+          targetId: string;
+          domain: string;
+          reason?: string;
+          generation?: { generationId?: string; sessionId?: string };
+        }>;
+      };
+
+      for (const event of lifecycleFrame.events) {
+        // Update the route snapshot based on the event type
+        if (event.type === 'added' || event.type === 'changed') {
+          // Add or update route in snapshot
+          const existingIndex = this.routes.findIndex(
+            (r) => r.targetId === event.targetId && r.domain === event.domain,
+          );
+          if (existingIndex >= 0) {
+            this.routes[existingIndex] = {
+              targetId: event.targetId,
+              domain: event.domain,
+            };
+          } else {
+            this.routes.push({ targetId: event.targetId, domain: event.domain });
+          }
+          this.resolveRouteWaiters(event.domain);
+        } else if (event.type === 'removed') {
+          // Remove route from snapshot
+          this.routes = this.routes.filter(
+            (r) => !(r.targetId === event.targetId && r.domain === event.domain),
+          );
+        } else if (event.type === 'degraded') {
+          // Degraded routes remain in the snapshot (they are still visible
+          // as degraded to lifecycle observers) but will fail fast on routing.
+          // Add if not already present
+          const existingIndex = this.routes.findIndex(
+            (r) => r.targetId === event.targetId && r.domain === event.domain,
+          );
+          if (existingIndex < 0) {
+            this.routes.push({ targetId: event.targetId, domain: event.domain });
+          }
+        }
+
+        // Emit route change event
+        this.routeChangeEmitter.emit('route-change', {
+          type: event.type,
+          targetId: event.targetId,
+          domain: event.domain,
+          reason: event.reason,
+          generation: event.generation,
+        });
+      }
+
+      this.frameEmitter.emit('frame');
+      return;
+    }
+
     this.frameEmitter.emit('frame');
+  }
+
+  private resolveRouteWaiters(domain: string): void {
+    const waiters = this.routeWaiters.get(domain);
+    if (waiters !== undefined) {
+      for (const resolve of waiters) {
+        resolve();
+      }
+      this.routeWaiters.delete(domain);
+    }
   }
 }

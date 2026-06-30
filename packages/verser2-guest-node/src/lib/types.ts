@@ -9,6 +9,8 @@ import type {
   VerserBrokerControlFrame,
   VerserClientTlsOptions,
   VerserError,
+  VerserGuestRevocationResponse,
+  VerserRouteLifecycleEvent,
 } from '@signicode/verser-common';
 
 /**
@@ -197,6 +199,17 @@ export interface VerserBroker {
    * as a `Readable` stream.
    */
   request(request: VerserBrokerRequest): Promise<VerserBrokerResponse>;
+  /**
+   * Registers a route lifecycle change listener.
+   *
+   * The listener is called whenever the Host notifies this Broker of a route
+   * lifecycle event (added, removed, changed, or degraded/restored). The Broker
+   * route snapshot (`getRoutes()`) is updated before the listener is called.
+   *
+   * @param listener - A callback receiving route change events.
+   * @returns A function to unsubscribe the listener.
+   */
+  onRouteChange(listener: (event: VerserBrokerRouteChangeEvent) => void): () => void;
 }
 
 /**
@@ -245,6 +258,17 @@ export interface VerserNodeGuest {
    * Returns an unsubscribe function.
    */
   onLifecycle(listener: (event: VerserNodeGuestLifecycleEvent) => void): () => void;
+  /**
+   * Revokes one or more advertised route domains.
+   *
+   * Sends a revocation request to the Host over the dedicated revocation path.
+   * The returned promise resolves with the Host's response (ack, partial, or error).
+   *
+   * @param domains - The route domains to revoke.
+   * @returns The Host revocation response.
+   * @throws {VerserError} If the Guest is not connected, or if the request fails.
+   */
+  revokeRoutes(domains: readonly string[]): Promise<VerserGuestRevocationResponse>;
 }
 
 /**
@@ -299,3 +323,22 @@ export type BrokerControlFrame = VerserBrokerControlFrame;
  * @public
  */
 export type BrokerRoute = RoutedDomainRegistration;
+
+/**
+ * A route change event emitted by the Broker when the Host notifies it of
+ * route lifecycle changes.
+ *
+ * @public
+ */
+export interface VerserBrokerRouteChangeEvent {
+  /** The lifecycle event type. */
+  readonly type: VerserRouteLifecycleEvent['type'];
+  /** The Guest peer that owns this route. */
+  readonly targetId: string;
+  /** The domain affected by this event. */
+  readonly domain: string;
+  /** Optional machine-readable reason for the event. */
+  readonly reason?: VerserRouteLifecycleEvent['reason'];
+  /** Optional generation/session metadata. */
+  readonly generation?: VerserRouteLifecycleEvent['generation'];
+}

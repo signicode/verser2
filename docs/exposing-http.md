@@ -184,6 +184,48 @@ guest = create_verser_guest(
 )
 ```
 
+## Route revocation
+
+Guests can revoke advertised routes without disconnecting. The revocation
+sends a request to the Host's dedicated `/verser/guest/revoke` path.
+
+### Node Guest
+
+```ts
+const result = await guest.revokeRoutes(['client-a.local.test', 'extra.example.com']);
+// result.status === 'ack'     (all revoked)
+// result.status === 'partial' (some failed, check result.failedDomains)
+// result.status === 'error'   (entire request rejected)
+```
+
+### Bun Guest
+
+```ts
+const result = await bunGuest.revokeRoutes(['bun-client-a.local.test']);
+```
+
+The Bun wrapper delegates to the same Node Guest revocation path.
+
+### Python Guest
+
+```py
+result = await guest.revoke_routes(["python-guest-a.local.test"])
+# result["status"] == "ack" | "partial" | "error"
+```
+
+### Local Host-side Guest
+
+The local Guest handle returned by `host.attachLocalGuest()` provides
+`revokeRoutes()` as a synchronous operation:
+
+```ts
+const { revoked, notFound } = localGuest.revokeRoutes(['local-node-guest.local.test']);
+```
+
+The Host emits lifecycle events for revoked routes so connected Brokers
+receive timely updates. See [Routes](./routes.md) and
+[Lifecycle and errors](./lifecycle-and-errors.md).
+
 ## Streaming
 
 All Guest runtimes support streaming request and response bodies through the

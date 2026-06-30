@@ -11,5 +11,6 @@
 - [Known Solutions](./known-solutions.md)
 
 ## Management
+- [Conductor Config](./config.yaml)
 - [Tracks Registry](./tracks.md)
 - [Tracks Directory](./tracks/)

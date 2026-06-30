@@ -27,6 +27,7 @@ export interface LocalBrokerState {
   routeWaiters: Map<string, LocalRouteWaiter[]>;
   requestCounter: number;
   closed: boolean;
+  routeChangeEmitter: EventEmitter;
 }
 
 interface LocalRouteWaiter {
@@ -168,6 +169,7 @@ export function createLocalBrokerState(routes: RoutedDomainRegistration[]): Loca
     routeWaiters: new Map(),
     requestCounter: 0,
     closed: false,
+    routeChangeEmitter: new EventEmitter(),
   };
 }
 
@@ -208,6 +210,7 @@ export function closeLocalBrokerState(broker: LocalBrokerState, reason: string):
   }
   broker.closed = true;
   broker.routes = [];
+  broker.routeChangeEmitter.removeAllListeners();
   const error = createVerserError('disconnected-target', 'Local Broker is closed', { reason });
   for (const waiters of broker.routeWaiters.values()) {
     for (const waiter of waiters) {
@@ -215,6 +218,62 @@ export function closeLocalBrokerState(broker: LocalBrokerState, reason: string):
     }
   }
   broker.routeWaiters.clear();
+}
+
+/**
+ * Emits a route lifecycle event on a local Broker's change emitter.
+ *
+ * Updates the Broker's route snapshot before emitting the event, so the
+ * listener sees the current route state. Supports 'added', 'removed',
+ * 'degraded', and 'changed' event types.
+ *
+ * @param broker - The local Broker state.
+ * @param event - The route lifecycle event to emit.
+ */
+export function emitLocalBrokerRouteChange(
+  broker: LocalBrokerState,
+  event: {
+    readonly type: string;
+    readonly targetId: string;
+    readonly domain: string;
+    readonly reason?: string;
+  },
+): void {
+  if (broker.closed) {
+    return;
+  }
+
+  // Update the route snapshot based on the event type before emitting.
+  if (event.type === 'added' || event.type === 'changed') {
+    const existingIndex = broker.routes.findIndex(
+      (r) => r.targetId === event.targetId && r.domain === event.domain,
+    );
+    if (existingIndex >= 0) {
+      broker.routes[existingIndex] = { targetId: event.targetId, domain: event.domain };
+    } else {
+      broker.routes.push({ targetId: event.targetId, domain: event.domain });
+    }
+    // Resolve any waiters for this domain
+    for (const waiter of broker.routeWaiters.get(event.domain) ?? []) {
+      waiter.resolve();
+    }
+    broker.routeWaiters.delete(event.domain);
+  } else if (event.type === 'removed') {
+    broker.routes = broker.routes.filter(
+      (r) => !(r.targetId === event.targetId && r.domain === event.domain),
+    );
+  } else if (event.type === 'degraded') {
+    // Degraded routes remain in the snapshot but are marked as degraded.
+    // Add if not already present.
+    const existingIndex = broker.routes.findIndex(
+      (r) => r.targetId === event.targetId && r.domain === event.domain,
+    );
+    if (existingIndex < 0) {
+      broker.routes.push({ targetId: event.targetId, domain: event.domain });
+    }
+  }
+
+  broker.routeChangeEmitter.emit('route-change', event);
 }
 
 export function toReadableBody(body: VerserLocalBrokerRequest['body']): Readable {

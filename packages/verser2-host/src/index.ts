@@ -76,6 +76,16 @@ export type {
 
 export type { VerserPeerRole } from '@signicode/verser-common';
 
+export { HostRouteRegistry, createHostRouteRegistry } from './lib/route-registry';
+
+export type {
+  HostRouteRegistryOptions,
+  ImportedRouteRejection,
+  ImportedRouteUpdate,
+  RevokeRoutesResult,
+  RemoveExpiredDegradedResult,
+} from './lib/route-registry';
+
 /**
  * Creates a new Verser Host instance.
  *

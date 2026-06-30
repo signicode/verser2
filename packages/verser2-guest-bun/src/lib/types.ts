@@ -4,6 +4,8 @@ import type {
   VerserBrokerOptions,
   VerserBrokerRequest,
   VerserBrokerResponse,
+  VerserBrokerRouteChangeEvent,
+  VerserGuestRevocationResponse,
 } from '@signicode/verser2-guest-node';
 
 /**
@@ -11,7 +13,14 @@ import type {
  *
  * @public
  */
-export type { VerserBroker, VerserBrokerOptions, VerserBrokerRequest, VerserBrokerResponse };
+export type {
+  VerserBroker,
+  VerserBrokerOptions,
+  VerserBrokerRequest,
+  VerserBrokerResponse,
+  VerserBrokerRouteChangeEvent,
+  VerserGuestRevocationResponse,
+};
 
 /**
  * Options for creating a Bun Guest via {@link createVerserBunGuest}.
@@ -97,6 +106,17 @@ export interface VerserBunGuest {
    * Returns an unsubscribe function.
    */
   onLifecycle(listener: (event: VerserBunGuestLifecycleEvent) => void): () => void;
+  /**
+   * Revokes one or more advertised route domains.
+   *
+   * Sends a revocation request to the Host over the dedicated revocation path.
+   * The returned promise resolves with the Host's response (ack, partial, or error).
+   *
+   * @param domains - The route domains to revoke.
+   * @returns The Host revocation response.
+   * @throws If the Guest is not connected, or if the request fails.
+   */
+  revokeRoutes(domains: readonly string[]): Promise<VerserGuestRevocationResponse>;
 }
 
 /**

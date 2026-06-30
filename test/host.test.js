@@ -218,10 +218,13 @@ test('Host supports lifecycle unsubscription and disconnect route cleanup', asyn
     guest.close();
     await once(guest, 'close');
 
-    assert.deepEqual(host.getRoutedDomains(), []);
+    // Route remains visible as degraded after disconnect
+    assert.deepEqual(host.getRoutedDomains(), [
+      { targetId: 'guest-cleanup', domain: 'cleanup.local.test' },
+    ]);
     assert.deepEqual(
       events.map((event) => event.name),
-      ['connected', 'registered', 'disconnected'],
+      ['connected', 'registered', 'route-degraded', 'disconnected'],
     );
   } finally {
     await host.close('test-complete');

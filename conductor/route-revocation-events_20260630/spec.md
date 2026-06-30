@@ -31,8 +31,9 @@ Today route removals are mostly implicit: Host route snapshots shrink after Gues
 
 ### Guest-to-Host revocation transport
 
-- Use the existing Guest control stream direction as the preferred transport for explicit revocation messages.
+- Use a dedicated Guest-to-Host request/response revocation path, such as `POST /verser/guest/revoke`, for explicit revocation messages.
 - Define ACK/error semantics so a Promise-returning `revokeRoutes()` can resolve only after the Host accepts the revocation or reject on failure.
+- The request/response path is preferred over bidirectional Guest control-stream ACKs because the existing Guest control stream is Host-read-only in practice.
 - Preserve compatibility with current registration and request routing semantics.
 
 ### Broker route lifecycle events
@@ -67,7 +68,7 @@ Today route removals are mostly implicit: Host route snapshots shrink after Gues
 - When a Guest disconnects, its routes must immediately enter a visible degraded/disconnected state instead of being fully removed immediately.
 - Brokers must receive an immediate route lifecycle event for affected routes indicating the disconnected/degraded state.
 - During the degraded period, the route remains visible as degraded and requests to the affected route must fail fast with a 502-like failure rather than silently routing to a stale Guest.
-- The Host must expose a Host-level configuration option for the degraded-route removal timeout, with a documented default.
+- The Host must expose a Host-level configuration option for the degraded-route removal timeout, with a documented default of 5000 ms.
 - If the same Guest/target reconnects and re-registers in time, the Host must restore the affected routes, preserve stale-route safety, and emit changed/restored or added events as appropriate.
 - If the timeout expires without restoration, the Host must fully remove the degraded routes and notify Brokers.
 
