@@ -10,6 +10,7 @@ import {
   type RoutedDomainRegistration,
   VERSER_GUEST_REVOCATION_PATH,
   VERSER_LIFECYCLE_EVENTS,
+  type VerserBrokerRouteLifecycleControlFrame,
   type VerserCertificateIdentity,
   type VerserError,
   type VerserErrorEnvelopeMetadata,
@@ -199,6 +200,16 @@ export class NodeHttp2VerserHost implements VerserHost {
   >();
 
   private server?: http2.Http2SecureServer;
+
+  /**
+   * Monotonically increasing counter for tagging federated lifecycle events.
+   * Combined with the local hostId to form a globally unique event ID for
+   * loop detection.
+   */
+  private federationLifecycleEventIdCounter = 0;
+
+  /** Set of seen federated lifecycle event IDs to prevent loops in cyclic topologies. */
+  private readonly seenFederationLifecycleEventIds = new Set<string>();
 
   public constructor(options: VerserHostOptions) {
     this.options = options;
@@ -505,6 +516,7 @@ export class NodeHttp2VerserHost implements VerserHost {
               targetId: peerId,
               domain,
               reason: 'restored',
+              generation: this.routeRegistry.getRouteGeneration(peerId, domain),
             }),
           );
         }
@@ -618,8 +630,12 @@ export class NodeHttp2VerserHost implements VerserHost {
       request: (request: VerserLocalBrokerRequest) =>
         this.routeLocalBrokerRequest(peerId, localBroker, request),
       onRouteChange: (listener: (event: VerserRouteLifecycleEvent) => void) => {
-        localBroker.routeChangeEmitter.on('route-change', listener);
-        return () => localBroker.routeChangeEmitter.off('route-change', listener);
+        const wrapped = listener as (event: unknown) => void;
+        localBroker.routeChangeListeners.push(wrapped);
+        return () => {
+          const idx = localBroker.routeChangeListeners.indexOf(wrapped);
+          if (idx >= 0) localBroker.routeChangeListeners.splice(idx, 1);
+        };
       },
       close: async (reason = 'local-broker-close') => {
         if (localBroker.closed) {
@@ -1253,7 +1269,25 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     if (frame.type === 'route-lifecycle') {
-      const lifecycleFrame = frame as { events?: readonly unknown[] };
+      const lifecycleFrame = frame as {
+        events?: readonly unknown[];
+        _eid?: string;
+      };
+
+      // Loop detection: if this frame carries a unique event ID and we have
+      // already seen it, skip processing entirely to prevent infinite loops
+      // in cyclic federation topologies.
+      if (lifecycleFrame._eid !== undefined) {
+        if (this.seenFederationLifecycleEventIds.has(lifecycleFrame._eid)) {
+          return; // Already processed this event — discard duplicate
+        }
+        // Bounded set: clear when exceeding threshold to prevent unbounded growth.
+        if (this.seenFederationLifecycleEventIds.size >= 10000) {
+          this.seenFederationLifecycleEventIds.clear();
+        }
+        this.seenFederationLifecycleEventIds.add(lifecycleFrame._eid);
+      }
+
       if (!lifecycleFrame.events || !Array.isArray(lifecycleFrame.events)) {
         throw createVerserError(
           'protocol-error',
@@ -1262,7 +1296,7 @@ export class NodeHttp2VerserHost implements VerserHost {
         );
       }
 
-      // Validate and forward events to local Brokers (skip federation to prevent loops)
+      // Validate incoming events
       const events: VerserRouteLifecycleEvent[] = [];
       for (const rawEvent of lifecycleFrame.events) {
         if (
@@ -1280,8 +1314,17 @@ export class NodeHttp2VerserHost implements VerserHost {
         events.push(rawEvent as VerserRouteLifecycleEvent);
       }
 
-      // Forward lifecycle events to local Brokers only (skip federation loop)
+      // Forward to local Brokers
       this.advertiseRouteLifecycleEvents(events, true);
+
+      // Forward to all OTHER federated peers (excluding the sender) to enable
+      // transitive multi-hop propagation without echoing back to the sender.
+      // The forwarded frame carries the same _eid so downstream peers can also
+      // detect duplicates.
+      this.forwardFederatedLifecycleEventsExcluding(
+        ownerId,
+        frame as VerserBrokerRouteLifecycleControlFrame,
+      );
 
       // For 'removed' events, eagerly remove the route from our imported
       // set so it is no longer available for routing between the lifecycle
@@ -1298,6 +1341,60 @@ export class NodeHttp2VerserHost implements VerserHost {
       ownerId,
       type: String(frame.type),
     });
+  }
+
+  /**
+   * Forwards a route-lifecycle control frame to all federated peers except the
+   * specified excluded host. This enables transitive multi-hop lifecycle
+   * propagation without echoing back to the original sender.
+   */
+  private forwardFederatedLifecycleEventsExcluding(
+    excludedOwnerId: VerserHostId,
+    frame: VerserBrokerRouteLifecycleControlFrame,
+  ): void {
+    // Forward the frame as-is, preserving any existing _eid from the original
+    // sender so downstream peers can detect duplicates in cyclic topologies.
+    // Only tag with a new _eid if the frame lacks one (first-hop from local).
+    const outgoingFrame =
+      (frame as { _eid?: string })._eid === undefined
+        ? this.tagFederatedLifecycleFrame(frame)
+        : frame;
+    const lifecycleJson = encodeJsonLine(outgoingFrame);
+
+    for (const link of this.upstreamLinks.values()) {
+      if (link.remoteHostId !== excludedOwnerId && !link.routeStream.closed) {
+        link.routeStream.write(lifecycleJson);
+      }
+    }
+
+    for (const link of this.inboundFederationHosts.values()) {
+      if (
+        link.hostId !== excludedOwnerId &&
+        link.routeStream !== undefined &&
+        !link.routeStream.closed
+      ) {
+        link.routeStream.write(lifecycleJson);
+      }
+    }
+  }
+
+  /**
+   * Tags a lifecycle control frame with a unique event ID for loop detection.
+   * The ID is a combination of the local hostId and a monotonically increasing
+   * counter, making it globally unique across the federation.
+   */
+  private tagFederatedLifecycleFrame(
+    frame: VerserBrokerRouteLifecycleControlFrame,
+  ): VerserBrokerRouteLifecycleControlFrame & { _eid: string } {
+    this.federationLifecycleEventIdCounter += 1;
+    const eid = `${this.options.hostId ?? 'host'}:${this.federationLifecycleEventIdCounter}`;
+    // Record the ID immediately so the originating Host discards its own
+    // event if it returns via a federation cycle.
+    if (this.seenFederationLifecycleEventIds.size >= 10000) {
+      this.seenFederationLifecycleEventIds.clear();
+    }
+    this.seenFederationLifecycleEventIds.add(eid);
+    return Object.assign(frame, { _eid: eid });
   }
 
   private advertiseFederatedRoutes(): void {
@@ -1670,6 +1767,7 @@ export class NodeHttp2VerserHost implements VerserHost {
             targetId: peerId,
             domain: r.domain,
             reason: 'disconnected',
+            generation: this.routeRegistry.getRouteGeneration(peerId, r.domain),
           }),
         );
         this.advertiseRouteLifecycleEvents(lifecycleEvents);
@@ -2211,9 +2309,12 @@ export class NodeHttp2VerserHost implements VerserHost {
       }
     }
 
-    // Propagate to federated peers unless explicitly skipped (loop prevention)
+    // Propagate to federated peers unless explicitly skipped (loop prevention).
+    // Each outgoing frame is tagged with a unique event ID so that receiving
+    // Hosts can detect and discard duplicates in cyclic topologies.
     if (!skipFederation) {
-      const lifecycleJson = encodeJsonLine(frame);
+      const taggedFrame = this.tagFederatedLifecycleFrame(frame);
+      const lifecycleJson = encodeJsonLine(taggedFrame);
       for (const link of this.upstreamLinks.values()) {
         if (!link.routeStream.closed) {
           link.routeStream.write(lifecycleJson);
@@ -2253,6 +2354,22 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private async checkExpiredDegradedRoutes(): Promise<void> {
     const timeoutMs = this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS;
+
+    // Capture generation metadata before removal
+    const genCache = new Map<
+      string,
+      Map<string, import('@signicode/verser-common').VerserRouteGeneration>
+    >();
+    for (const [peerId] of this.routeRegistry.getDegradedEntries()) {
+      const domainMap = new Map();
+      const routes = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
+      for (const r of routes) {
+        const gen = this.routeRegistry.getRouteGeneration(peerId, r.domain);
+        if (gen !== undefined) domainMap.set(r.domain, gen);
+      }
+      if (domainMap.size > 0) genCache.set(peerId, domainMap);
+    }
+
     const result = this.routeRegistry.removeExpiredDegradedRoutes(Date.now(), timeoutMs);
     if (result.expiredPeers.length === 0) {
       // Stop timer if no more degraded routes
@@ -2262,15 +2379,18 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
-    // Emit lifecycle events for expired degraded routes
-    const events: VerserRouteLifecycleEvent[] = result.expiredRouteEntries.map((entry) =>
-      createRouteLifecycleEvent({
+    // Emit lifecycle events for expired degraded routes with generation metadata
+    const events: VerserRouteLifecycleEvent[] = result.expiredRouteEntries.map((entry) => {
+      const peerGen = genCache.get(entry.peerId);
+      const domainGen = peerGen?.get(entry.domain);
+      return createRouteLifecycleEvent({
         type: 'removed',
         targetId: entry.peerId,
         domain: entry.domain,
         reason: 'timeout',
-      }),
-    );
+        generation: domainGen,
+      });
+    });
 
     if (events.length > 0) {
       this.advertiseRouteLifecycleEvents(events);
@@ -2787,6 +2907,7 @@ export class NodeHttp2VerserHost implements VerserHost {
                 targetId: peerId,
                 domain: r.domain,
                 reason: 'disconnected',
+                generation: this.routeRegistry.getRouteGeneration(peerId, r.domain),
               }),
             );
             this.advertiseRouteLifecycleEvents(events);

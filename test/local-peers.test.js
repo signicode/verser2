@@ -683,6 +683,54 @@ test('Local Broker routes to an HTTP/2 Guest through Host target checks', async 
   }
 });
 
+test('Local Broker throwing onRouteChange listener does not break subsequent listeners or route snapshots', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    const goodEvents = [];
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-throwing-broker' });
+
+    // Register a throwing listener first, then a good listener
+    localBroker.onRouteChange(() => {
+      throw new Error('local listener explosion');
+    });
+    localBroker.onRouteChange((event) => goodEvents.push(event));
+
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-throwing-guest',
+      routedDomains: ['throwing.local.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+    await localBroker.waitForRoute('throwing.local.test');
+
+    // Good listener must still receive the 'added' event
+    assert.ok(
+      goodEvents.some((e) => e.type === 'added' && e.domain === 'throwing.local.test'),
+      `Expected added event despite throwing listener, got: ${JSON.stringify(goodEvents)}`,
+    );
+    assert.deepEqual(localBroker.getRoutes(), [
+      { targetId: 'local-throwing-guest', domain: 'throwing.local.test' },
+    ]);
+
+    // Revoke should also work
+    goodEvents.length = 0;
+    localGuest.revokeRoutes(['throwing.local.test']);
+
+    assert.ok(
+      goodEvents.some((e) => e.type === 'removed' && e.domain === 'throwing.local.test'),
+      `Expected removed event despite throwing listener, got: ${JSON.stringify(goodEvents)}`,
+    );
+    assert.deepEqual(localBroker.getRoutes(), []);
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Local Broker uses configurable lease acquire timeout for HTTP/2 Guests', async () => {
   const host = createHost({ port: 0 });
   await host.start();

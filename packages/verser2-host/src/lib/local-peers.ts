@@ -27,7 +27,7 @@ export interface LocalBrokerState {
   routeWaiters: Map<string, LocalRouteWaiter[]>;
   requestCounter: number;
   closed: boolean;
-  routeChangeEmitter: EventEmitter;
+  routeChangeListeners: ((event: unknown) => void)[];
 }
 
 interface LocalRouteWaiter {
@@ -169,7 +169,7 @@ export function createLocalBrokerState(routes: RoutedDomainRegistration[]): Loca
     routeWaiters: new Map(),
     requestCounter: 0,
     closed: false,
-    routeChangeEmitter: new EventEmitter(),
+    routeChangeListeners: [],
   };
 }
 
@@ -210,7 +210,7 @@ export function closeLocalBrokerState(broker: LocalBrokerState, reason: string):
   }
   broker.closed = true;
   broker.routes = [];
-  broker.routeChangeEmitter.removeAllListeners();
+  broker.routeChangeListeners.length = 0;
   const error = createVerserError('disconnected-target', 'Local Broker is closed', { reason });
   for (const waiters of broker.routeWaiters.values()) {
     for (const waiter of waiters) {
@@ -273,7 +273,15 @@ export function emitLocalBrokerRouteChange(
     }
   }
 
-  broker.routeChangeEmitter.emit('route-change', event);
+  // Isolate each listener: a throwing listener must not prevent subsequent
+  // listeners from receiving the event or corrupt protocol processing.
+  for (const listener of broker.routeChangeListeners) {
+    try {
+      listener(event);
+    } catch {
+      // User listener threw — swallow to protect protocol processing.
+    }
+  }
 }
 
 export function toReadableBody(body: VerserLocalBrokerRequest['body']): Readable {

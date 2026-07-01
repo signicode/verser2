@@ -2256,3 +2256,59 @@ test('P1: Guest reconnects with different domains — emits correct lifecycle ev
     await host.close('test-complete');
   }
 });
+
+test('Throwing onRouteChange listener does not break subsequent lifecycle events or route snapshots', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let broker;
+  let guest;
+
+  try {
+    broker = createBroker({ hostUrl, brokerId: 'broker-throwing-listener' });
+    guest = createGuest({ hostUrl, guestId: 'guest-throwing-listener' });
+    guest.attach((_req, res) => res.end('ok'), 'throwing.local.test');
+
+    await broker.connect();
+
+    // Register a listener that throws on every call
+    const goodEvents = [];
+    broker.onRouteChange(() => {
+      throw new Error('listener explosion');
+    });
+    broker.onRouteChange((event) => goodEvents.push(event));
+
+    await guest.connect();
+    await broker.waitForRoute('throwing.local.test');
+
+    // The good listener should have received the 'added' event despite the
+    // throwing listener
+    assert.ok(
+      goodEvents.some((e) => e.type === 'added' && e.domain === 'throwing.local.test'),
+      `Expected added event despite throwing listener, got: ${JSON.stringify(goodEvents)}`,
+    );
+
+    // Route snapshot must still be consistent
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-throwing-listener', domain: 'throwing.local.test' },
+    ]);
+
+    // Revoke should also work — the throwing listener should not prevent the
+    // route from being removed from the snapshot or the good listener from
+    // receiving the removed event
+    goodEvents.length = 0;
+    await guest.revokeRoutes(['throwing.local.test']);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.ok(
+      goodEvents.some((e) => e.type === 'removed' && e.domain === 'throwing.local.test'),
+      `Expected removed event despite throwing listener, got: ${JSON.stringify(goodEvents)}`,
+    );
+    assert.deepEqual(broker.getRoutes(), []);
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
