@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.0 - Route revocation and lifecycle observation
+
+- Adds Guest-owned route revocation APIs across Node, Bun, Python, and local Guest surfaces.
+- Adds Broker route-change observation for added, removed, changed/restored, and degraded route lifecycle events.
+- Adds degraded/disconnected route state with delayed removal, restoration events, and Host `degradedRouteTimeoutMs` configuration.
+- Propagates route lifecycle events through local peers and Host federation, including multi-hop and loop-safe forwarding.
+- Documents lifecycle event semantics, route snapshots, listener error handling, and Broker observational boundaries.
+
 ## v0.4.5 - Local response header flushing
 
 - Adds `flushHeaders()` to Host local Guest responses so Node HTTP stream handlers can commit headers before body bytes are available.
