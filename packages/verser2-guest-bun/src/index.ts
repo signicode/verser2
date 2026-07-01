@@ -20,6 +20,10 @@ export type {
   VerserBrokerRequest,
   /** Response returned by a Broker. */
   VerserBrokerResponse,
+  /** Route change event emitted by the Broker. */
+  VerserBrokerRouteChangeEvent,
+  /** Response from a Guest route revocation request. */
+  VerserGuestRevocationResponse,
   /** Bun Guest interface for outbound connection and handler attachment. */
   VerserBunGuest,
   /** Lifecycle event emitted by a Bun Guest. */
@@ -50,6 +54,7 @@ import type {
   VerserBunGuestLifecycleEvent,
   VerserBunGuestOptions,
   VerserBunGuestRequestHandler,
+  VerserGuestRevocationResponse,
 } from './lib/types';
 
 import {
@@ -102,6 +107,10 @@ export function createVerserBunGuest(options: VerserBunGuestOptions): VerserBunG
       return nodeGuest.onLifecycle((event) => {
         listener(event);
       });
+    },
+
+    async revokeRoutes(domains: readonly string[]): Promise<VerserGuestRevocationResponse> {
+      return nodeGuest.revokeRoutes(domains);
     },
   };
 

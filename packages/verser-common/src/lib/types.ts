@@ -773,11 +773,128 @@ export type VerserClientTlsOptions = VerserClientTrustOptions & VerserClientIden
 /**
  * Union of all control frame types the Host sends to Brokers over the control stream.
  *
- * Currently only {@link VerserBrokerRoutesControlFrame} (`type: 'routes'`) is defined.
+ * Currently:
+ * - {@link VerserBrokerRoutesControlFrame} (`type: 'routes'`) — full route snapshot.
+ * - {@link VerserBrokerRouteLifecycleControlFrame} (`type: 'route-lifecycle'`) — explicit lifecycle events.
  *
  * @public
  */
-export type VerserBrokerControlFrame = VerserBrokerRoutesControlFrame;
+export type VerserBrokerControlFrame =
+  | VerserBrokerRoutesControlFrame
+  | VerserBrokerRouteLifecycleControlFrame;
+
+/**
+ * Route lifecycle event type for Broker observability.
+ *
+ * - `'added'` — a route was added.
+ * - `'removed'` — a route was fully removed (revoked or timed out).
+ * - `'changed'` — a route was restored or replaced.
+ * - `'degraded'` — a route entered degraded/disconnected state.
+ *
+ * @public
+ */
+export type VerserRouteLifecycleEventType = 'added' | 'removed' | 'changed' | 'degraded';
+
+/**
+ * Reason for a route lifecycle change.
+ *
+ * @public
+ */
+export type VerserRouteEventReason =
+  | 'registered'
+  | 'revoked'
+  | 'disconnected'
+  | 'reconnected'
+  | 'restored'
+  | 'timeout'
+  | 'updated';
+
+/**
+ * Minimal generation/session metadata for distinguishing stale from restored routes.
+ *
+ * @public
+ */
+export interface VerserRouteGeneration {
+  /** Host-assigned generation identifier, incremented on route state changes. */
+  readonly generationId: string;
+  /** Optional session identifier for the owning Guest connection. */
+  readonly sessionId?: string;
+}
+
+/**
+ * A single route lifecycle event payload sent to Brokers.
+ *
+ * @public
+ */
+export interface VerserRouteLifecycleEvent {
+  /** The lifecycle event type. */
+  readonly type: VerserRouteLifecycleEventType;
+  /** The Guest peer that owns this route. */
+  readonly targetId: VerserGuestId;
+  /** The domain affected by this event. */
+  readonly domain: string;
+  /** Optional machine-readable reason for the event. */
+  readonly reason?: VerserRouteEventReason;
+  /** Optional generation/session metadata for distinguishing stale from restored routes. */
+  readonly generation?: VerserRouteGeneration;
+}
+
+/**
+ * A route lifecycle control frame sent by the Host to Brokers.
+ *
+ * Unlike the full-snapshot `routes` frame, this frame carries explicit
+ * per-route lifecycle events so Brokers can observe additions, removals,
+ * restored/changed routes, and degraded/disconnected state without
+ * diffing full snapshots.
+ *
+ * @public
+ */
+export interface VerserBrokerRouteLifecycleControlFrame {
+  /** Discriminant — always `'route-lifecycle'`. */
+  readonly type: 'route-lifecycle';
+  /** The lifecycle events in this batch. */
+  readonly events: readonly VerserRouteLifecycleEvent[];
+}
+
+/**
+ * Guest revocation request body sent to `POST /verser/guest/revoke`.
+ *
+ * @public
+ */
+export interface VerserGuestRevocationRequest {
+  /** The domains the Guest wants to revoke. */
+  readonly domains: readonly string[];
+}
+
+/**
+ * Result for a single domain within a revocation response.
+ *
+ * @public
+ */
+export interface VerserGuestDomainRevocationResult {
+  /** The domain that was processed. */
+  readonly domain: string;
+  /** Error message if revocation failed for this domain. */
+  readonly error?: string;
+}
+
+/**
+ * Host response to a Guest revocation request.
+ *
+ * - `status: 'ack'` — all requested domains were revoked successfully.
+ * - `status: 'partial'` — some domains succeeded, some failed.
+ * - `status: 'error'` — the entire request failed.
+ *
+ * @public
+ */
+export interface VerserGuestRevocationResponse {
+  /** Overall status. */
+  readonly status: 'ack' | 'partial' | 'error';
+  /** Human-readable message. */
+  readonly message?: string;
+  /** Per-domain results for failed or partially failed requests. */
+  readonly failedDomains?: readonly VerserGuestDomainRevocationResult[];
+}
 
 /**
  * Machine-readable error codes used in {@link VerserError} and error envelopes.
@@ -794,6 +911,7 @@ export type VerserBrokerControlFrame = VerserBrokerRoutesControlFrame;
  * - `'route-loop'` — federated route/request metadata would revisit a Host or exceed hop limits.
  * - `'authorization-denied'` — application authorization rejected a peer/upstream action.
  * - `'unsafe-retry'` — automatic retry would be unsafe for the request/body policy.
+ * - `'revocation-failed'` — a route revocation request was rejected.
  *
  * @public
  */
@@ -809,7 +927,8 @@ export type VerserErrorCode =
   | 'upstream-unavailable'
   | 'route-loop'
   | 'authorization-denied'
-  | 'unsafe-retry';
+  | 'unsafe-retry'
+  | 'revocation-failed';
 
 /**
  * A read-only record of key-value pairs providing structured context for an error.

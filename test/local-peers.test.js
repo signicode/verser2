@@ -101,8 +101,8 @@ async function waitForRoutes(peer, expectedRoutes) {
   assert.deepEqual(peer.getRoutes(), expectedRoutes);
 }
 
-test('Host attaches local Guests and Brokers with route advertisement and retraction', async () => {
-  const host = createHost({ port: 0 });
+test('Host attaches local Guests and Brokers with route advertisement, degradation, and retraction', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 50 });
   const events = [];
   host.onLifecycle((event) => events.push(event));
 
@@ -125,7 +125,22 @@ test('Host attaches local Guests and Brokers with route advertisement and retrac
     ]);
     await localBroker.waitForRoute('local-registration.local.test');
 
+    // Close the guest — routes go degraded (still visible until timeout)
     await localGuest.close('test-detach');
+
+    // Routes are still visible in degraded state
+    assert.ok(
+      host
+        .getRoutedDomains()
+        .some(
+          (r) =>
+            r.targetId === 'local-guest-registration-1' &&
+            r.domain === 'local-registration.local.test',
+        ),
+    );
+
+    // Wait for degraded route timeout
+    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.deepEqual(host.getRoutedDomains(), []);
     await waitForRoutes(localBroker, []);
 
@@ -173,6 +188,206 @@ test('Host rejects duplicate peer ids across local and HTTP/2 peers', async () =
   } finally {
     if (localGuest !== undefined) await localGuest.close('test-complete');
     h2Guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Local Guest revokes a subset of its route domains', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'revoke-subset-guest',
+      routedDomains: ['keep.test', 'remove.test', 'also-keep.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'revoke-subset-broker' });
+    await localBroker.waitForRoute('remove.test');
+
+    // Revoke one existing domain and one non-existent domain
+    const result = localGuest.revokeRoutes(['remove.test', 'nonexistent.test']);
+    assert.deepEqual(result.revoked, ['remove.test']);
+    assert.deepEqual(result.notFound, ['nonexistent.test']);
+
+    // Verify route table updated (order-independent)
+    const remainingDomains = host
+      .getRoutedDomains()
+      .filter((r) => r.targetId === 'revoke-subset-guest')
+      .map((r) => r.domain)
+      .sort();
+    assert.deepEqual(remainingDomains, ['also-keep.test', 'keep.test']);
+
+    // Local broker routes should also be updated (order-independent)
+    const brokerDomains = localBroker
+      .getRoutes()
+      .filter((r) => r.targetId === 'revoke-subset-guest')
+      .map((r) => r.domain)
+      .sort();
+    assert.deepEqual(brokerDomains, ['also-keep.test', 'keep.test']);
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Guest revokeRoutes on a closed handle returns empty result', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+
+  try {
+    const localGuest = await host.attachLocalGuest({
+      guestId: 'revoke-closed-guest',
+      routedDomains: ['closed.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+    await localGuest.close('test-close');
+    const result = localGuest.revokeRoutes(['closed.test']);
+    assert.deepEqual(result, { revoked: [], notFound: ['closed.test'] });
+  } finally {
+    await host.close('test-complete');
+  }
+});
+
+test('Local Broker receives route-change events for route addition and revocation', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    const changes = [];
+    localBroker = await host.attachLocalBroker({ brokerId: 'lifecycle-broker-1' });
+    localBroker.onRouteChange((event) => changes.push(event));
+
+    localGuest = await host.attachLocalGuest({
+      guestId: 'lifecycle-guest-1',
+      routedDomains: ['lifecycle-1.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+    await localBroker.waitForRoute('lifecycle-1.test');
+
+    // Should have received 'added' event
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].type, 'added');
+    assert.equal(changes[0].targetId, 'lifecycle-guest-1');
+    assert.equal(changes[0].domain, 'lifecycle-1.test');
+    assert.equal(changes[0].reason, 'registered');
+
+    // Clear and revoke
+    changes.length = 0;
+    localGuest.revokeRoutes(['lifecycle-1.test']);
+
+    // Should have received 'removed' event with revocation reason
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].type, 'removed');
+    assert.equal(changes[0].targetId, 'lifecycle-guest-1');
+    assert.equal(changes[0].domain, 'lifecycle-1.test');
+    assert.equal(changes[0].reason, 'revoked');
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Broker route-change events include degraded state and timeout removal', async () => {
+  const host = createHost({ port: 0, degradedRouteTimeoutMs: 50 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'degrade-lifecycle-guest',
+      routedDomains: ['degrade-lifecycle.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'degrade-lifecycle-broker' });
+    await localBroker.waitForRoute('degrade-lifecycle.test');
+
+    const changes = [];
+    localBroker.onRouteChange((event) => changes.push(event));
+
+    // Close the guest — routes should degrade
+    await localGuest.close('test-close');
+
+    // Verify 'degraded' event was received
+    const degradedEvents = changes.filter((e) => e.type === 'degraded');
+    assert.equal(degradedEvents.length, 1);
+    assert.equal(degradedEvents[0].domain, 'degrade-lifecycle.test');
+    assert.equal(degradedEvents[0].targetId, 'degrade-lifecycle-guest');
+    assert.equal(degradedEvents[0].reason, 'disconnected');
+
+    // Routes should still be visible (degraded)
+    assert.equal(host.getRoutedDomains().length >= 1, true);
+    assert.ok(host.getRoutedDomains().some((r) => r.domain === 'degrade-lifecycle.test'));
+
+    // Wait for timeout to expire
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Routes should now be fully removed
+    assert.equal(
+      host.getRoutedDomains().filter((r) => r.targetId === 'degrade-lifecycle-guest').length,
+      0,
+    );
+
+    // Should have received 'removed' event with 'timeout' reason
+    const removedEvents = changes.filter((e) => e.type === 'removed');
+    assert.equal(removedEvents.length, 1);
+    assert.equal(removedEvents[0].domain, 'degrade-lifecycle.test');
+    assert.equal(removedEvents[0].reason, 'timeout');
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Broker does not expose revokeRoutes', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+
+  try {
+    const localBroker = await host.attachLocalBroker({ brokerId: 'no-revoke-broker' });
+    assert.equal(typeof localBroker.revokeRoutes, 'undefined');
+    await localBroker.close('test-complete');
+  } finally {
+    await host.close('test-complete');
+  }
+});
+
+test('Local Broker onRouteChange unsubscription works', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    const changes = [];
+    localBroker = await host.attachLocalBroker({ brokerId: 'unsub-broker' });
+    const unsubscribe = localBroker.onRouteChange((event) => changes.push(event));
+
+    localGuest = await host.attachLocalGuest({
+      guestId: 'unsub-guest',
+      routedDomains: ['unsub.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+    await localBroker.waitForRoute('unsub.test');
+
+    assert.equal(changes.length, 1);
+
+    // Unsubscribe and revoke — the listener should not receive events
+    unsubscribe();
+    changes.length = 0;
+    localGuest.revokeRoutes(['unsub.test']);
+    assert.equal(changes.length, 0);
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
     await host.close('test-complete');
   }
 });
@@ -464,6 +679,56 @@ test('Local Broker routes to an HTTP/2 Guest through Host target checks', async 
   } finally {
     if (localBroker !== undefined) await localBroker.close('test-complete');
     if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Broker rejected onRouteChange listener does not break subsequent listeners or route snapshots', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    const goodEvents = [];
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-throwing-broker' });
+
+    // Register a rejecting listener first, then a good listener. EventEmitter
+    // captureRejections should route this to the internal error handler without
+    // disrupting local route state updates or subsequent listeners.
+    localBroker.onRouteChange(async () => {
+      throw new Error('local listener rejection');
+    });
+    localBroker.onRouteChange((event) => goodEvents.push(event));
+
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-throwing-guest',
+      routedDomains: ['throwing.local.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+    await localBroker.waitForRoute('throwing.local.test');
+
+    // Good listener must still receive the 'added' event
+    assert.ok(
+      goodEvents.some((e) => e.type === 'added' && e.domain === 'throwing.local.test'),
+      `Expected added event despite rejecting listener, got: ${JSON.stringify(goodEvents)}`,
+    );
+    assert.deepEqual(localBroker.getRoutes(), [
+      { targetId: 'local-throwing-guest', domain: 'throwing.local.test' },
+    ]);
+
+    // Revoke should also work
+    goodEvents.length = 0;
+    localGuest.revokeRoutes(['throwing.local.test']);
+
+    assert.ok(
+      goodEvents.some((e) => e.type === 'removed' && e.domain === 'throwing.local.test'),
+      `Expected removed event despite rejecting listener, got: ${JSON.stringify(goodEvents)}`,
+    );
+    assert.deepEqual(localBroker.getRoutes(), []);
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
     await host.close('test-complete');
   }
 });

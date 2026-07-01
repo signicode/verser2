@@ -12,6 +12,11 @@ It is recognized by the repository's npm workspace tooling through
 - `VerserGuest` / `create_verser_guest` — Python ASGI Guest
 - `VerserBroker` / `create_verser_broker` — Python Broker
 - `VerserBrokerResponse` — Broker response type
+- `guest.revoke_routes(domains)` — revoke advertised route domains via
+  `POST /verser/guest/revoke`; returns `dict` with `"status"` (`"ack"`, `"partial"`, or `"error"`)
+- `broker.on_route_change(listener)` — register a listener for route lifecycle
+  events (`"added"`, `"removed"`, `"changed"`, `"degraded"`) with payload keys
+  `type`, `targetId`, `domain`, `reason`, `generation`; returns unsubscribe callable
 
 ## Commands
 
@@ -185,6 +190,37 @@ or a finite sequence:
 ```py
 reader.read = AsyncMock(side_effect=[b"first-frame", b""])
 ```
+
+### Python Guest route revocation
+
+A connected Python Guest can revoke one or more of its advertised routes:
+
+```py
+result = await guest.revoke_routes(["python-guest-a.local.test"])
+# result == {"status": "ack"}  or  {"status": "partial", "failedDomains": [...]}
+```
+
+The request is sent to `POST /verser/guest/revoke`. The Host responds with
+`"ack"` (all domains revoked), `"partial"` (some failed), or `"error"` (entire
+request rejected). Raises `RuntimeError` if the Guest is not connected or
+*domains* is empty.
+
+### Python Broker route lifecycle observation
+
+Brokers can observe route changes reactively:
+
+```py
+def on_change(event: dict):
+    print(event["type"], event["domain"], event.get("reason"))
+
+unsubscribe = broker.on_route_change(on_change)
+# Later, to stop observing:
+unsubscribe()
+```
+
+The internal route table (`get_routes()`) is updated before listeners fire. See
+the [Lifecycle and errors docs](../../docs/lifecycle-and-errors.md) for event
+types, reasons, and degraded-route behavior.
 
 ## Known limits
 

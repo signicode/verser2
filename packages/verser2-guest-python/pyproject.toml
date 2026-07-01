@@ -25,3 +25,9 @@ app-interface = "ASGI 3"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/verser2_guest_python"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]

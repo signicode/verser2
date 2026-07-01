@@ -33,7 +33,14 @@ export {
   VERSER_ENVELOPE_VERSION,
 } from './lib/constants';
 
-export { DEFAULT_MAX_ENVELOPE_METADATA_BYTES, VERSER_LIFECYCLE_EVENTS } from './lib/constants';
+export {
+  DEFAULT_MAX_ENVELOPE_METADATA_BYTES,
+  DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS,
+  VERSER_GUEST_REVOCATION_PATH,
+  VERSER_LIFECYCLE_EVENTS,
+  VERSER_ROUTE_EVENT_REASONS,
+  VERSER_ROUTE_LIFECYCLE_EVENT_TYPES,
+} from './lib/constants';
 
 export type {
   VerserPeerRole,
@@ -48,6 +55,7 @@ export type {
   VerserRegistrationAuthorizationContext,
   VerserRegistrationResponse,
   VerserBrokerRoutesControlFrame,
+  VerserBrokerRouteLifecycleControlFrame,
   VerserBrokerControlFrame,
   VerserCertificateIdentity,
   VerserClientTlsOptions,
@@ -82,6 +90,13 @@ export type {
   VerserFederatedRoutesControlFrame,
   VerserFederatedRouteSource,
   VerserGuestId,
+  VerserRouteLifecycleEventType,
+  VerserRouteEventReason,
+  VerserRouteGeneration,
+  VerserRouteLifecycleEvent,
+  VerserGuestRevocationRequest,
+  VerserGuestRevocationResponse,
+  VerserGuestDomainRevocationResult,
 } from './lib/types';
 
 export {
@@ -110,6 +125,14 @@ export {
   parseRegistrationRequest,
   parseRegistrationResponse,
 } from './lib/registration';
+
+export {
+  createBrokerRouteLifecycleControlFrame,
+  createGuestRevocationRequest,
+  createGuestRevocationResponse,
+  createRouteLifecycleEvent,
+  createVerserRouteGeneration,
+} from './lib/route-lifecycle';
 
 export {
   VerserError,

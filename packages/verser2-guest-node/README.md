@@ -9,7 +9,11 @@ over TLS HTTP/2 and provides request routing without opening inbound ports.
 - `createVerserBroker(options)` — create a Node Broker
 - `MinimalIncomingMessage`, `MinimalServerResponse` — minimal HTTP/1 request/response
   shims for local handler dispatch
-- Types: Guest/Broker options, request/response, lifecycle, dispatch
+- Types: Guest/Broker options, request/response, lifecycle, dispatch, route lifecycle events
+- `guest.revokeRoutes(domains)` — revoke advertised route domains via the dedicated
+  `/verser/guest/revoke` request path; resolves with `{ status: 'ack'|'partial'|'error' }`
+- `broker.onRouteChange(listener)` — observe route lifecycle events (`added`, `removed`,
+  `changed`, `degraded`) with payload `{ type, targetId, domain, reason?, generation? }`
 - Constant: `VERSER2_GUEST_NODE_PACKAGE_NAME`
 
 ## Basic usage
@@ -69,6 +73,37 @@ the redirect count fails with a `protocol-error`.
 `broker.createFetch()` defaults Undici's redirect option to `manual` so fallback
 redirect responses remain visible to callers instead of being followed through
 DNS. Pass an explicit `redirect` option to override that fetch-level behavior.
+
+### Broker route lifecycle observation
+
+Brokers can observe route changes reactively without polling:
+
+```ts
+const unsubscribe = broker.onRouteChange((event) => {
+  console.log(event.type, event.domain, event.reason);
+  // e.g. 'added', 'removed', 'changed', 'degraded'
+});
+// Later, to stop observing:
+unsubscribe();
+```
+
+The internal route snapshot (`getRoutes()`) is updated before listeners fire.
+See the [Lifecycle and errors docs](../../docs/lifecycle-and-errors.md) for
+event types, reasons, and degraded-route behavior.
+
+### Guest route revocation
+
+A connected Guest can selectively revoke its advertised routes without closing
+the connection:
+
+```ts
+const result = await guest.revokeRoutes(['app.example.com', 'api.example.com']);
+// result.status === 'ack' | 'partial' | 'error'
+```
+
+The Host responds with `ack` (all revoked), `partial` (some failed), or `error`
+(entire request rejected). The revocation uses the dedicated
+`/verser/guest/revoke` request path.
 
 ## Caveats
 

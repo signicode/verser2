@@ -4,8 +4,11 @@ import * as http2 from 'node:http2';
 import type { Readable } from 'node:stream';
 
 import {
+  VERSER_GUEST_REVOCATION_PATH,
   VERSER_LIFECYCLE_EVENTS,
   createGuestId,
+  createGuestRevocationRequest,
+  createGuestRevocationResponse,
   createRoutedRequestEnvelope,
   createVerserError,
   encodeVerserEnvelope,
@@ -29,6 +32,8 @@ import type {
 } from './types';
 
 type GuestLeaseState = 'opening' | 'waiting' | 'active';
+type GuestRevocationResponse = ReturnType<typeof createGuestRevocationResponse>;
+type GuestLeaseRequestMetadata = Awaited<ReturnType<typeof readLeaseRequestMetadataFromStream>>;
 
 interface GuestLeaseStream {
   readonly leaseId: string;
@@ -39,7 +44,7 @@ interface GuestLeaseStream {
 export class Http2VerserNodeGuest implements VerserNodeGuest {
   private readonly options: VerserNodeGuestOptions;
 
-  private readonly lifecycle = new EventEmitter();
+  private readonly lifecycle = new EventEmitter({ captureRejections: true });
 
   private session?: http2.ClientHttp2Session;
 
@@ -190,6 +195,69 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     return () => this.lifecycle.off('event', listener);
   }
 
+  public async revokeRoutes(domains: readonly string[]): Promise<GuestRevocationResponse> {
+    const session = this.session;
+    if (session === undefined || session.closed || session.destroyed) {
+      throw createVerserError('disconnected-target', 'Guest is not connected', {
+        guestId: this.options.guestId,
+      });
+    }
+
+    // Validate domains locally
+    createGuestRevocationRequest({ domains });
+
+    // Send revocation request to Host
+    const responsePromise = new Promise<GuestRevocationResponse>((resolve, reject) => {
+      const stream = session.request({
+        ':method': 'POST',
+        ':path': VERSER_GUEST_REVOCATION_PATH,
+        'x-verser-peer-id': this.options.guestId,
+        'content-type': 'application/json',
+      });
+
+      let body = '';
+
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk) => {
+        body += chunk;
+      });
+      stream.on('end', () => {
+        if (body.length === 0) {
+          reject(
+            createVerserError('revocation-failed', 'Host returned empty revocation response', {
+              guestId: this.options.guestId,
+            }),
+          );
+          return;
+        }
+        try {
+          const parsed = JSON.parse(body) as GuestRevocationResponse;
+          resolve(createGuestRevocationResponse(parsed));
+        } catch (error) {
+          reject(
+            createVerserError('revocation-failed', 'Host returned invalid revocation response', {
+              guestId: this.options.guestId,
+              body,
+            }),
+          );
+        }
+      });
+      stream.on('error', (error) => {
+        reject(
+          createVerserError('revocation-failed', 'Revocation request failed', {
+            guestId: this.options.guestId,
+            cause: error.message,
+          }),
+        );
+      });
+
+      stream.write(JSON.stringify({ domains }));
+      stream.end();
+    });
+
+    return responsePromise;
+  }
+
   private async register(): Promise<void> {
     const session = this.session;
     if (session === undefined) {
@@ -228,7 +296,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       'x-verser-peer-id': this.options.guestId,
     });
     this.controlStream = stream;
-    readNdjsonLines<unknown>(stream, () => {
+    readNdjsonLines(stream, () => {
       // Guest control stream body routing was removed; keep stream open for coordination.
     });
   }
@@ -315,7 +383,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
   }
 
   private dispatchLeasedRequest(
-    metadata: import('@signicode/verser-common').VerserRequestEnvelopeMetadata,
+    metadata: GuestLeaseRequestMetadata,
     lease: GuestLeaseStream,
   ): Promise<void> {
     const listener = this.listener;

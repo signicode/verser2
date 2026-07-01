@@ -17,7 +17,13 @@ and can connect outbound to upstream Hosts for route-aware federation.
   `VerserLocalGuestRequestListener`, `VerserLocalGuestResponse`, `VerserLocalGuestOptions`,
   `VerserLocalBrokerOptions`, `VerserLocalBrokerRequest`,
   `VerserLocalBrokerResponse`, `VerserLocalGuestHandle`,
-  `VerserLocalBrokerHandle`
+  `VerserLocalBrokerHandle`, `VerserRouteLifecycleEvent`
+- Local Guest handle: `guest.revokeRoutes(domains)` — revoke route domains
+  synchronously; returns `{ revoked: string[], notFound: string[] }`
+- Local Broker handle: `broker.onRouteChange(listener)` — observe route lifecycle events
+  (`added`, `removed`, `changed`, `degraded`); returns unsubscribe function
+- Host option: `degradedRouteTimeoutMs` — timeout before degraded/disconnected
+  routes are fully removed (default 5000 ms)
 - Re-exported: `VerserPeerRole`
 - Constant: `VERSER2_HOST_PACKAGE_NAME`
 

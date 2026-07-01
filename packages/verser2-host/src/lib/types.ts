@@ -10,6 +10,7 @@ import type {
   VerserError,
   VerserHostTlsOptions,
   VerserRegistrationRequest,
+  VerserRouteLifecycleEvent,
 } from '@signicode/verser-common';
 
 /**
@@ -45,6 +46,15 @@ export interface VerserHostOptions {
    * Defaults to `8`.
    */
   readonly maxFederationHopCount?: number;
+  /**
+   * Timeout in milliseconds before degraded/disconnected routes are fully removed.
+   * When a Guest disconnects, its routes enter a degraded state. If the same Guest
+   * does not reconnect within this period, the routes are fully removed and Brokers
+   * are notified via lifecycle events.
+   *
+   * Defaults to {@link DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS} (5000 ms).
+   */
+  readonly degradedRouteTimeoutMs?: number;
 }
 
 /**
@@ -180,6 +190,17 @@ export interface VerserLocalBrokerResponse {
  */
 export interface VerserLocalGuestHandle {
   close(reason?: string): Promise<void>;
+  /**
+   * Revokes a subset of the Guest's advertised route domains.
+   *
+   * Only domains that are currently registered for this Guest are revoked.
+   * Returns the list of successfully revoked domains and any domains that
+   * were requested but not found in the Guest's route table.
+   *
+   * @param domains - The domains to revoke.
+   * @returns Object with `revoked` (domains that were removed) and `notFound` (domains not found).
+   */
+  revokeRoutes(domains: string[]): { revoked: string[]; notFound: string[] };
 }
 
 /**
@@ -192,6 +213,17 @@ export interface VerserLocalBrokerHandle {
   getRoutes(): RoutedDomainRegistration[];
   waitForRoute(domain: string): Promise<void>;
   request(request: VerserLocalBrokerRequest): Promise<VerserLocalBrokerResponse>;
+  /**
+   * Registers a route lifecycle change listener.
+   *
+   * The listener is called whenever the Host notifies this Broker of a route
+   * lifecycle event (added, removed, changed, or degraded/restored). The Broker
+   * route snapshot (`getRoutes()`) is updated before the listener is called.
+   *
+   * @param listener - A callback receiving route change events.
+   * @returns A function to unsubscribe the listener.
+   */
+  onRouteChange(listener: (event: VerserRouteLifecycleEvent) => void): () => void;
   close(reason?: string): Promise<void>;
 }
 

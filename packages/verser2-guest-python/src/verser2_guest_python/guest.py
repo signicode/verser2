@@ -283,6 +283,60 @@ class VerserGuest:
     def _validate_h2_alpn(self, writer: asyncio.StreamWriter) -> None:
         validate_h2_alpn(writer, peer_kind="guest", peer_id=self.guest_id)
 
+    async def revoke_routes(self, domains: list[str]) -> dict[str, Any]:
+        """Revoke one or more of this Guest's advertised routes.
+
+        Sends a POST request to ``/verser/guest/revoke`` on the Host and
+        returns the Host's JSON response.
+
+        The response has the shape::
+
+            {"status": "ack"}                     # all domains revoked
+            {"status": "partial", "failedDomains": [...]}   # some failed
+            {"status": "error", "message": "..."}  # entire request failed
+
+        Parameters
+        ----------
+        domains : list[str]
+            One or more domain names to revoke.  Must be routes this Guest
+            owns.
+
+        Returns
+        -------
+        dict
+            The parsed Host response.
+
+        Raises
+        ------
+        RuntimeError
+            If the Guest is not connected, *domains* is empty, or the Host
+            returns an empty or malformed response.
+        """
+        if self._conn is None:
+            raise RuntimeError("Guest is not connected")
+        if not domains:
+            raise RuntimeError("revoke_routes requires at least one domain")
+        body = json.dumps({"domains": list(domains)}).encode("utf-8")
+        stream_id = await self._send_headers(
+            [
+                (":method", "POST"),
+                (":scheme", "https"),
+                (":authority", self._authority()),
+                (":path", "/verser/guest/revoke"),
+                ("x-verser-peer-id", self.guest_id),
+                ("content-type", "application/json"),
+            ],
+            end_stream=False,
+        )
+        try:
+            await self._send_data(stream_id, body, end_stream=True)
+            response_body = await self._collect_response_body(stream_id)
+        finally:
+            self._events.pop(stream_id, None)
+        if not response_body:
+            raise RuntimeError("Host returned empty revocation response")
+        return json.loads(response_body.decode("utf-8"))
+
     async def close(self, reason: str = "guest-close") -> None:
         """Tear down the Guest connection.
 
@@ -309,7 +363,11 @@ class VerserGuest:
 
     async def _register(self) -> None:
         body = json.dumps(
-            {"peerId": self.guest_id, "role": "guest", "routedDomains": self.routed_domains}
+            {
+                "peerId": self.guest_id,
+                "role": "guest",
+                "routedDomains": self.routed_domains,
+            }
         ).encode("utf-8")
         stream_id = await self._send_headers(
             [
@@ -425,7 +483,9 @@ class VerserGuest:
                             "statusCode": int(event.get("status") or 200),
                             "headers": sanitize_http2_response_headers(
                                 {
-                                    name.decode("ascii", "ignore").lower(): value.decode("latin-1")
+                                    name.decode(
+                                        "ascii", "ignore"
+                                    ).lower(): value.decode("latin-1")
                                     for name, value in event.get("headers", [])
                                 }
                             ),
@@ -437,7 +497,9 @@ class VerserGuest:
             if event_type == "http.response.body":
                 more_body = bool(event.get("more_body", False))
                 response_ended = not more_body
-                await self._send_data(stream_id, bytes(event.get("body") or b""), not more_body)
+                await self._send_data(
+                    stream_id, bytes(event.get("body") or b""), not more_body
+                )
 
         async def run_app() -> None:
             nonlocal response_ended
@@ -470,7 +532,9 @@ class VerserGuest:
                 return
             if not response_ended:
                 if not response_started:
-                    await send({"type": "http.response.start", "status": 200, "headers": []})
+                    await send(
+                        {"type": "http.response.start", "status": 200, "headers": []}
+                    )
                 await self._send_data(stream_id, b"", True)
                 response_ended = True
 
@@ -509,7 +573,9 @@ class VerserGuest:
             event = await self._events[stream_id].get()
             if isinstance(event, h2.events.DataReceived):
                 if metadata is None:
-                    pending_metadata_flow_controlled_length += int(event.flow_controlled_length)
+                    pending_metadata_flow_controlled_length += int(
+                        event.flow_controlled_length
+                    )
                     buffer += event.data
                     try_start_app()
                 else:
@@ -523,7 +589,9 @@ class VerserGuest:
                     )
             if isinstance(event, h2.events.StreamEnded):
                 try_start_app()
-                request_events.put_nowait({"type": "http.request", "body": b"", "more_body": False})
+                request_events.put_nowait(
+                    {"type": "http.request", "body": b"", "more_body": False}
+                )
                 break
 
         if app_task is None:
@@ -531,7 +599,10 @@ class VerserGuest:
         await app_task
 
     async def _send_headers(
-        self, headers: list[tuple[str, str]], end_stream: bool, create_queue: bool = True
+        self,
+        headers: list[tuple[str, str]],
+        end_stream: bool,
+        create_queue: bool = True,
     ) -> int:
         conn = self._require_conn()
         async with self._io_lock:
@@ -563,7 +634,9 @@ class VerserGuest:
             if isinstance(event, h2.events.ResponseReceived):
                 status = dict(event.headers).get(":status")
                 if status != "200":
-                    raise RuntimeError(f"Lease stream was rejected with status {status}")
+                    raise RuntimeError(
+                        f"Lease stream was rejected with status {status}"
+                    )
                 return
 
     async def _read_loop(self) -> None:
@@ -586,7 +659,9 @@ class VerserGuest:
         self, stream_id: int, flow_controlled_length: int
     ) -> None:
         async with self._io_lock:
-            self._require_conn().acknowledge_received_data(flow_controlled_length, stream_id)
+            self._require_conn().acknowledge_received_data(
+                flow_controlled_length, stream_id
+            )
             await self._flush_unlocked()
 
     async def _flush(self) -> None:

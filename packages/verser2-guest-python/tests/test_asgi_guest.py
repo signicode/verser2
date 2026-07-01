@@ -48,7 +48,9 @@ class FakeConn:
 
 
 class AsgiDispatchTest(unittest.TestCase):
-    def test_dispatch_routed_request_builds_http_scope_and_returns_response(self) -> None:
+    def test_dispatch_routed_request_builds_http_scope_and_returns_response(
+        self,
+    ) -> None:
         recorded = {}
 
         async def app(scope, receive, send):
@@ -104,7 +106,9 @@ class AsgiDispatchTest(unittest.TestCase):
         self.assertEqual(response.headers, {"x-guest": "python"})
         self.assertEqual(response.body, b"POST /hello payload")
 
-    def test_app_exception_before_response_start_returns_local_handler_failure(self) -> None:
+    def test_app_exception_before_response_start_returns_local_handler_failure(
+        self,
+    ) -> None:
         async def app(scope, receive, send):
             raise RuntimeError("asgi exploded")
 
@@ -175,7 +179,9 @@ class AsgiDispatchTest(unittest.TestCase):
         )
         self.assertEqual(response.body, b"ok")
 
-    def test_dispatch_routed_request_collects_streamed_response_body_chunks(self) -> None:
+    def test_dispatch_routed_request_collects_streamed_response_body_chunks(
+        self,
+    ) -> None:
         async def app(scope, receive, send):
             await receive()
             await send(
@@ -185,8 +191,12 @@ class AsgiDispatchTest(unittest.TestCase):
                     "headers": [(b"x-stream", b"yes")],
                 }
             )
-            await send({"type": "http.response.body", "body": b"one-", "more_body": True})
-            await send({"type": "http.response.body", "body": b"two", "more_body": False})
+            await send(
+                {"type": "http.response.body", "body": b"one-", "more_body": True}
+            )
+            await send(
+                {"type": "http.response.body", "body": b"two", "more_body": False}
+            )
 
         guest = create_verser_guest(
             host_url="https://127.0.0.1:1",
@@ -216,7 +226,9 @@ class AsgiDispatchTest(unittest.TestCase):
         async def app(scope, receive, send):
             await receive()
             await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b"abcd", "more_body": True})
+            await send(
+                {"type": "http.response.body", "body": b"abcd", "more_body": True}
+            )
             await send({"type": "http.response.body", "body": b"e", "more_body": False})
 
         guest = create_verser_guest(
@@ -241,7 +253,9 @@ class AsgiDispatchTest(unittest.TestCase):
         )
 
         self.assertEqual(response.error["code"], "local-handler-failure")
-        self.assertIn("response body bytes exceed limit", response.error["message"].lower())
+        self.assertIn(
+            "response body bytes exceed limit", response.error["message"].lower()
+        )
 
     def test_dispatch_routed_request_uses_latin1_response_header_decoding(self) -> None:
         async def app(scope, receive, send):
@@ -358,7 +372,9 @@ class ProtocolEnvelopeTest(unittest.TestCase):
         self.assertEqual(remainder, b"first-body")
 
     def test_normalize_headers_joins_lists_without_spaces_for_node_parity(self) -> None:
-        self.assertEqual(normalize_headers({"x-list": ["one", "two"]}), {"x-list": "one,two"})
+        self.assertEqual(
+            normalize_headers({"x-list": ["one", "two"]}), {"x-list": "one,two"}
+        )
 
     def test_sanitize_http2_response_headers_strips_standard_hop_by_hop(self) -> None:
         sanitized = sanitize_http2_response_headers(
@@ -386,7 +402,9 @@ class ProtocolEnvelopeTest(unittest.TestCase):
         self.assertIsNone(sanitized.get("transfer-encoding"))
         self.assertIsNone(sanitized.get("upgrade"))
 
-    def test_sanitize_http2_response_headers_strips_connection_named_headers(self) -> None:
+    def test_sanitize_http2_response_headers_strips_connection_named_headers(
+        self,
+    ) -> None:
         sanitized = sanitize_http2_response_headers(
             {
                 "connection": "x-foo, x-bar",
@@ -402,7 +420,11 @@ class ProtocolEnvelopeTest(unittest.TestCase):
 
     def test_sanitize_http2_response_headers_preserves_end_to_end_headers(self) -> None:
         sanitized = sanitize_http2_response_headers(
-            {"content-type": "application/json", "content-length": "42", "x-custom": "value"}
+            {
+                "content-type": "application/json",
+                "content-length": "42",
+                "x-custom": "value",
+            }
         )
         self.assertEqual(sanitized.get("content-type"), "application/json")
         self.assertEqual(sanitized.get("content-length"), "42")
@@ -412,8 +434,12 @@ class ProtocolEnvelopeTest(unittest.TestCase):
 class LeaseTaskTest(unittest.TestCase):
     def test_read_loop_does_not_ack_request_body_data_on_frame_receipt(self) -> None:
         async def run() -> list[tuple[int, int]]:
-            event = h2.events.DataReceived(stream_id=1, data=b"body", flow_controlled_length=7)
-            guest = create_verser_guest(host_url="https://127.0.0.1:1", guest_id="ack-delay")
+            event = h2.events.DataReceived(
+                stream_id=1, data=b"body", flow_controlled_length=7
+            )
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="ack-delay"
+            )
             conn = FakeConn([event])
             guest._conn = conn
             guest._reader = FakeReader([b"frame-bytes", b""])
@@ -433,8 +459,12 @@ class LeaseTaskTest(unittest.TestCase):
                 await allow_first_receive.wait()
                 event = await receive()
                 self.assertEqual(event["body"], b"payload")
-                await send({"type": "http.response.start", "status": 200, "headers": []})
-                await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+                await send(
+                    {"type": "http.response.start", "status": 200, "headers": []}
+                )
+                await send(
+                    {"type": "http.response.body", "body": b"ok", "more_body": False}
+                )
 
             envelope = encode_envelope(
                 "request",
@@ -447,7 +477,9 @@ class LeaseTaskTest(unittest.TestCase):
                     "headers": {},
                 },
             )
-            guest = create_verser_guest(host_url="https://127.0.0.1:1", guest_id="ack-after-receive", app=app)
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="ack-after-receive", app=app
+            )
             conn = FakeConn()
             guest._conn = conn
             guest._events[1] = asyncio.Queue()
@@ -466,11 +498,34 @@ class LeaseTaskTest(unittest.TestCase):
             await task
             return conn.acknowledged
 
-        self.assertEqual(asyncio.run(run()), [(1, len(encode_envelope("request", {"requestId": "req-ack-after-receive", "sourceId": "broker-unit", "targetId": "ack-after-receive", "method": "POST", "path": "/ack", "headers": {}})) + len(b"payload"))])
+        self.assertEqual(
+            asyncio.run(run()),
+            [
+                (
+                    1,
+                    len(
+                        encode_envelope(
+                            "request",
+                            {
+                                "requestId": "req-ack-after-receive",
+                                "sourceId": "broker-unit",
+                                "targetId": "ack-after-receive",
+                                "method": "POST",
+                                "path": "/ack",
+                                "headers": {},
+                            },
+                        )
+                    )
+                    + len(b"payload"),
+                )
+            ],
+        )
 
     def test_completed_lease_tasks_are_pruned(self) -> None:
         async def run() -> int:
-            guest = create_verser_guest(host_url="https://127.0.0.1:1", guest_id="task-prune")
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="task-prune"
+            )
 
             async def complete_lease() -> None:
                 return None
@@ -482,6 +537,225 @@ class LeaseTaskTest(unittest.TestCase):
             return len(guest._lease_tasks)
 
         self.assertEqual(asyncio.run(run()), 0)
+
+
+class VerserGuestRevocationTest(unittest.TestCase):
+    """Tests for VerserGuest.revoke_routes()."""
+
+    def _guest_factory(self, **overrides: Any) -> Any:
+        opts: dict[str, Any] = {
+            "host_url": "https://127.0.0.1",
+            "guest_id": "python-unit-guest",
+            "routed_domains": ["alpha.local", "beta.local"],
+        }
+        opts.update(overrides)
+        return create_verser_guest(**opts)
+
+    def _run(self, coroutine: Any) -> Any:
+        return asyncio.run(coroutine)
+
+    def test_revoke_routes_raises_when_not_connected(self) -> None:
+        guest = self._guest_factory()
+        with self.assertRaises(RuntimeError) as context:
+            self._run(guest.revoke_routes(["alpha.local"]))
+        self.assertIn("not connected", str(context.exception).lower())
+
+    def test_revoke_routes_raises_on_empty_domains(self) -> None:
+        guest = self._guest_factory()
+        guest._conn = MagicMock()
+        with self.assertRaises(RuntimeError) as context:
+            self._run(guest.revoke_routes([]))
+        self.assertIn("at least one domain", str(context.exception).lower())
+
+    def test_revoke_routes_sends_request_to_revoke_path(self) -> None:
+        guest = self._guest_factory()
+        guest._conn = MagicMock()
+
+        headers_calls: list[Any] = []
+        data_calls: list[tuple[int, bytes, bool]] = []
+
+        async def fake_send_headers(
+            headers_list: list[tuple[str, str]],
+            *,
+            end_stream: bool,
+            create_queue: bool = True,
+        ) -> int:
+            headers_calls.append(dict(headers_list))
+            return 42
+
+        async def fake_send_data(stream_id: int, data: bytes, end_stream: bool) -> None:
+            data_calls.append((stream_id, data, end_stream))
+
+        # Provide a response via the event queue
+        guest._events[42] = asyncio.Queue()
+        guest._events[42].put_nowait(
+            h2.events.DataReceived(
+                stream_id=42,
+                data=json.dumps({"status": "ack"}).encode(),
+                flow_controlled_length=0,
+            )
+        )
+        guest._events[42].put_nowait(h2.events.StreamEnded(stream_id=42))
+
+        with patch.object(
+            type(guest), "_send_headers", new=AsyncMock(side_effect=fake_send_headers)
+        ):
+            with patch.object(
+                type(guest), "_send_data", new=AsyncMock(side_effect=fake_send_data)
+            ):
+                result = self._run(guest.revoke_routes(["alpha.local"]))
+
+        self.assertEqual(result, {"status": "ack"})
+
+        # Verify the request path is the revocation endpoint
+        self.assertEqual(len(headers_calls), 1)
+        path = headers_calls[0].get(":path")
+        self.assertEqual(path, "/verser/guest/revoke")
+
+        # Verify the body contains the domains
+        self.assertEqual(len(data_calls), 1)
+        body = data_calls[0][1]
+        self.assertEqual(json.loads(body.decode()), {"domains": ["alpha.local"]})
+
+    def test_revoke_routes_multiple_domains(self) -> None:
+        guest = self._guest_factory()
+        guest._conn = MagicMock()
+
+        async def fake_send_headers(
+            headers_list: list[tuple[str, str]],
+            *,
+            end_stream: bool,
+            create_queue: bool = True,
+        ) -> int:
+            return 43
+
+        async def fake_send_data(stream_id: int, data: bytes, end_stream: bool) -> None:
+            pass
+
+        guest._events[43] = asyncio.Queue()
+        guest._events[43].put_nowait(
+            h2.events.DataReceived(
+                stream_id=43,
+                data=json.dumps({"status": "ack"}).encode(),
+                flow_controlled_length=0,
+            )
+        )
+        guest._events[43].put_nowait(h2.events.StreamEnded(stream_id=43))
+
+        with patch.object(
+            type(guest), "_send_headers", new=AsyncMock(side_effect=fake_send_headers)
+        ):
+            with patch.object(
+                type(guest), "_send_data", new=AsyncMock(side_effect=fake_send_data)
+            ):
+                result = self._run(guest.revoke_routes(["alpha.local", "beta.local"]))
+
+        self.assertEqual(result, {"status": "ack"})
+
+    def test_revoke_routes_parses_partial_response(self) -> None:
+        guest = self._guest_factory()
+        guest._conn = MagicMock()
+
+        async def fake_send_headers(
+            headers_list: list[tuple[str, str]],
+            *,
+            end_stream: bool,
+            create_queue: bool = True,
+        ) -> int:
+            return 44
+
+        async def fake_send_data(stream_id: int, data: bytes, end_stream: bool) -> None:
+            pass
+
+        partial_response = {
+            "status": "partial",
+            "failedDomains": [
+                {"domain": "beta.local", "error": "not owned by this guest"},
+            ],
+        }
+        guest._events[44] = asyncio.Queue()
+        guest._events[44].put_nowait(
+            h2.events.DataReceived(
+                stream_id=44,
+                data=json.dumps(partial_response).encode(),
+                flow_controlled_length=0,
+            )
+        )
+        guest._events[44].put_nowait(h2.events.StreamEnded(stream_id=44))
+
+        with patch.object(
+            type(guest), "_send_headers", new=AsyncMock(side_effect=fake_send_headers)
+        ):
+            with patch.object(
+                type(guest), "_send_data", new=AsyncMock(side_effect=fake_send_data)
+            ):
+                result = self._run(guest.revoke_routes(["alpha.local", "beta.local"]))
+
+        self.assertEqual(result, partial_response)
+
+    def test_revoke_routes_parses_error_response(self) -> None:
+        guest = self._guest_factory()
+        guest._conn = MagicMock()
+
+        async def fake_send_headers(
+            headers_list: list[tuple[str, str]],
+            *,
+            end_stream: bool,
+            create_queue: bool = True,
+        ) -> int:
+            return 45
+
+        async def fake_send_data(stream_id: int, data: bytes, end_stream: bool) -> None:
+            pass
+
+        error_response = {"status": "error", "message": "invalid domain"}
+        guest._events[45] = asyncio.Queue()
+        guest._events[45].put_nowait(
+            h2.events.DataReceived(
+                stream_id=45,
+                data=json.dumps(error_response).encode(),
+                flow_controlled_length=0,
+            )
+        )
+        guest._events[45].put_nowait(h2.events.StreamEnded(stream_id=45))
+
+        with patch.object(
+            type(guest), "_send_headers", new=AsyncMock(side_effect=fake_send_headers)
+        ):
+            with patch.object(
+                type(guest), "_send_data", new=AsyncMock(side_effect=fake_send_data)
+            ):
+                result = self._run(guest.revoke_routes(["invalid.local"]))
+
+        self.assertEqual(result, error_response)
+
+    def test_revoke_routes_raises_on_empty_host_response(self) -> None:
+        guest = self._guest_factory()
+        guest._conn = MagicMock()
+
+        async def fake_send_headers(
+            headers_list: list[tuple[str, str]],
+            *,
+            end_stream: bool,
+            create_queue: bool = True,
+        ) -> int:
+            return 46
+
+        async def fake_send_data(stream_id: int, data: bytes, end_stream: bool) -> None:
+            pass
+
+        guest._events[46] = asyncio.Queue()
+        guest._events[46].put_nowait(h2.events.StreamEnded(stream_id=46))
+
+        with patch.object(
+            type(guest), "_send_headers", new=AsyncMock(side_effect=fake_send_headers)
+        ):
+            with patch.object(
+                type(guest), "_send_data", new=AsyncMock(side_effect=fake_send_data)
+            ):
+                with self.assertRaises(RuntimeError) as context:
+                    self._run(guest.revoke_routes(["alpha.local"]))
+        self.assertIn("empty", str(context.exception).lower())
 
 
 class VerserGuestTlsConfigTest(unittest.TestCase):
@@ -518,10 +792,16 @@ class VerserGuestTlsConfigTest(unittest.TestCase):
         ssl_context = MagicMock()
 
         with patch("ssl.create_default_context", return_value=ssl_context) as mock_ctx:
-            with patch("asyncio.open_connection", side_effect=self._mock_open_connection()):
+            with patch(
+                "asyncio.open_connection", side_effect=self._mock_open_connection()
+            ):
                 with patch.object(type(guest), "_register", new=AsyncMock()):
-                    with patch.object(type(guest), "_open_control_stream", new=AsyncMock()):
-                        with patch.object(type(guest), "_start_lease_task", new=MagicMock()):
+                    with patch.object(
+                        type(guest), "_open_control_stream", new=AsyncMock()
+                    ):
+                        with patch.object(
+                            type(guest), "_start_lease_task", new=MagicMock()
+                        ):
                             self._run(guest.connect())
 
         mock_ctx.assert_called_once_with(cafile="/ca.pem")
@@ -536,10 +816,16 @@ class VerserGuestTlsConfigTest(unittest.TestCase):
         ssl_context = MagicMock()
 
         with patch("ssl.create_default_context", return_value=ssl_context):
-            with patch("asyncio.open_connection", side_effect=self._mock_open_connection()):
+            with patch(
+                "asyncio.open_connection", side_effect=self._mock_open_connection()
+            ):
                 with patch.object(type(guest), "_register", new=AsyncMock()):
-                    with patch.object(type(guest), "_open_control_stream", new=AsyncMock()):
-                        with patch.object(type(guest), "_start_lease_task", new=MagicMock()):
+                    with patch.object(
+                        type(guest), "_open_control_stream", new=AsyncMock()
+                    ):
+                        with patch.object(
+                            type(guest), "_start_lease_task", new=MagicMock()
+                        ):
                             self._run(guest.connect())
 
         ssl_context.load_cert_chain.assert_called_once_with(
@@ -590,17 +876,23 @@ class VerserGuestTlsConfigTest(unittest.TestCase):
 
         ssl_context.load_cert_chain.side_effect = assert_closed_before_load
 
-        with patch("tempfile.NamedTemporaryFile", return_value=FakeTemporaryFile()) as temp_file:
+        with patch(
+            "tempfile.NamedTemporaryFile", return_value=FakeTemporaryFile()
+        ) as temp_file:
             with patch("os.unlink") as unlink:
                 with patch.object(builtins, "open", return_value=BytesIO(b"pfx-bytes")):
                     with patch(
                         "cryptography.hazmat.primitives.serialization.pkcs12.load_key_and_certificates",
                         return_value=(fake_key, fake_certificate, []),
                     ):
-                        guest._load_pfx_client_identity(ssl_context, "/client.pfx", "secret")
+                        guest._load_pfx_client_identity(
+                            ssl_context, "/client.pfx", "secret"
+                        )
 
         temp_file.assert_called_once_with("wb", delete=False)
-        ssl_context.load_cert_chain.assert_called_once_with("/tmp/verser-python-guest-client.pem")
+        ssl_context.load_cert_chain.assert_called_once_with(
+            "/tmp/verser-python-guest-client.pem"
+        )
         unlink.assert_called_once_with("/tmp/verser-python-guest-client.pem")
 
     def test_alpn_not_h2_raises_actionable_error(self) -> None:
@@ -621,7 +913,9 @@ class VerserGuestTlsConfigTest(unittest.TestCase):
         ssl_context = MagicMock()
 
         with patch("ssl.create_default_context", return_value=ssl_context):
-            with patch("asyncio.open_connection", side_effect=OSError("Connection refused")):
+            with patch(
+                "asyncio.open_connection", side_effect=OSError("Connection refused")
+            ):
                 with self.assertRaises(Exception) as context:
                     self._run(guest.connect())
 

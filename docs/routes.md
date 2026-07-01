@@ -75,6 +75,98 @@ or exceed the configured hop limit are suppressed. When a Guest, upstream link,
 or downstream Host disconnects, imported routes owned by that link are withdrawn
 and Brokers receive a replacement route table.
 
+## Route revocation
+
+A Guest can revoke a subset of its advertised route domains without closing
+the connection. This is useful for graceful de-registration, blue/green
+deployments, or moving routes between Guest instances.
+
+### Guest API
+
+| Runtime | Method | Returns |
+|---------|--------|---------|
+| Node/Bun | `guest.revokeRoutes(domains)` | `Promise<{ status: 'ack'\|'partial'\|'error', failedDomains?: [...] }>` |
+| Python | `guest.revoke_routes(domains)` | `dict` with `"status"` key |
+| Local Host Guest | `localGuest.revokeRoutes(domains)` | `{ revoked: string[], notFound: string[] }` (sync) |
+
+The remote Guest API sends a request to the Host's dedicated
+`/verser/guest/revoke` path. The Host responds with:
+
+- `ack` — all requested domains revoked successfully.
+- `partial` — some domains succeeded; `failedDomains` lists per-domain errors.
+- `error` — the entire request failed (e.g. malformed request).
+
+The local Guest handle performs revocation synchronously in-process and
+returns the split of successfully revoked domains versus domains that were
+not found in the Guest's route table.
+
+### Broker limitation
+
+Brokers do **not** provide a revocation API. Route lifecycle events are
+observational only. See [onRouteChange](#lifecycle-events) below.
+
+## Lifecycle events
+
+Brokers and local Broker handles can observe route changes reactively via
+`onRouteChange(listener)` (Node/Bun/local) or `on_route_change(listener)`
+(Python). This complements the snapshot-based `getRoutes()` API.
+
+### Event payload
+
+```ts
+{
+  type: 'added' | 'removed' | 'changed' | 'degraded',
+  targetId: string,     // the Guest peer that owns the route
+  domain: string,       // the affected hostname
+  reason?: string,      // machine-readable reason
+  generation?: {        // version metadata
+    generationId: string,
+    sessionId?: string,
+  },
+}
+```
+
+### Event types and reasons
+
+| type | Meaning | Common reasons |
+|------|---------|----------------|
+| `added` | Route registered | `registered` |
+| `removed` | Route revoked, timed out, or stale degraded route dropped on reconnect | `revoked`, `timeout`, `disconnected`, `reconnected` |
+| `changed` | Route restored or generation/session metadata updated | `restored`, `updated` |
+| `degraded` | Route entered degraded/disconnected state | `disconnected` |
+
+### Metadata optionality
+
+The `reason` and `generation` fields in lifecycle events are **optional and
+best-effort**. Events derived from a full-snapshot diff (e.g. after a
+federated route table sync or a local Broker reconnection) may omit `reason`
+and/or `generation` because the Host reconstructs the event from the snapshot
+state rather than from the original trigger. Consumers should not depend on
+these fields being present in every event.
+
+### Snapshot consistency
+
+The internal route snapshot (`getRoutes()` / `get_routes()`) is updated
+**before** lifecycle listeners fire. This means a listener can safely call
+`getRoutes()` and see the current state reflected.
+
+### Degraded route behavior
+
+When a Guest disconnects, its routes enter a **degraded** state instead of
+being removed immediately:
+
+1. Brokers receive a `degraded` lifecycle event for each affected route.
+2. The route remains visible in `getRoutes()` but requests to the
+   disconnected Guest fail with a `missing-guest` error (the peer entry is
+   removed from the active peer table even though the route is preserved).
+3. If the same Guest reconnects before the timeout, routes are restored
+   (`changed` with `reason: 'restored'`) and resume normal operation.
+4. If the timeout elapses, routes are fully removed (`removed` with
+   `reason: 'timeout'`).
+
+The timeout is controlled by `degradedRouteTimeoutMs` in Host options
+(default 5000 ms).
+
 ## waitForRoute
 
 Brokers use `waitForRoute(domain)` to wait until a domain appears in the route

@@ -99,7 +99,7 @@ export class MinimalServerResponse extends EventEmitter {
     output?: http2.ClientHttp2Stream,
     maxResponseBytes = 10 * 1024 * 1024,
   ) {
-    super();
+    super({ captureRejections: true });
     this.requestId = requestId;
     this.output = output;
     this.maxResponseBytes = maxResponseBytes;

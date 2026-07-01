@@ -29,6 +29,9 @@ export const VERSER_LIFECYCLE_EVENTS = {
   requestCompleted: 'request-completed',
   error: 'error',
   closed: 'closed',
+  routeRevoked: 'route-revoked',
+  routeDegraded: 'route-degraded',
+  routeRestored: 'route-restored',
 } as const;
 
 /**
@@ -72,3 +75,59 @@ export const VERSER_ENVELOPE_TYPES = {
   response: 2,
   error: 3,
 } as const;
+
+/**
+ * Constants for Guest route revocation.
+ *
+ * @public
+ */
+export const VERSER_GUEST_REVOCATION_PATH = '/verser/guest/revoke';
+
+/**
+ * Host-assigned route lifecycle event type names.
+ *
+ * These strings appear as the `type` field in {@link VerserRouteLifecycleEvent}
+ * payloads sent over route lifecycle control frames.
+ *
+ * - `added` — route was registered or restored.
+ * - `removed` — route was revoked or timed out.
+ * - `changed` — route state was updated (e.g. generation id change).
+ * - `degraded` — route entered degraded/disconnected state.
+ *
+ * @public
+ */
+export const VERSER_ROUTE_LIFECYCLE_EVENT_TYPES = {
+  added: 'added',
+  removed: 'removed',
+  changed: 'changed',
+  degraded: 'degraded',
+} as const;
+
+/**
+ * Canonical route lifecycle event reason strings.
+ *
+ * These values appear as the `reason` field in {@link VerserRouteLifecycleEvent}
+ * payloads to explain why a route lifecycle change occurred.
+ *
+ * @public
+ */
+export const VERSER_ROUTE_EVENT_REASONS = {
+  registered: 'registered',
+  revoked: 'revoked',
+  disconnected: 'disconnected',
+  reconnected: 'reconnected',
+  restored: 'restored',
+  timeout: 'timeout',
+  updated: 'updated',
+} as const;
+
+/**
+ * Default value (in milliseconds) for the Host's degraded-route removal timeout.
+ *
+ * When a Guest disconnects, its routes enter a degraded/disconnected state.
+ * If the same Guest does not reconnect within this period, the routes are
+ * fully removed.
+ *
+ * @public
+ */
+export const DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS = 5000;

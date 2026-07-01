@@ -1231,6 +1231,495 @@ test('Federated forwarding strips transfer-encoding and connection-listed respon
   }
 });
 
+test('Federated route revocation propagates lifecycle events from downstream to upstream Host', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    // Attach a local Broker to the manager BEFORE the Guest so we can
+    // observe lifecycle events that arrive through federation.
+    const managerEvents = [];
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-revoke-manager' });
+    broker.onRouteChange((event) => managerEvents.push(event));
+
+    const guest = await runner.attachLocalGuest({
+      guestId: 'guest-revoke-federated',
+      routedDomains: ['revoke-federated.verser.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    // Wait for the federated route to appear on the manager (via full snapshot)
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-revoke-federated',
+          'revoke-federated.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    // Revoke the route on the runner's Guest
+    const result = guest.revokeRoutes(['revoke-federated.verser.test']);
+    assert.deepEqual(result.revoked, ['revoke-federated.verser.test']);
+
+    // Verify the manager's Broker observes the removed event
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'removed' &&
+            e.targetId === 'guest-revoke-federated' &&
+            e.domain === 'revoke-federated.verser.test' &&
+            e.reason === 'revoked',
+        ),
+      ),
+    );
+
+    // Verify the route is no longer available on the manager
+    assert.deepEqual(
+      manager.getFederatedRouteCandidates('guest-revoke-federated', 'revoke-federated.verser.test'),
+      [],
+    );
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Federated route degraded/disconnected state propagates through federation', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    const guest = await runner.attachLocalGuest({
+      guestId: 'guest-degrade-federated',
+      routedDomains: ['degrade-federated.verser.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-degrade-federated',
+          'degrade-federated.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    // Attach local Broker to manager to observe lifecycle events
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-degrade-manager' });
+    const managerEvents = [];
+    broker.onRouteChange((event) => managerEvents.push(event));
+
+    // Disconnect the Guest (close)
+    await guest.close();
+
+    // Verify the manager's Broker receives a 'degraded' event
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'degraded' &&
+            e.targetId === 'guest-degrade-federated' &&
+            e.domain === 'degrade-federated.verser.test' &&
+            e.reason === 'disconnected',
+        ),
+      ),
+    );
+
+    // Verify the route is removed from the manager's active candidates
+    // (The route goes degraded on the runner; the full federated snapshot removes it)
+    await assertEventually(() =>
+      assert.deepEqual(
+        manager.getFederatedRouteCandidates(
+          'guest-degrade-federated',
+          'degrade-federated.verser.test',
+        ),
+        [],
+      ),
+    );
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Federated route restoration before timeout propagates through federation', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({
+    hostId: 'host-runner',
+    tls: tlsOptions(),
+    degradedRouteTimeoutMs: 2000,
+  });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    // Attach Broker before Guest disconnection to catch lifecycle events
+    const managerEvents = [];
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-restore-manager' });
+    broker.onRouteChange((event) => managerEvents.push(event));
+
+    const guest = await runner.attachLocalGuest({
+      guestId: 'guest-restore-federated',
+      routedDomains: ['restore-federated.verser.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-restore-federated',
+          'restore-federated.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    // Disconnect the Guest
+    await guest.close();
+
+    // Verify degraded event propagates
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'degraded' &&
+            e.targetId === 'guest-restore-federated' &&
+            e.domain === 'restore-federated.verser.test' &&
+            e.reason === 'disconnected',
+        ),
+      ),
+    );
+
+    // Reconnect the Guest with same peerId and domain BEFORE the timeout
+    const restoredGuest = await runner.attachLocalGuest({
+      guestId: 'guest-restore-federated',
+      routedDomains: ['restore-federated.verser.test'],
+      listener: (_request, response) => response.end('restored'),
+    });
+
+    // Verify the manager's Broker receives a 'changed' (restored) event
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'changed' &&
+            e.targetId === 'guest-restore-federated' &&
+            e.domain === 'restore-federated.verser.test' &&
+            e.reason === 'restored',
+        ),
+      ),
+    );
+
+    // Verify the route is available again on the manager
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-restore-federated',
+          'restore-federated.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    await restoredGuest.close();
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Federated route full removal after timeout propagates through federation', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({
+    hostId: 'host-runner',
+    tls: tlsOptions(),
+    degradedRouteTimeoutMs: 100,
+  });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    const guest = await runner.attachLocalGuest({
+      guestId: 'guest-timeout-federated',
+      routedDomains: ['timeout-federated.verser.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-timeout-federated',
+          'timeout-federated.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    // Attach Broker to observe lifecycle events
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-timeout-manager' });
+    const managerEvents = [];
+    broker.onRouteChange((event) => managerEvents.push(event));
+
+    // Disconnect the Guest
+    await guest.close();
+
+    // Verify degraded event propagates
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'degraded' &&
+            e.targetId === 'guest-timeout-federated' &&
+            e.domain === 'timeout-federated.verser.test',
+        ),
+      ),
+    );
+
+    // Wait for the degraded route timeout to expire
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Verify the manager's Broker receives a 'removed' (timeout) event
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'removed' &&
+            e.targetId === 'guest-timeout-federated' &&
+            e.domain === 'timeout-federated.verser.test' &&
+            e.reason === 'timeout',
+        ),
+      ),
+    );
+
+    // Verify the route is gone from the manager's candidates
+    assert.deepEqual(
+      manager.getFederatedRouteCandidates(
+        'guest-timeout-federated',
+        'timeout-federated.verser.test',
+      ),
+      [],
+    );
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Federated route lifecycle events propagate across multi-hop topology (runner -> hub -> manager)', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const hub = createVerserHost({ hostId: 'host-hub', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  await hub.start();
+
+  try {
+    // Build chain: runner -> hub -> manager
+    await hub.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.connectUpstream({
+      upstreamId: 'hub',
+      url: hostUrl(hub),
+      tls: { ca: trusted.certificate },
+    });
+
+    // Attach local Broker to manager to observe lifecycle events
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-multi-hop' });
+    const managerEvents = [];
+    broker.onRouteChange((event) => managerEvents.push(event));
+
+    // Register a Guest on the runner with a domain
+    const guest = await runner.attachLocalGuest({
+      guestId: 'guest-multi-hop',
+      routedDomains: ['multi-hop.verser.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    // Wait for route to propagate to manager via hub
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-multi-hop', 'multi-hop.verser.test').length,
+        1,
+      ),
+    );
+
+    // 1) Revoke the route — expect lifecycle event on the manager's Broker
+    const revokeResult = guest.revokeRoutes(['multi-hop.verser.test']);
+    assert.deepEqual(revokeResult.revoked, ['multi-hop.verser.test']);
+
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'removed' &&
+            e.targetId === 'guest-multi-hop' &&
+            e.domain === 'multi-hop.verser.test' &&
+            e.reason === 'revoked',
+        ),
+        `Expected removed/revoked event on multi-hop manager, got: ${JSON.stringify(managerEvents)}`,
+      ),
+    );
+
+    // Verify route is gone from manager
+    assert.deepEqual(
+      manager.getFederatedRouteCandidates('guest-multi-hop', 'multi-hop.verser.test'),
+      [],
+    );
+
+    // Close the first guest handle so we can re-register
+    await guest.close();
+
+    managerEvents.length = 0;
+
+    // 2) Re-register the Guest and test degraded propagation
+    const guest2 = await runner.attachLocalGuest({
+      guestId: 'guest-multi-hop',
+      routedDomains: ['multi-hop.verser.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-multi-hop', 'multi-hop.verser.test').length,
+        1,
+      ),
+    );
+
+    // Close the Guest to trigger degraded state on runner
+    await guest2.close();
+
+    // The manager's Broker should receive a degraded/disconnected lifecycle
+    // event propagated through the hub
+    await assertEventually(() =>
+      assert.ok(
+        managerEvents.some(
+          (e) =>
+            e.type === 'degraded' &&
+            e.targetId === 'guest-multi-hop' &&
+            e.domain === 'multi-hop.verser.test' &&
+            e.reason === 'disconnected',
+        ),
+        `Expected degraded/disconnected event on multi-hop manager, got: ${JSON.stringify(managerEvents)}`,
+      ),
+    );
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await hub.close();
+    await manager.close();
+  }
+});
+
+test('Federated lifecycle loop safety — route-lifecycle frame with duplicate _eid is discarded in cyclic topology', async () => {
+  // Build a minimal cycle: manager <-> hub (bi-directional federation links).
+  // A lifecycle event originating on the hub should not loop back to hub.
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const hub = createVerserHost({ hostId: 'host-hub', tls: tlsOptions() });
+  await manager.start();
+  await hub.start();
+
+  try {
+    // Both Hosts connect to each other (bi-directional federation links)
+    await hub.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await manager.connectUpstream({
+      upstreamId: 'hub',
+      url: hostUrl(hub),
+      tls: { ca: trusted.certificate },
+    });
+
+    // Attach local Broker to hub to observe lifecycle events
+    const hubBroker = await hub.attachLocalBroker({ brokerId: 'hub-broker' });
+    const hubEvents = [];
+    hubBroker.onRouteChange((event) => hubEvents.push(event));
+
+    // Register a Guest on the hub
+    const guest = await hub.attachLocalGuest({
+      guestId: 'guest-loop-test',
+      routedDomains: ['loop-test.verser.test'],
+      listener: (_request, response) => response.end('ok'),
+    });
+
+    // Wait for the route to appear on the manager (may appear once or twice
+    // in a cyclic topology due to bi-directional federation links).
+    await assertEventually(() =>
+      assert.ok(
+        manager.getFederatedRouteCandidates('guest-loop-test', 'loop-test.verser.test').length >= 1,
+        'Expected route to appear on manager',
+      ),
+    );
+    hubEvents.length = 0;
+
+    // Revoke the route on the hub.
+    // Without loop detection, the lifecycle event would travel hub -> manager,
+    // then manager -> hub, then hub -> manager again in a cycle.
+    // With _eid tracking, each Host detects and discards duplicates.
+    const revokeResult = guest.revokeRoutes(['loop-test.verser.test']);
+    assert.deepEqual(revokeResult.revoked, ['loop-test.verser.test']);
+
+    // Wait for events to settle (give time for potential loops)
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // The local Broker on the hub should see a 'removed' event for the
+    // revoked route. In a cyclic topology it may arrive via multiple paths,
+    // but the _eid mechanism prevents infinite re-forwarding.
+    // The key invariant: no crash or infinite loop occurs, and the route
+    // is effectively removed.
+    const removedEvents = hubEvents.filter(
+      (e) => e.type === 'removed' && e.domain === 'loop-test.verser.test',
+    );
+    assert.ok(
+      removedEvents.length >= 1,
+      `Expected at least 1 removed event on hub, got ${removedEvents.length}: ${JSON.stringify(hubEvents)}`,
+    );
+    assert.ok(
+      removedEvents.length <= 3,
+      `Expected at most 3 removed events on hub (cycle suppressed), got ${removedEvents.length}: ${JSON.stringify(hubEvents)}`,
+    );
+  } finally {
+    await hub.close();
+    await manager.close();
+  }
+});
+
 async function assertEventually(assertion) {
   let lastError;
   for (let attempt = 0; attempt < 50; attempt += 1) {

@@ -69,20 +69,28 @@ test('@signicode/verser-common package exposes common foundations', () => {
   assert.equal(packageManifest.main, 'dist/index.js');
   assert.equal(packageManifest.types, 'dist/index.d.ts');
   assert.deepEqual(Object.keys(commonPackage).sort(), [
+    'DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS',
     'DEFAULT_MAX_ENVELOPE_METADATA_BYTES',
     'VERSER_COMMON_PACKAGE_NAME',
     'VERSER_ENVELOPE_PREFIX_BYTES',
     'VERSER_ENVELOPE_TYPES',
     'VERSER_ENVELOPE_VERSION',
+    'VERSER_GUEST_REVOCATION_PATH',
     'VERSER_LEASE_ACQUIRE_TIMEOUT_HEADER',
     'VERSER_LIFECYCLE_EVENTS',
+    'VERSER_ROUTE_EVENT_REASONS',
+    'VERSER_ROUTE_LIFECYCLE_EVENT_TYPES',
     'VerserError',
+    'createBrokerRouteLifecycleControlFrame',
     'createBrokerRoutesControlFrame',
     'createCommonBrokerRequest',
     'createFederatedRouteRegistration',
     'createFederatedRoutesControlFrame',
     'createGuestId',
+    'createGuestRevocationRequest',
+    'createGuestRevocationResponse',
     'createPeerId',
+    'createRouteLifecycleEvent',
     'createRoutedDomainRegistration',
     'createRoutedRequestEnvelope',
     'createRoutedResponseEnvelope',
@@ -90,6 +98,7 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'createVerserError',
     'createVerserHostFederationHandshake',
     'createVerserHostId',
+    'createVerserRouteGeneration',
     'decodeHeaderMap',
     'encodeJsonLine',
     'encodeVerserEnvelope',
@@ -169,7 +178,9 @@ test('@signicode/verser2-host package exposes Host API', () => {
   assert.equal(packageManifest.main, 'dist/index.js');
   assert.equal(packageManifest.types, 'dist/index.d.ts');
   assert.deepEqual(Object.keys(hostPackage).sort(), [
+    'HostRouteRegistry',
     'VERSER2_HOST_PACKAGE_NAME',
+    'createHostRouteRegistry',
     'createVerserHost',
   ]);
   assert.equal(hostPackage.VERSER2_HOST_PACKAGE_NAME, '@signicode/verser2-host');

@@ -10,7 +10,11 @@ handlers to Bun/Fetch-style handler semantics.
 - `VERSER2_GUEST_BUN_PACKAGE_NAME`
 - `createVerserBunGuest(options)` — create a Bun Guest
 - `createVerserBroker(options)` — create a Bun-facing Broker wrapper
-- Types: Guest/Broker options, request/response, lifecycle, route/handler types
+- `guest.revokeRoutes(domains)` — revoke advertised route domains; delegates to
+  Node Guest `revokeRoutes()` with the same `{ status: 'ack'|'partial'|'error' }` response
+- `broker.onRouteChange(listener)` — observe route lifecycle events (`added`, `removed`,
+  `changed`, `degraded`) with payload `{ type, targetId, domain, reason?, generation? }`
+- Types: Guest/Broker options, request/response, lifecycle, route lifecycle events, route/handler types
 
 ## Basic usage
 
@@ -63,6 +67,34 @@ http.get('http://bun-client-a.local.test/health', { agent }, (res) => res.resume
 await routedFetch('http://bun-client-a.local.test/health');
 await fetch('http://bun-client-a.local.test/health', { dispatcher });
 ```
+
+### Route lifecycle observation
+
+Brokers can observe route changes reactively:
+
+```ts
+const unsubscribe = broker.onRouteChange((event) => {
+  console.log(event.type, event.domain, event.reason);
+});
+// Unsubscribe later:
+unsubscribe();
+```
+
+The route snapshot (`getRoutes()`) is updated before listeners fire. See
+[Lifecycle and errors](../../docs/lifecycle-and-errors.md) for event types,
+reasons, and degraded-route behavior.
+
+### Guest route revocation
+
+A connected Bun Guest can revoke advertised routes:
+
+```ts
+const result = await guest.revokeRoutes(['bun-client-a.local.test']);
+// result.status === 'ack' | 'partial' | 'error'
+```
+
+The revocation is sent over the dedicated `/verser/guest/revoke` request path.
+The Bun wrapper delegates to the Node Guest implementation.
 
 ## Local route dispatch
 

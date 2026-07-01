@@ -1,3 +1,5 @@
+import type { OutgoingHttpHeaders } from 'node:http';
+
 import { createVerserError } from './errors';
 import type { VerserHeaderInput, VerserHeaderValue, VerserHeaders } from './types';
 import { isValidHttpHeaderName } from './utils';
@@ -164,7 +166,7 @@ export function normalizeHeaders(headers: VerserHeaderInput | undefined): Record
  * @public
  */
 export function normalizeRequestHeaders(
-  headers: import('node:http').OutgoingHttpHeaders | undefined,
+  headers: OutgoingHttpHeaders | undefined,
 ): Record<string, string> {
   const normalizedHeaders: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers ?? {})) {
