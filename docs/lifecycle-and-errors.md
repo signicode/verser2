@@ -27,6 +27,37 @@ The unsubscribe function stops receiving events. The internal route snapshot
 (`getRoutes()` / `get_routes()`) is updated **before** listeners fire, so
 the listener can safely inspect the current route state.
 
+### Listener error handling
+
+All code-created EventEmitters in Verser2 (Host lifecycle, Guest lifecycle,
+Broker route-change events) are created with
+`new EventEmitter({ captureRejections: true })`.
+
+**Async rejections** — if a listener function returns a rejected promise,
+`captureRejections` intercepts the rejection and emits it as an `'error'`
+event on the emitter. An internal error handler swallows these rejections
+for observational lifecycle and route-change emitters so they do not break
+route snapshots, routing state, or protocol processing.
+
+**Synchronous throws** — a listener that throws synchronously still follows
+normal Node.js `EventEmitter` semantics: the error propagates and remaining
+listeners registered on the same emitter are **not** called. To ensure all
+listeners run reliably, catch synchronous errors inside the listener body:
+
+```ts
+broker.onRouteChange((event) => {
+  try {
+    // your logic
+  } catch (error) {
+    console.error('route-change listener failed:', error);
+  }
+});
+```
+
+The snapshot update (`getRoutes()`) is always applied before any listener
+fires, so a failing listener never leaves the route table in an inconsistent
+state — only the observation of the event is affected.
+
 ### Event payload
 
 ```ts

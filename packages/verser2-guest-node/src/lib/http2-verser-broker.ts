@@ -24,6 +24,7 @@ import type {
   VerserBrokerOptions,
   VerserBrokerRequest,
   VerserBrokerResponse,
+  VerserBrokerRouteChangeEvent,
 } from './types';
 
 const DEFAULT_INTERNAL_REDIRECT_REPLAY_BUFFER_BYTES = 16 * 1024;
@@ -47,12 +48,16 @@ export class Http2VerserBroker implements VerserBroker {
 
   private requestCounter = 0;
 
-  private readonly frameEmitter = new EventEmitter();
+  private readonly frameEmitter = new EventEmitter({ captureRejections: true });
 
-  private readonly routeChangeListeners: ((event: unknown) => void)[] = [];
+  private readonly routeChangeEmitter = new EventEmitter({ captureRejections: true });
 
   public constructor(options: VerserBrokerOptions) {
     this.options = options;
+    this.routeChangeEmitter.on('error', () => {
+      // Route-change listeners are observational; rejected async listeners must
+      // not destabilize protocol processing.
+    });
   }
 
   public get sessionCount(): number {
@@ -134,13 +139,10 @@ export class Http2VerserBroker implements VerserBroker {
     });
   }
 
-  public onRouteChange(
-    listener: (event: import('./types').VerserBrokerRouteChangeEvent) => void,
-  ): () => void {
-    this.routeChangeListeners.push(listener as (event: unknown) => void);
+  public onRouteChange(listener: (event: VerserBrokerRouteChangeEvent) => void): () => void {
+    this.routeChangeEmitter.on('route-change', listener);
     return () => {
-      const idx = this.routeChangeListeners.indexOf(listener as (event: unknown) => void);
-      if (idx >= 0) this.routeChangeListeners.splice(idx, 1);
+      this.routeChangeEmitter.off('route-change', listener);
     };
   }
 
@@ -448,7 +450,7 @@ export class Http2VerserBroker implements VerserBroker {
       // Emit 'removed' for routes that are no longer present
       for (const [key, route] of oldRoutes) {
         if (!newRouteMap.has(key)) {
-          this.safeEmitRouteChange({
+          this.routeChangeEmitter.emit('route-change', {
             type: 'removed' as const,
             targetId: route.targetId,
             domain: route.domain,
@@ -459,7 +461,7 @@ export class Http2VerserBroker implements VerserBroker {
       // Emit 'added' for routes that are new
       for (const [key, route] of newRouteMap) {
         if (!oldRoutes.has(key)) {
-          this.safeEmitRouteChange({
+          this.routeChangeEmitter.emit('route-change', {
             type: 'added' as const,
             targetId: route.targetId,
             domain: route.domain,
@@ -520,12 +522,11 @@ export class Http2VerserBroker implements VerserBroker {
           }
         }
 
-        // Emit route change event (isolated from user listener errors)
-        this.safeEmitRouteChange({
+        this.routeChangeEmitter.emit('route-change', {
           type: event.type as 'added' | 'removed' | 'changed' | 'degraded',
           targetId: event.targetId,
           domain: event.domain,
-          reason: event.reason as import('./types').VerserBrokerRouteChangeEvent['reason'],
+          reason: event.reason as VerserBrokerRouteChangeEvent['reason'],
           generation:
             event.generation !== undefined
               ? {
@@ -552,20 +553,6 @@ export class Http2VerserBroker implements VerserBroker {
         resolve();
       }
       this.routeWaiters.delete(domain);
-    }
-  }
-
-  /**
-   * Emits a route-change event wrapped in try/catch so that a throwing user
-   * listener does not destabilize control-frame processing or NDJSON parsing.
-   */
-  private safeEmitRouteChange(event: import('./types').VerserBrokerRouteChangeEvent): void {
-    for (const listener of this.routeChangeListeners) {
-      try {
-        listener(event);
-      } catch {
-        // User listener threw — swallow to protect protocol processing.
-      }
     }
   }
 }

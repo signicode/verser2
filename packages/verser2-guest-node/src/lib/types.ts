@@ -242,7 +242,7 @@ export interface VerserNodeGuest {
    * @param domain - Optional route domain (defaults to Guest ID).
    * @returns `this` for chaining.
    */
-  attach(serverOrListener: import('node:http').Server | NodeRequestListener, domain?: string): this;
+  attach(serverOrListener: http.Server | NodeRequestListener, domain?: string): this;
   /**
    * Dispatches a pre-parsed routed request directly to the local handler.
    *

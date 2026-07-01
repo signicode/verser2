@@ -2257,7 +2257,7 @@ test('P1: Guest reconnects with different domains — emits correct lifecycle ev
   }
 });
 
-test('Throwing onRouteChange listener does not break subsequent lifecycle events or route snapshots', async () => {
+test('Rejected onRouteChange listener does not break subsequent lifecycle events or route snapshots', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
@@ -2271,10 +2271,12 @@ test('Throwing onRouteChange listener does not break subsequent lifecycle events
 
     await broker.connect();
 
-    // Register a listener that throws on every call
+    // Register a listener that rejects on every call. EventEmitter
+    // captureRejections should route this to the internal error handler without
+    // disrupting protocol processing or subsequent listeners.
     const goodEvents = [];
-    broker.onRouteChange(() => {
-      throw new Error('listener explosion');
+    broker.onRouteChange(async () => {
+      throw new Error('listener rejection');
     });
     broker.onRouteChange((event) => goodEvents.push(event));
 
@@ -2282,10 +2284,10 @@ test('Throwing onRouteChange listener does not break subsequent lifecycle events
     await broker.waitForRoute('throwing.local.test');
 
     // The good listener should have received the 'added' event despite the
-    // throwing listener
+    // rejecting listener
     assert.ok(
       goodEvents.some((e) => e.type === 'added' && e.domain === 'throwing.local.test'),
-      `Expected added event despite throwing listener, got: ${JSON.stringify(goodEvents)}`,
+      `Expected added event despite rejecting listener, got: ${JSON.stringify(goodEvents)}`,
     );
 
     // Route snapshot must still be consistent
@@ -2293,7 +2295,7 @@ test('Throwing onRouteChange listener does not break subsequent lifecycle events
       { targetId: 'guest-throwing-listener', domain: 'throwing.local.test' },
     ]);
 
-    // Revoke should also work — the throwing listener should not prevent the
+    // Revoke should also work — the rejecting listener should not prevent the
     // route from being removed from the snapshot or the good listener from
     // receiving the removed event
     goodEvents.length = 0;
@@ -2303,7 +2305,7 @@ test('Throwing onRouteChange listener does not break subsequent lifecycle events
 
     assert.ok(
       goodEvents.some((e) => e.type === 'removed' && e.domain === 'throwing.local.test'),
-      `Expected removed event despite throwing listener, got: ${JSON.stringify(goodEvents)}`,
+      `Expected removed event despite rejecting listener, got: ${JSON.stringify(goodEvents)}`,
     );
     assert.deepEqual(broker.getRoutes(), []);
   } finally {

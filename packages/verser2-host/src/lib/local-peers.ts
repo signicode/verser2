@@ -27,7 +27,7 @@ export interface LocalBrokerState {
   routeWaiters: Map<string, LocalRouteWaiter[]>;
   requestCounter: number;
   closed: boolean;
-  routeChangeListeners: ((event: unknown) => void)[];
+  routeChangeEmitter: EventEmitter;
 }
 
 interface LocalRouteWaiter {
@@ -88,6 +88,10 @@ class LocalServerResponse extends EventEmitter {
   private readonly bodyStream = new PassThrough();
 
   private started = false;
+
+  public constructor() {
+    super({ captureRejections: true });
+  }
 
   public get headersStarted(): boolean {
     return this.started;
@@ -164,12 +168,17 @@ class LocalServerResponse extends EventEmitter {
 }
 
 export function createLocalBrokerState(routes: RoutedDomainRegistration[]): LocalBrokerState {
+  const routeChangeEmitter = new EventEmitter({ captureRejections: true });
+  routeChangeEmitter.on('error', () => {
+    // Route-change listeners are observational; rejected async listeners must
+    // not destabilize local routing state updates.
+  });
   return {
     routes,
     routeWaiters: new Map(),
     requestCounter: 0,
     closed: false,
-    routeChangeListeners: [],
+    routeChangeEmitter,
   };
 }
 
@@ -210,7 +219,7 @@ export function closeLocalBrokerState(broker: LocalBrokerState, reason: string):
   }
   broker.closed = true;
   broker.routes = [];
-  broker.routeChangeListeners.length = 0;
+  broker.routeChangeEmitter.removeAllListeners('route-change');
   const error = createVerserError('disconnected-target', 'Local Broker is closed', { reason });
   for (const waiters of broker.routeWaiters.values()) {
     for (const waiter of waiters) {
@@ -273,15 +282,7 @@ export function emitLocalBrokerRouteChange(
     }
   }
 
-  // Isolate each listener: a throwing listener must not prevent subsequent
-  // listeners from receiving the event or corrupt protocol processing.
-  for (const listener of broker.routeChangeListeners) {
-    try {
-      listener(event);
-    } catch {
-      // User listener threw — swallow to protect protocol processing.
-    }
-  }
+  broker.routeChangeEmitter.emit('route-change', event);
 }
 
 export function toReadableBody(body: VerserLocalBrokerRequest['body']): Readable {

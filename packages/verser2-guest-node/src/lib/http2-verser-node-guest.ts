@@ -44,7 +44,7 @@ interface GuestLeaseStream {
 export class Http2VerserNodeGuest implements VerserNodeGuest {
   private readonly options: VerserNodeGuestOptions;
 
-  private readonly lifecycle = new EventEmitter();
+  private readonly lifecycle = new EventEmitter({ captureRejections: true });
 
   private session?: http2.ClientHttp2Session;
 

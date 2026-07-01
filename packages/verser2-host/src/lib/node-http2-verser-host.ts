@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import * as http2 from 'node:http2';
+import type { AddressInfo } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { text as readStreamText } from 'node:stream/consumers';
 import type { TLSSocket } from 'node:tls';
@@ -23,6 +24,7 @@ import {
   type VerserRegistrationRequest,
   type VerserRegistrationResponse,
   type VerserResponseEnvelopeMetadata,
+  type VerserRouteGeneration,
   type VerserRouteLifecycleEvent,
   createBrokerRouteLifecycleControlFrame,
   createBrokerRoutesControlFrame,
@@ -172,7 +174,7 @@ const FEDERATION_DISPATCH_REQUEST_PATH = '/verser/host/federation/dispatch-reque
 export class NodeHttp2VerserHost implements VerserHost {
   private readonly options: VerserHostOptions;
 
-  private readonly lifecycle = new EventEmitter();
+  private readonly lifecycle = new EventEmitter({ captureRejections: true });
 
   private readonly peers = new Map<VerserPeerId, RegisteredPeer>();
 
@@ -226,7 +228,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   /**
    * {@inheritDoc VerserHost.address}
    */
-  public get address(): import('node:net').AddressInfo {
+  public get address(): AddressInfo {
     const server = this.server;
     if (server === undefined) {
       throw createVerserError('protocol-error', 'Verser Host is not listening');
@@ -630,11 +632,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       request: (request: VerserLocalBrokerRequest) =>
         this.routeLocalBrokerRequest(peerId, localBroker, request),
       onRouteChange: (listener: (event: VerserRouteLifecycleEvent) => void) => {
-        const wrapped = listener as (event: unknown) => void;
-        localBroker.routeChangeListeners.push(wrapped);
+        localBroker.routeChangeEmitter.on('route-change', listener);
         return () => {
-          const idx = localBroker.routeChangeListeners.indexOf(wrapped);
-          if (idx >= 0) localBroker.routeChangeListeners.splice(idx, 1);
+          localBroker.routeChangeEmitter.off('route-change', listener);
         };
       },
       close: async (reason = 'local-broker-close') => {
@@ -2356,10 +2356,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     const timeoutMs = this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS;
 
     // Capture generation metadata before removal
-    const genCache = new Map<
-      string,
-      Map<string, import('@signicode/verser-common').VerserRouteGeneration>
-    >();
+    const genCache = new Map<string, Map<string, VerserRouteGeneration>>();
     for (const [peerId] of this.routeRegistry.getDegradedEntries()) {
       const domainMap = new Map();
       const routes = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);

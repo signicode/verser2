@@ -1,3 +1,5 @@
+import type { OutgoingHttpHeaders } from 'node:http';
+
 export function parseContentLength(headerText: string): number {
   const match = /content-length:\s*(\d+)/i.exec(headerText);
   if (match === null) {
@@ -8,7 +10,7 @@ export function parseContentLength(headerText: string): number {
 }
 
 export function normalizeRequestHeaders(
-  headers: import('node:http').OutgoingHttpHeaders | undefined,
+  headers: OutgoingHttpHeaders | undefined,
 ): Record<string, string> {
   const normalizedHeaders: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers ?? {})) {
