@@ -17,10 +17,14 @@
         - Dependency direction to preserve: `node-http2-verser-host.ts` remains the orchestrator and imports Host-internal leaf modules. Extracted modules must not import the Host class; dependencies should be passed through explicit callback/state interfaces to avoid cycles.
         - Common-library reuse decision: existing `@signicode/verser-common` protocol helpers, constants, route/federation factories, envelope/header utilities, TLS helpers, route-generation helpers, and loop/hop validation remain reused. New extraction logic stays Host-internal because it manages Node HTTP/2 stream/session state, Host-private lifecycle maps, lease queues, degraded-route timers, and federation link ownership.
     - [x] Confirm no public exports from `packages/verser2-host/src/index.ts` need to change.
-- [ ] Task: Write or update characterization tests before implementation
-    - [ ] Identify existing focused tests covering Host start/close, route lifecycle, degraded cleanup, Guest revocation, federation, Broker routing, and local peers.
-    - [ ] Add only minimal characterization/regression tests if an existing behavior boundary is not already covered.
-    - [ ] Run the narrowest relevant pre-refactor test command and record whether the tests already pass or any added characterization test fails for the expected reason.
+- [x] Task: Write or update characterization tests before implementation
+    - [x] Identify existing focused tests covering Host start/close, route lifecycle, degraded cleanup, Guest revocation, federation, Broker routing, and local peers.
+        - Existing coverage: `test/host.test.js`, `test/host-route-registry.test.js`, `test/host-upstreams.test.js`, `test/broker-routing.test.js`, and `test/local-peers.test.js` cover Host start/close, route lifecycle, degraded cleanup/restoration/removal, Guest revocation and ownership, federation/upstreams, Broker routing/lease behavior, and local peers.
+    - [x] Add only minimal characterization/regression tests if an existing behavior boundary is not already covered.
+        - No new characterization test added before refactor: the existing suites provide broad behavior-preserving coverage. A possible future edge-case test for Host close while a Broker request is queued waiting for a lease is noted as optional rather than required for this split.
+    - [x] Run the narrowest relevant pre-refactor test command and record whether the tests already pass or any added characterization test fails for the expected reason.
+        - Pre-refactor focused validation passed: `node --test test/host.test.js test/host-route-registry.test.js test/host-upstreams.test.js` (60/60 passing) and `node --test test/broker-routing.test.js test/local-peers.test.js` (65/65 passing).
+        - Coverage note: behavior-preserving refactor coverage is provided by the existing focused Host, routing, federation, lifecycle, revocation, and local-peer suites; no new failing characterization test was required.
 - [ ] Task: Conductor - Phase Checkpoint 'Track Setup and Refactor Baseline' (Protocol in workflow.md)
 
 ## Phase 2: Extract Low-Risk Host State Managers
