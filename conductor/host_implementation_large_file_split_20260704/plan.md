@@ -225,15 +225,22 @@
         - Common-library reuse: existing `@signicode/verser-common` protocol helpers, constants, route/federation factories, envelope/header utilities, TLS helpers, route-generation helpers, and loop/hop validation remain reused. No new common exports needed — all extracted logic is Host-internal Node HTTP/2 orchestration.
         - Deferred extraction rationale (from Phase 3 checkpoint, reaffirmed here): upstream link map lifecycle, inbound federation entrypoint orchestration, and federated request-stream waiter queues remain in the Host because extracting them would require broad map ownership callbacks that would reduce clarity more than the remaining file size.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Run final focused and full validation
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host`.
-    - [ ] Run `node --test test/host.test.js test/host-route-registry.test.js test/host-upstreams.test.js`.
-    - [ ] Run `node --test test/local-peers.test.js test/broker-routing.test.js`.
-    - [ ] Run `node --test test/agent.test.js test/dispatcher.test.js test/guest-node.test.js`.
-    - [ ] Run `npm test`.
-    - [ ] Run `npm run lint`.
-    - [ ] Confirm 95% meaningful coverage for changed behavior, or record that this is behavior-preserving refactor coverage through existing characterization/integration suites.
-    - [ ] Commit final validation/plan updates according to the per-task commit policy if files changed.
+- [x] Task: Run final focused and full validation
+    - [x] Run `npm run build --workspace=@signicode/verser2-host`.
+        - Passed (CJS + declarations).
+    - [x] Run `node --test test/host.test.js test/host-route-registry.test.js test/host-upstreams.test.js`.
+        - Passed.
+    - [x] Run `node --test test/local-peers.test.js test/broker-routing.test.js`.
+        - Passed.
+    - [x] Run `node --test test/agent.test.js test/dispatcher.test.js test/guest-node.test.js`.
+        - Passed.
+    - [x] Run `npm test`.
+        - Passed: 334 total tests, 330 passed, 4 skipped, 0 failed.
+    - [x] Run `npm run lint`.
+        - Passed: Biome checked 144 files, 0 issues.
+    - [x] Confirm 95% meaningful coverage for changed behavior, or record that this is behavior-preserving refactor coverage through existing characterization/integration suites.
+        - This track is a behavior-preserving refactor. Coverage is provided by existing focused Host/routing/federation/local-peer/Agent/Dispatcher/Guest Node suites plus full `npm test`.
+    - [x] Commit final validation/plan updates according to the per-task commit policy if files changed.
 - [ ] Task: Code review and maintainability check
     - [ ] Delegate a review to the configured review specialist after implementation is complete.
     - [ ] Address in-scope review findings that preserve the no-public-API-change requirement.
