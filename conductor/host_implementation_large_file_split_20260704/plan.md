@@ -2,11 +2,11 @@
 
 ## Phase 1: Track Setup and Refactor Baseline
 
-- [ ] Task: Create implementation branch and PR review surface
-    - [ ] Capture the current branch as the PR base branch.
-    - [ ] Create the implementation branch with name `conductor/host_implementation_large_file_split_20260704` or a sanitized equivalent.
-    - [ ] Do NOT make granular start-marker commits or open a PR early during planning or track creation.
-    - [ ] Perform implementation work on this branch, making commits according to the resolved commit frequency policy: per task.
+- [x] Task: Create implementation branch and PR review surface
+    - [x] Capture the current branch as the PR base branch.
+    - [x] Create the implementation branch with name `conductor/host_implementation_large_file_split_20260704` or a sanitized equivalent.
+    - [x] Do NOT make granular start-marker commits or open a PR early during planning or track creation.
+    - [x] Perform implementation work on this branch, making commits according to the resolved commit frequency policy: per task.
     - [ ] Open or update a draft PR targeting the captured base branch when the Branching Policy requires PR visibility or finalization.
 - [ ] Task: Establish source and behavior baseline
     - [ ] Read `packages/verser2-host/codemap.md` and any Host library codemap before editing Host internals.
