@@ -25,7 +25,12 @@
     - [x] Run the narrowest relevant pre-refactor test command and record whether the tests already pass or any added characterization test fails for the expected reason.
         - Pre-refactor focused validation passed: `node --test test/host.test.js test/host-route-registry.test.js test/host-upstreams.test.js` (60/60 passing) and `node --test test/broker-routing.test.js test/local-peers.test.js` (65/65 passing).
         - Coverage note: behavior-preserving refactor coverage is provided by the existing focused Host, routing, federation, lifecycle, revocation, and local-peer suites; no new failing characterization test was required.
-- [ ] Task: Conductor - Phase Checkpoint 'Track Setup and Refactor Baseline' (Protocol in workflow.md)
+- [x] Task: Conductor - Phase Checkpoint 'Track Setup and Refactor Baseline' (Protocol in workflow.md)
+    - Phase 1 complete. Baseline boundaries were recorded before implementation and public exports were confirmed unchanged.
+    - Common-library scan: existing `@signicode/verser-common` protocol helpers remain reused; planned extractions are Host-internal Node HTTP/2 orchestration and state-management concerns.
+    - Deduplication check: no production code changed in this phase, so no repeated implementation code was introduced.
+    - Validation: `node --test test/host.test.js test/host-route-registry.test.js test/host-upstreams.test.js` passed 60/60; `node --test test/broker-routing.test.js test/local-peers.test.js` passed 65/65.
+    - Coverage: behavior-preserving refactor baseline uses existing focused/integration suites; no new behavior was introduced in Phase 1.
 
 ## Phase 2: Extract Low-Risk Host State Managers
 
