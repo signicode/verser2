@@ -173,12 +173,45 @@
 
 ## Phase 4: Integration Cleanup, Documentation, and Final Validation
 
-- [ ] Task: Consolidate internal types and dependency boundaries
-    - [ ] Move only Host-internal state/callback interfaces needed by multiple extracted modules into appropriate Host-internal files.
-    - [ ] Keep public `types.ts` and `src/index.ts` unchanged unless a harmless internal type export is clearly necessary.
-    - [ ] Check for repeated code introduced during extraction and deduplicate within Host internals.
-    - [ ] Confirm any intentionally deferred extraction is documented with rationale.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host`.
+- [x] Task: Consolidate internal types and dependency boundaries
+    - [x] Check whether Host-internal state/callback interfaces used by multiple extracted modules should be moved.
+        - Finding: No callback interface consolidation needed. Three distinct module-specific callback interfaces exist:
+          `BrokerRoutingCallbacks` (broker-routing.ts), `DegradedRouteCleanupCallbacks` (degraded-route-cleanup.ts),
+          `FederatedRouteFrameCallbacks` (federation.ts). Each is used by exactly one module; none is shared across
+          modules. Moving them to a shared file would add indirection without reducing duplication. Current
+          arrangement keeps dependency direction clear and avoids broad premature abstraction.
+        - Finding: `PeerInfo` in `broker-routing.ts` is a minimal projection of `RegisteredPeer` (Host-private).
+          It intentionally decouples the routing module from the Host class. Keeping it local preserves
+          the decoupling boundary.
+        - Shared types between modules (`GuestLeaseStream` from lease-pool.ts → broker-routing.ts;
+          `FederationRequestStream`/`AcquiredFederatedRequestStream` from federation.ts → broker-routing.ts)
+          are already properly organized with single definition + import pattern. No consolidation needed.
+    - [x] Keep public `types.ts` and `src/index.ts` unchanged.
+        - Confirmed: `packages/verser2-host/src/lib/types.ts` and `packages/verser2-host/src/index.ts` require no changes.
+    - [x] Check for repeated code introduced during extraction and deduplicate within Host internals.
+        - Finding: `tryRouteH2BrokerRequestToFederatedHost` and `tryRouteLocalRequestToFederatedHost` in
+          `broker-routing.ts` share structurally similar candidate-iteration logic (~12 lines core pattern).
+          However, they serve different API layers (H2 stream vs local dispatch) with different return types
+          and routing path functions. Extracting a shared helper would require generic parameters or lambdas
+          that reduce readability. Decision: keep as-is — this is intentional API adaptation.
+        - Finding: `openUpstreamRouteStream`/`openUpstreamRequestStream`/`openUpstreamDispatchRequestStream`
+          in `federation.ts` share a status-check pattern (~10 lines each) but have different paths, error
+          messages, and error context shapes. A shared helper would need context parameters that outweigh
+          benefit. Decision: keep as-is.
+        - Finding: Host-private wrappers (`openUpstreamRequestStream`, `sendUpstreamHandshake`, etc.) are
+          thin boundary translations that pass Host-owned state (options, UpstreamLink fields) to the
+          federation module. Inlining them would spread Host-state access across the module boundary. These
+          are intended abstraction boundaries, not code duplication.
+        - Finding: No stale or duplicated type definitions remain after extraction. All shared types are
+          imported from their single-definition module.
+    - [x] Confirm any intentionally deferred extraction is documented with rationale.
+        - Confirmed: Plan.md Phase 3 checkpoint (line 171) documents deferred extraction of upstream link
+          map lifecycle, inbound federation entrypoint orchestration, and federated request-stream waiter
+          queues with rationale (would require broad map ownership callbacks and reduce clarity more than
+          file size). This assessment remains accurate; no additional deferral decisions were identified.
+    - [x] Run build and lint validation.
+        - `npm run build --workspace=@signicode/verser2-host` — passed (CJS + declarations).
+        - `npm run lint` — passed (0 issues, 144 files checked).
     - [ ] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Update Host codemap and Conductor notes
     - [ ] Update `packages/verser2-host/codemap.md` and any relevant nested codemap to describe new Host-internal modules and responsibilities.
