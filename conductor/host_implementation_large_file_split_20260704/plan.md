@@ -241,11 +241,14 @@
     - [x] Confirm 95% meaningful coverage for changed behavior, or record that this is behavior-preserving refactor coverage through existing characterization/integration suites.
         - This track is a behavior-preserving refactor. Coverage is provided by existing focused Host/routing/federation/local-peer/Agent/Dispatcher/Guest Node suites plus full `npm test`.
     - [x] Commit final validation/plan updates according to the per-task commit policy if files changed.
-- [ ] Task: Code review and maintainability check
-    - [ ] Delegate a review to the configured review specialist after implementation is complete.
-    - [ ] Address in-scope review findings that preserve the no-public-API-change requirement.
-    - [ ] Re-run the narrowest validation for any review-driven changes.
-    - [ ] Commit review-driven changes according to the per-task commit policy.
+- [x] Task: Code review and maintainability check
+    - [x] Delegate a review to the configured review specialist after implementation is complete.
+        - @oracle final review reported no P0 findings and no code-blocking P1 findings. The only required-before-finalization item was Conductor/branching bookkeeping.
+    - [x] Address in-scope review findings that preserve the no-public-API-change requirement.
+        - No code changes required. P2 recommendations were recorded for possible future cleanup: further registration helper extraction, synchronous/caught degraded cleanup checks, tighter `PeerInfo.role` typing, and minor codemap precision.
+    - [x] Re-run the narrowest validation for any review-driven changes.
+        - Not applicable: no review-driven code changes were required after final validation.
+    - [x] Commit review-driven changes according to the per-task commit policy.
 - [ ] Task: Branching Policy finalization
     - [ ] Ensure all completed task work is committed.
     - [ ] Push the implementation branch.
