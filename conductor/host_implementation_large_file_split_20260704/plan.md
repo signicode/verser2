@@ -212,7 +212,7 @@
     - [x] Run build and lint validation.
         - `npm run build --workspace=@signicode/verser2-host` — passed (CJS + declarations).
         - `npm run lint` — passed (0 issues, 144 files checked).
-    - [ ] Commit this completed task according to the per-task commit policy.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Update Host codemap and Conductor notes
     - [ ] Update `packages/verser2-host/codemap.md` and any relevant nested codemap to describe new Host-internal modules and responsibilities.
     - [ ] Do not update user-facing docs unless implementation reveals a behavior/public API documentation mismatch.
