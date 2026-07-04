@@ -78,7 +78,21 @@
         - `node --test test/host.test.js test/host-route-registry.test.js test/broker-routing.test.js test/local-peers.test.js` passed 91/91.
         - Additional lint validation after formatting fix: `npm run lint` passed.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Conductor - Phase Checkpoint 'Extract Low-Risk Host State Managers' (Protocol in workflow.md)
+- [x] Task: Review cleanup — Phase 2 code review findings
+    - [x] Made `LeasePool.removeQueuedLeaseAcquisition()` private (it accepts module-private `QueuedLeaseAcquisition` and is only called internally).
+    - [x] Removed unused `DegradedRouteCleanup.running` getter (no callers; timer state is managed internally).
+    - [x] Removed unused boolean return from `LeasePool.addIdleLease()` — return type changed to `void`, internal behavior preserved.
+    - [x] Ran `npm run lint` — passed (0 issues).
+    - [x] Ran `npm run build --workspace=@signicode/verser2-host` — passed.
+    - [x] Ran `node --test test/host.test.js test/broker-routing.test.js test/local-peers.test.js` — passed (74/74 tests).
+    - [x] Record this review result in the Phase 2 checkpoint.
+- [x] Task: Conductor - Phase Checkpoint 'Extract Low-Risk Host State Managers' (Protocol in workflow.md)
+    - Phase 2 complete. `LeasePool` and `DegradedRouteCleanup` were extracted as Host-internal modules without public export changes or Host-class back imports.
+    - Common-library scan: no new common code was added; extracted logic remains Host-specific because it owns Node HTTP/2 streams, Host timers, registry callbacks, and lifecycle/advertisement coordination.
+    - Deduplication check: no repeated implementation code introduced; review cleanup made `removeQueuedLeaseAcquisition()` private, removed unused `DegradedRouteCleanup.running`, and removed the unused `LeasePool.addIdleLease()` return value.
+    - Validation: `npm run lint`, `npm run build --workspace=@signicode/verser2-host`, `node --test test/host.test.js test/broker-routing.test.js test/local-peers.test.js`, `node --test test/host.test.js test/host-route-registry.test.js test/broker-routing.test.js test/local-peers.test.js`, and `node --test test/host-upstreams.test.js` passed during Phase 2 work/review.
+    - Review: @oracle reported no blocking findings and confirmed Phase 3 can safely begin after checkpoint closure; P2 internal API cleanup findings were addressed.
+    - Coverage: behavior-preserving refactor coverage is provided by existing focused Host/routing/degraded-route/federation/local-peer suites.
 
 ## Phase 3: Extract Broker Routing and Federated Forwarding Boundaries
 

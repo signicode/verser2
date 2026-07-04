@@ -75,13 +75,6 @@ export class DegradedRouteCleanup {
   }
 
   /**
-   * Whether the cleanup timer is currently running.
-   */
-  get running(): boolean {
-    return this.timer !== undefined;
-  }
-
-  /**
    * Starts the degraded route cleanup timer if not already running.
    * The check interval is derived from the configured timeout.
    */

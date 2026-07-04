@@ -48,24 +48,20 @@ export class LeasePool {
    * Adds an idle lease to the pool. If a queued acquisition is waiting for
    * this guest's lease, the lease is assigned immediately (resolving the
    * queued promise) instead of being added to the idle pool.
-   *
-   * @returns `true` if the lease was immediately assigned to a queued
-   *   acquisition, `false` if it was added to the idle pool.
    */
-  addIdleLease(lease: GuestLeaseStream): boolean {
+  addIdleLease(lease: GuestLeaseStream): void {
     const queued = this.queuedLeaseAcquisitions.get(lease.guestId)?.shift();
     if (queued !== undefined) {
       clearTimeout(queued.timeout);
       lease.active = true;
       this.activeLeases.set(`${lease.guestId}:${lease.leaseId}`, lease);
       queued.resolve(lease);
-      return true;
+      return;
     }
 
     const idleLeases = this.idleLeases.get(lease.guestId) ?? [];
     idleLeases.push(lease);
     this.idleLeases.set(lease.guestId, idleLeases);
-    return false;
   }
 
   /**
@@ -207,7 +203,7 @@ export class LeasePool {
    * Removes a single queued acquisition from its guest's queue. Used when
    * an acquisition times out.
    */
-  removeQueuedLeaseAcquisition(acquisition: QueuedLeaseAcquisition): void {
+  private removeQueuedLeaseAcquisition(acquisition: QueuedLeaseAcquisition): void {
     const queued = this.queuedLeaseAcquisitions.get(acquisition.guestId) ?? [];
     this.queuedLeaseAcquisitions.set(
       acquisition.guestId,
