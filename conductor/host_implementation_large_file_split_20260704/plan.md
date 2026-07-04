@@ -213,11 +213,18 @@
         - `npm run build --workspace=@signicode/verser2-host` — passed (CJS + declarations).
         - `npm run lint` — passed (0 issues, 144 files checked).
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Update Host codemap and Conductor notes
-    - [ ] Update `packages/verser2-host/codemap.md` and any relevant nested codemap to describe new Host-internal modules and responsibilities.
-    - [ ] Do not update user-facing docs unless implementation reveals a behavior/public API documentation mismatch.
-    - [ ] Record split boundaries, validation results, common-library reuse decisions, and any deferred extraction in this plan.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Update Host codemap and Conductor notes
+    - [x] Update `packages/verser2-host/codemap.md` and any relevant nested codemap to describe new Host-internal modules and responsibilities.
+        - Top-level `packages/verser2-host/codemap.md`: Updated "Internal modules" list to include `lease-pool.ts`, `degraded-route-cleanup.ts`, `broker-routing.ts`, `federation.ts` with responsibilities.
+        - Nested `packages/verser2-host/src/lib/codemap.md`: Added module inventory rows for the 4 new modules; updated `node-http2-verser-host.ts` row to reflect delegation boundaries; updated key patterns and integration points to cover the extracted modules.
+        - Nested `packages/verser2-host/src/codemap.md`: No changes needed — it describes the barrel-export layer at the src root, which remains unchanged (all new modules are internal to `lib/`).
+    - [x] Do not update user-facing docs — no behavior or public API documentation mismatch introduced by the refactor.
+    - [x] Record split boundaries, validation results, common-library reuse decisions, and any deferred extraction in this plan.
+        - Split boundaries: `lease-pool.ts` (idle/active lease maps, acquisition queues, timeouts, cleanup), `degraded-route-cleanup.ts` (timer start/stop, expired degraded-route checks via Host callbacks), `broker-routing.ts` (Broker request dispatch, lease routing, federated fallback, cancellation propagation), `federation.ts` (upstream handshake, federated route/request streams, lifecycle forwarding, incoming request dispatch).
+        - Validation results: `npm run lint` — passed; `npm run build --workspace=@signicode/verser2-host` — passed (CJS + declarations); `node --test test/host.test.js test/broker-routing.test.js test/local-peers.test.js` — 74/74 passed; `node --test test/host-upstreams.test.js test/host-route-registry.test.js` — 51/51 passed.
+        - Common-library reuse: existing `@signicode/verser-common` protocol helpers, constants, route/federation factories, envelope/header utilities, TLS helpers, route-generation helpers, and loop/hop validation remain reused. No new common exports needed — all extracted logic is Host-internal Node HTTP/2 orchestration.
+        - Deferred extraction rationale (from Phase 3 checkpoint, reaffirmed here): upstream link map lifecycle, inbound federation entrypoint orchestration, and federated request-stream waiter queues remain in the Host because extracting them would require broad map ownership callbacks that would reduce clarity more than the remaining file size.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Run final focused and full validation
     - [ ] Run `npm run build --workspace=@signicode/verser2-host`.
     - [ ] Run `node --test test/host.test.js test/host-route-registry.test.js test/host-upstreams.test.js`.
