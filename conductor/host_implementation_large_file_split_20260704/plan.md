@@ -119,15 +119,49 @@
     - [x] Review cleanup applied.
         - @oracle found no P0/P1 findings. P2 cleanup reworded the plan note, narrowed helper exports, and replaced lifecycle string literals with `VERSER_LIFECYCLE_EVENTS` constants.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Extract federation and upstream-link helpers
-    - [ ] Pause for review before this major architecture refactor if the required dependency shape changes beyond internal helper/module extraction.
-    - [ ] Review existing common libraries and confirm federation orchestration remains Host-internal while protocol constants/types continue to come from `@signicode/verser-common`.
-    - [ ] Create Host-internal federation/upstream modules for upstream link lifecycle, inbound federation handshake/streams, federated route frames, federated lifecycle forwarding, and federated request stream acquisition where practical.
-    - [ ] Preserve loop detection, hop validation, route import/export behavior, route lifecycle propagation, structured federated errors, and close ordering.
-    - [ ] Avoid circular dependencies by using explicit callback/state interfaces rather than importing the Host class into extracted modules.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host`.
-    - [ ] Run `node --test test/host-upstreams.test.js test/host-route-registry.test.js`.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [~] Task: Extract federation and upstream-link helpers
+    - [x] Pause for review before this major architecture refactor if the required dependency shape changes beyond internal helper/module extraction.
+        - User approved proceeding with the planned internal federation/upstream helper extraction using callback/facade boundaries, no public API/protocol changes, and preserved Host state ownership.
+    - [x] Review existing common libraries and confirm federation orchestration remains Host-internal while protocol constants/types continue to come from `@signicode/verser-common`.
+        - Federation orchestration remains Host-internal because it owns upstream/inbound link state, Node HTTP/2 sessions/streams, request-stream waiters, lifecycle forwarding coordination, and Host route import/export decisions. Protocol constants, envelope helpers, route factories, loop/hop validation, and federation frame types remain reused from `@signicode/verser-common`.
+    - [x] Create Host-internal federation/upstream modules for upstream link lifecycle, inbound federation handshake/streams, federated route frames, federated lifecycle forwarding, and federated request stream acquisition where practical.
+        - Created `packages/verser2-host/src/lib/federation.ts` with the following extracted components:
+            - Shared types: `FederationRequestStream`, `AcquiredFederatedRequestStream` (removed duplication with `broker-routing.ts`)
+            - Handshake/timeout utilities: `waitForUpstreamHandshakeResponse`, `withUpstreamHandshakeTimeout`, `getUpstreamRejectionReason`, `getUpstreamHandshakeHostId`
+            - Upstream handshake: `sendUpstreamHandshake`
+            - Stream opening helpers: `openUpstreamRouteStream`, `openUpstreamRequestStream`, `openUpstreamDispatchRequestStream`
+            - Route frame handling: `FederatedRouteFrameCallbacks` interface, `handleFederatedRouteFrame`
+            - Lifecycle forwarding: `forwardFederatedLifecycleEventsExcluding`, `tagFederatedLifecycleFrame`
+            - Incoming request handling: `handleFederatedIncomingRequestStream`
+            - Route writing: `writeFederatedRoutes`
+        - Updated `broker-routing.ts` to import `FederationRequestStream` and `AcquiredFederatedRequestStream` from `federation.ts` instead of defining locally (no duplicate types).
+        - Updated `node-http2-verser-host.ts`: removed federation helper methods and replaced them with thin delegating wrappers/callback boundaries.
+        - Host file reduced from 2353 to ~1960 lines after review fixes.
+    - [x] Preserve loop detection, hop validation, route import/export behavior, route lifecycle propagation, structured federated errors, and close ordering.
+        - Loop detection (`seenFederationLifecycleEventIds`) remains Host-owned; `handleFederatedRouteFrame` receives it as a `Set<string>` parameter.
+        - `tagFederatedLifecycleFrame` preserves the counter and seen-IDs management with the Host calling and updating its own counter.
+        - `forwardFederatedLifecycleEventsExcluding` preserves the same excluded-owner filtering logic.
+        - All error types, route import/export, lifecycle propagation, and close paths preserved.
+        - Host retains `upstreamLinks`, `inboundFederationHosts`, `federatedRequestStreamWaiters` ownership.
+    - [x] Avoid circular dependencies by using explicit callback/state interfaces rather than importing the Host class into extracted modules.
+        - New `FederatedRouteFrameCallbacks` interface passes Host-owned operations.
+        - `handleFederatedIncomingRequestStream` receives `routeFn` and `emitLifecycle` callbacks.
+        - `writeFederatedRoutes` receives a `getRoutesForExport` callback.
+        - `forwardFederatedLifecycleEventsExcluding` receives iterables for upstream/inbound host links.
+    - [x] Run `npm run build --workspace=@signicode/verser2-host`.
+        - Build succeeded.
+    - [x] Run `node --test test/host-upstreams.test.js test/host-route-registry.test.js`.
+        - 51/51 tests passed (34 upstream + 17 route registry).
+    - [x] Run `node --test test/broker-routing.test.js test/local-peers.test.js` (shared routing/federated types touched).
+        - 65/65 tests passed.
+    - [x] Lint clean (`npm run lint` passed).
+    - [x] P1 review fixes applied:
+        - Restored structured upstream rejection context: `openUpstreamRequestStream` includes `statusCode`, and `openUpstreamDispatchRequestStream` now accepts `extraContext` for `remoteHostId`/`direction`; Host wrapper passes them from the link.
+        - Restored upstream handshake wire shape: `maxHopCount` is now optional in `sendUpstreamHandshake`; Host wrapper passes `maxFederationHopCount` directly without `?? 8`.
+        - Completed federation extraction: removed duplicate Host methods `handleFederatedRouteFrame`, `forwardFederatedLifecycleEventsExcluding`, `tagFederatedLifecycleFrame`, `writeFederatedRoutes` — all deployment now goes through `federation.ts` directly.
+        - Updated `advertiseRouteLifecycleEvents` to use `forwardFederationEventsToPeers` instead of inline federation loop.
+        - `handleHostFederationRouteStream` and `advertiseFederatedRoutes` now call `federation.*` functions directly.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Conductor - Phase Checkpoint 'Extract Broker Routing and Federated Forwarding Boundaries' (Protocol in workflow.md)
 
 ## Phase 4: Integration Cleanup, Documentation, and Final Validation

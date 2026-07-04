@@ -20,6 +20,7 @@ import {
   validateVerserHeaders,
 } from '@signicode/verser-common';
 
+import type { AcquiredFederatedRequestStream, FederationRequestStream } from './federation';
 import type { GuestLeaseStream } from './lease-pool';
 import {
   type LocalBrokerState,
@@ -34,18 +35,6 @@ import type {
   VerserLocalGuestRequestListener,
 } from './types';
 import { toVerserError } from './utils';
-
-// ---------------------------------------------------------------------------
-// Internal types (formerly in node-http2-verser-host.ts)
-// ---------------------------------------------------------------------------
-
-type FederationRequestStream = http2.ServerHttp2Stream | http2.ClientHttp2Stream;
-
-interface AcquiredFederatedRequestStream {
-  readonly stream: FederationRequestStream;
-  readonly via: 'inbound-federation' | 'upstream-link';
-  readonly hostId: string;
-}
 
 /** Minimal peer info needed by the routing functions. */
 export interface PeerInfo {
