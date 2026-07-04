@@ -56,6 +56,7 @@ import {
   validateVerserHeaders,
 } from '@signicode/verser-common';
 import { sendError, writeJsonLine } from './http2-io';
+import { LeasePool, type GuestLeaseStream } from './lease-pool';
 import {
   type LocalBrokerState,
   type LocalDispatchRequest,
@@ -95,21 +96,6 @@ interface RegisteredPeer {
   readonly controlStream?: http2.ServerHttp2Stream;
   readonly localGuest?: LocalGuestState;
   readonly localBroker?: LocalBrokerState;
-}
-
-interface GuestLeaseStream {
-  readonly guestId: VerserPeerId;
-  readonly leaseId: string;
-  readonly stream: http2.ServerHttp2Stream;
-  active: boolean;
-}
-
-interface QueuedLeaseAcquisition {
-  readonly guestId: VerserPeerId;
-  readonly requestId: string;
-  readonly timeout: NodeJS.Timeout;
-  readonly resolve: (lease: GuestLeaseStream) => void;
-  readonly reject: (error: VerserError) => void;
 }
 
 interface UpstreamLink {
@@ -180,11 +166,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly sessions = new Set<http2.ServerHttp2Session>();
 
-  private readonly idleLeases = new Map<VerserPeerId, GuestLeaseStream[]>();
-
-  private readonly activeLeases = new Map<string, GuestLeaseStream>();
-
-  private readonly queuedLeaseAcquisitions = new Map<VerserPeerId, QueuedLeaseAcquisition[]>();
+  private readonly leasePool = new LeasePool();
 
   private readonly routeRegistry: HostRouteRegistry;
 
@@ -320,8 +302,8 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     this.abortAllLocalRequests();
 
-    this.closeAllLeases();
-    this.failAllQueuedLeaseAcquisitions(reason);
+    this.leasePool.closeAllLeases();
+    this.leasePool.failAllQueuedLeaseAcquisitions(reason);
 
     for (const link of this.inboundFederationHosts.values()) {
       link.routeStream?.close(http2.constants.NGHTTP2_NO_ERROR);
@@ -1754,8 +1736,8 @@ export class NodeHttp2VerserHost implements VerserHost {
       // Move routes to degraded state instead of removing immediately.
       // This matches the remote Guest disconnect behavior.
       this.routeRegistry.setDegraded(peerId);
-      this.closeGuestLeases(peerId);
-      this.failQueuedLeaseAcquisitions(peerId, reason);
+      this.leasePool.closeGuestLeases(peerId);
+      this.leasePool.failQueuedLeaseAcquisitions(peerId, reason);
       this.abortLocalRequestsForPeer(peerId);
 
       // Emit degraded lifecycle events for local and remote Brokers
@@ -2149,7 +2131,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async routeLocalRequestToH2Guest(
     request: LocalDispatchRequest,
   ): Promise<VerserLocalBrokerResponse> {
-    const lease = await this.acquireLease(
+    const lease = await this.leasePool.acquireLease(
       request.targetId,
       request.requestId,
       request.leaseAcquireTimeoutMs,
@@ -2586,13 +2568,13 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     const lease: GuestLeaseStream = { guestId, leaseId, stream, active: false };
     stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
-    stream.on('close', () => this.removeLease(lease));
+    stream.on('close', () => this.leasePool.removeLease(lease));
     stream.on('error', (error) => {
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
-      this.removeLease(lease);
+      this.leasePool.removeLease(lease);
     });
 
-    this.addIdleLease(lease);
+    this.leasePool.addIdleLease(lease);
   }
 
   private async routeBrokerRequest(
@@ -2621,7 +2603,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
       return;
     }
-    const lease = await this.tryAcquireLease(
+    const lease = await this.leasePool.tryAcquireLease(
       createPeerId(targetId),
       requestId,
       parseLeaseAcquireTimeoutMs(headers),
@@ -2631,7 +2613,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
-    const queuedLease = await this.acquireLease(
+    const queuedLease = await this.leasePool.acquireLease(
       createPeerId(targetId),
       requestId,
       parseLeaseAcquireTimeoutMs(headers),
@@ -2892,8 +2874,8 @@ export class NodeHttp2VerserHost implements VerserHost {
         if (peer.role === 'guest') {
           // Move routes to degraded state instead of removing immediately
           this.routeRegistry.setDegraded(peerId);
-          this.closeGuestLeases(peerId);
-          this.failQueuedLeaseAcquisitions(peerId, 'guest-disconnect');
+          this.leasePool.closeGuestLeases(peerId);
+          this.leasePool.failQueuedLeaseAcquisitions(peerId, 'guest-disconnect');
 
           // Emit degraded lifecycle events
           const degradedRoutes = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
@@ -2940,132 +2922,4 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.lifecycle.emit('event', event);
   }
 
-  private addIdleLease(lease: GuestLeaseStream): void {
-    const queued = this.queuedLeaseAcquisitions.get(lease.guestId)?.shift();
-    if (queued !== undefined) {
-      clearTimeout(queued.timeout);
-      lease.active = true;
-      this.activeLeases.set(`${lease.guestId}:${lease.leaseId}`, lease);
-      queued.resolve(lease);
-      return;
-    }
-
-    const idleLeases = this.idleLeases.get(lease.guestId) ?? [];
-    idleLeases.push(lease);
-    this.idleLeases.set(lease.guestId, idleLeases);
-  }
-
-  private acquireLease(
-    guestId: VerserPeerId,
-    requestId: string,
-    timeoutMs: number,
-  ): Promise<GuestLeaseStream> {
-    const idleLeases = this.idleLeases.get(guestId) ?? [];
-    const lease = idleLeases.shift();
-    if (lease !== undefined) {
-      lease.active = true;
-      this.activeLeases.set(`${lease.guestId}:${lease.leaseId}`, lease);
-      return Promise.resolve(lease);
-    }
-
-    return new Promise((resolve, reject) => {
-      const acquisition: QueuedLeaseAcquisition = {
-        guestId,
-        requestId,
-        resolve,
-        reject,
-        timeout: setTimeout(() => {
-          this.removeQueuedLeaseAcquisition(acquisition);
-          reject(
-            createVerserError('timeout', 'Timed out waiting for a Guest lease stream', {
-              targetId: guestId,
-              requestId,
-              timeoutMs,
-            }),
-          );
-        }, timeoutMs),
-      };
-      const queued = this.queuedLeaseAcquisitions.get(guestId) ?? [];
-      queued.push(acquisition);
-      this.queuedLeaseAcquisitions.set(guestId, queued);
-    });
-  }
-
-  private async tryAcquireLease(
-    guestId: VerserPeerId,
-    requestId: string,
-    timeoutMs: number,
-  ): Promise<GuestLeaseStream | undefined> {
-    const idleLeases = this.idleLeases.get(guestId) ?? [];
-    if (idleLeases.length === 0) {
-      return undefined;
-    }
-
-    return this.acquireLease(guestId, requestId, timeoutMs);
-  }
-
-  private removeLease(lease: GuestLeaseStream): void {
-    const idleLeases = this.idleLeases.get(lease.guestId) ?? [];
-    this.idleLeases.set(
-      lease.guestId,
-      idleLeases.filter((candidate) => candidate !== lease),
-    );
-    this.activeLeases.delete(`${lease.guestId}:${lease.leaseId}`);
-  }
-
-  private closeGuestLeases(guestId: VerserPeerId): void {
-    for (const lease of this.idleLeases.get(guestId) ?? []) {
-      lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-    }
-    this.idleLeases.delete(guestId);
-
-    for (const lease of this.activeLeases.values()) {
-      if (lease.guestId === guestId) {
-        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-        this.activeLeases.delete(`${lease.guestId}:${lease.leaseId}`);
-      }
-    }
-  }
-
-  private closeAllLeases(): void {
-    for (const leases of this.idleLeases.values()) {
-      for (const lease of leases) {
-        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-      }
-    }
-    for (const lease of this.activeLeases.values()) {
-      lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-    }
-    this.idleLeases.clear();
-    this.activeLeases.clear();
-  }
-
-  private failQueuedLeaseAcquisitions(guestId: VerserPeerId, reason: string): void {
-    const queued = this.queuedLeaseAcquisitions.get(guestId) ?? [];
-    this.queuedLeaseAcquisitions.delete(guestId);
-    for (const acquisition of queued) {
-      clearTimeout(acquisition.timeout);
-      acquisition.reject(
-        createVerserError('disconnected-target', 'Guest disconnected while waiting for a lease', {
-          targetId: guestId,
-          requestId: acquisition.requestId,
-          reason,
-        }),
-      );
-    }
-  }
-
-  private failAllQueuedLeaseAcquisitions(reason: string): void {
-    for (const guestId of this.queuedLeaseAcquisitions.keys()) {
-      this.failQueuedLeaseAcquisitions(guestId, reason);
-    }
-  }
-
-  private removeQueuedLeaseAcquisition(acquisition: QueuedLeaseAcquisition): void {
-    const queued = this.queuedLeaseAcquisitions.get(acquisition.guestId) ?? [];
-    this.queuedLeaseAcquisitions.set(
-      acquisition.guestId,
-      queued.filter((candidate) => candidate !== acquisition),
-    );
-  }
 }

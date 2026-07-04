@@ -34,13 +34,26 @@
 
 ## Phase 2: Extract Low-Risk Host State Managers
 
-- [ ] Task: Extract Guest lease pool management
-    - [ ] Review existing common libraries and confirm lease-pool behavior is Host-internal and should not move to `@signicode/verser-common`.
-    - [ ] Create a Host-internal lease-pool module for idle leases, active leases, queued acquisitions, acquisition timeout handling, lease removal, close cleanup, and queued-acquisition failure.
-    - [ ] Wire `NodeHttp2VerserHost` to delegate lease-pool operations while preserving cleanup order and session-close semantics.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host`.
-    - [ ] Run focused lease/routing tests that cover Guest lease acquisition and cleanup.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Extract Guest lease pool management
+    - [x] Review existing common libraries and confirm lease-pool behavior is Host-internal and should not move to `@signicode/verser-common`.
+        - Lease-pool behavior is Host-internal because it owns Node HTTP/2 lease streams, per-Guest idle/active lease maps, queued acquisition timers, and Host shutdown/session cleanup semantics; no new common export is needed.
+    - [x] Create a Host-internal lease-pool module for idle leases, active leases, queued acquisitions, acquisition timeout handling, lease removal, close cleanup, and queued-acquisition failure.
+        - Created `packages/verser2-host/src/lib/lease-pool.ts` with `LeasePool` class and `GuestLeaseStream` interface.
+        - Exports: `LeasePool` class and `GuestLeaseStream` interface (type-only for Host usage).
+        - Private types (`QueuedLeaseAcquisition`) remain internal to the module.
+        - No circular dependencies: the module imports only `node:http2` and `@signicode/verser-common` types.
+    - [x] Wire `NodeHttp2VerserHost` to delegate lease-pool operations while preserving cleanup order and session-close semantics.
+        - Replaced private `idleLeases`, `activeLeases`, `queuedLeaseAcquisitions` maps with `this.leasePool = new LeasePool()`.
+        - Replaced private `GuestLeaseStream` and `QueuedLeaseAcquisition` interfaces with imported `GuestLeaseStream`.
+        - Redirected all lease operations (`addIdleLease`, `acquireLease`, `tryAcquireLease`, `removeLease`, `closeGuestLeases`, `closeAllLeases`, `failQueuedLeaseAcquisitions`, `failAllQueuedLeaseAcquisitions`, `removeQueuedLeaseAcquisition`) to `this.leasePool.*`.
+        - Removed 9 private methods (~130 lines) from the Host class.
+        - Cleanup order preserved: `closeAllLeases` before `failAllQueuedLeaseAcquisitions` in `close()`; `closeGuestLeases` before `failQueuedLeaseAcquisitions` in `removeSessionPeers` and `detachLocalPeer`.
+        - Stream close/error handlers in `attachGuestLeaseStream` still use the Host's `emitLifecycle` before delegating `removeLease` to the pool.
+    - [x] Run `npm run build --workspace=@signicode/verser2-host`.
+        - Build succeeded.
+    - [x] Run focused lease/routing tests that cover Guest lease acquisition and cleanup.
+        - `node --test test/host.test.js test/broker-routing.test.js test/local-peers.test.js` passed 74/74.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Extract degraded-route cleanup management
     - [ ] Review existing common libraries and confirm degraded cleanup is Host-internal lifecycle orchestration.
     - [ ] Create a Host-internal degraded-route cleanup module for timer start/stop and expired degraded-route checks.
