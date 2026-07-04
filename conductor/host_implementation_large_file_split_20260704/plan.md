@@ -162,7 +162,14 @@
         - Updated `advertiseRouteLifecycleEvents` to use `forwardFederationEventsToPeers` instead of inline federation loop.
         - `handleHostFederationRouteStream` and `advertiseFederatedRoutes` now call `federation.*` functions directly.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Conductor - Phase Checkpoint 'Extract Broker Routing and Federated Forwarding Boundaries' (Protocol in workflow.md)
+- [x] Task: Conductor - Phase Checkpoint 'Extract Broker Routing and Federated Forwarding Boundaries' (Protocol in workflow.md)
+    - Phase 3 complete. Broker routing helpers and federation helpers were extracted as Host-internal modules without public export changes or Host-class back imports.
+    - Common-library scan: no new common code was added; extracted logic remains Host-specific because it coordinates Host route registry decisions, Node HTTP/2 streams, local peer dispatch, lease/federated request acquisition, upstream/inbound link state, lifecycle forwarding, and Host-owned route import/export decisions. Existing `@signicode/verser-common` protocol helpers continue to be reused.
+    - Deduplication check: `FederationRequestStream` and `AcquiredFederatedRequestStream` are now defined once in `federation.ts` and imported by `broker-routing.ts`; no repeated extracted helper code remains in the Host for route-frame/lifecycle/write-routes paths.
+    - Validation: `npm run lint`, `npm run build --workspace=@signicode/verser2-host`, `node --test test/broker-routing.test.js test/local-peers.test.js`, `node --test test/host-upstreams.test.js test/host-route-registry.test.js`, and `node --test test/host.test.js` passed during Phase 3 work/review.
+    - Review: @oracle found no blocking issues for broker routing after P2 cleanup, then found federation P1 regressions; structured upstream rejection context and optional `maxHopCount` wire-shape regressions were fixed and revalidated.
+    - Deferred extraction: upstream link map lifecycle, inbound federation entrypoint orchestration, and federated request-stream waiter queues remain in Host because extracting them would require broad map ownership callbacks and would reduce clarity more than file size.
+    - Coverage: behavior-preserving refactor coverage is provided by existing Broker routing, local peer, upstream federation, route registry, and Host integration suites.
 
 ## Phase 4: Integration Cleanup, Documentation, and Final Validation
 
