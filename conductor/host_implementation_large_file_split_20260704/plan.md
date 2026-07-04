@@ -54,13 +54,30 @@
     - [x] Run focused lease/routing tests that cover Guest lease acquisition and cleanup.
         - `node --test test/host.test.js test/broker-routing.test.js test/local-peers.test.js` passed 74/74.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Extract degraded-route cleanup management
-    - [ ] Review existing common libraries and confirm degraded cleanup is Host-internal lifecycle orchestration.
-    - [ ] Create a Host-internal degraded-route cleanup module for timer start/stop and expired degraded-route checks.
-    - [ ] Pass required state and callbacks by reference so route registry mutation, route advertisement, and lifecycle emission remain coordinated by the Host.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host`.
-    - [ ] Run focused Host route lifecycle/degraded-route tests.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Extract degraded-route cleanup management
+    - [x] Review existing common libraries and confirm degraded cleanup is Host-internal lifecycle orchestration.
+        - Degraded cleanup is Host-internal because it coordinates Host timers, `HostRouteRegistry.removeExpiredDegradedRoutes()`, route advertisements, and lifecycle emission. Common exports remain limited to route lifecycle constants/types/factories already in use.
+    - [x] Create a Host-internal degraded-route cleanup module for timer start/stop and expired degraded-route checks.
+        - Created `packages/verser2-host/src/lib/degraded-route-cleanup.ts` with `DegradedRouteCleanup` class and `DegradedRouteCleanupCallbacks` interface.
+        - The class owns the `setInterval` timer and the `check()` logic that captures generation metadata, calls `removeExpiredDegradedRoutes`, emits lifecycle events, re-advertises routes, and auto-stops the timer when no degraded routes remain.
+        - No circular dependencies: the module imports only `@signicode/verser-common` and `./route-registry` types.
+    - [x] Pass required state and callbacks by reference so route registry mutation, route advertisement, and lifecycle emission remain coordinated by the Host.
+        - `DegradedRouteCleanup` receives an `DegradedRouteCleanupCallbacks` object with function references for `removeExpiredDegradedRoutes`, `hasAnyDegradedRoutes`, `getDegradedPeerIds`, `getDegradedBrokerRoutesForPeer`, `getRouteGeneration`, `advertiseRouteLifecycleEvents`, `advertiseRoutes`, and `advertiseFederatedRoutes`.
+        - The Host builds these callbacks in `createDegradedCleanupCallbacks()`, which binds to `this.routeRegistry` and Host methods via arrow functions.
+    - [x] Wire `NodeHttp2VerserHost` to delegate degraded cleanup timer operations while preserving current behavior and cleanup ordering.
+        - Replaced `private degradedCleanupTimer` field with `private readonly degradedCleanup: DegradedRouteCleanup` and initialized in the constructor with the resolved timeout value.
+        - `startDegradedRouteCleanupTimer()` now delegates to `this.degradedCleanup.start()`.
+        - `stopDegradedRouteCleanupTimer()` now delegates to `this.degradedCleanup.stop()`.
+        - Removed the ~70-line `checkExpiredDegradedRoutes()` method entirely (logic moved into `DegradedRouteCleanup.check()`).
+        - Removed unused `type VerserRouteGeneration` import from the Host file.
+        - All call sites (`close()`, `attachLocalGuest()`, `registerPeer()`, `detachLocalPeer()`, `removeSessionPeers()`) unchanged — they call the same thin wrapper methods.
+        - Cleanup ordering preserved: degraded timer is stopped before server close; timer starts on Guest disconnect/degradation; timer stops when no degraded routes remain.
+    - [x] Run `npm run build --workspace=@signicode/verser2-host`.
+        - Build succeeded.
+    - [x] Run focused Host route lifecycle/degraded-route tests.
+        - `node --test test/host.test.js test/host-route-registry.test.js test/broker-routing.test.js test/local-peers.test.js` passed 91/91.
+        - Additional lint validation after formatting fix: `npm run lint` passed.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Conductor - Phase Checkpoint 'Extract Low-Risk Host State Managers' (Protocol in workflow.md)
 
 ## Phase 3: Extract Broker Routing and Federated Forwarding Boundaries

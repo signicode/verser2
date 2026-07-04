@@ -11,11 +11,7 @@
 
 import * as http2 from 'node:http2';
 
-import {
-  createVerserError,
-  type VerserError,
-  type VerserPeerId,
-} from '@signicode/verser-common';
+import { type VerserError, type VerserPeerId, createVerserError } from '@signicode/verser-common';
 
 /**
  * A lease stream provided by a Guest for request/response exchange.
@@ -46,10 +42,7 @@ interface QueuedLeaseAcquisition {
 export class LeasePool {
   private readonly idleLeases = new Map<VerserPeerId, GuestLeaseStream[]>();
   private readonly activeLeases = new Map<string, GuestLeaseStream>();
-  private readonly queuedLeaseAcquisitions = new Map<
-    VerserPeerId,
-    QueuedLeaseAcquisition[]
-  >();
+  private readonly queuedLeaseAcquisitions = new Map<VerserPeerId, QueuedLeaseAcquisition[]>();
 
   /**
    * Adds an idle lease to the pool. If a queued acquisition is waiting for
@@ -102,15 +95,11 @@ export class LeasePool {
         timeout: setTimeout(() => {
           this.removeQueuedLeaseAcquisition(acquisition);
           reject(
-            createVerserError(
-              'timeout',
-              'Timed out waiting for a Guest lease stream',
-              {
-                targetId: guestId,
-                requestId,
-                timeoutMs,
-              },
-            ),
+            createVerserError('timeout', 'Timed out waiting for a Guest lease stream', {
+              targetId: guestId,
+              requestId,
+              timeoutMs,
+            }),
           );
         }, timeoutMs),
       };
@@ -195,15 +184,11 @@ export class LeasePool {
     for (const acquisition of queued) {
       clearTimeout(acquisition.timeout);
       acquisition.reject(
-        createVerserError(
-          'disconnected-target',
-          'Guest disconnected while waiting for a lease',
-          {
-            targetId: guestId,
-            requestId: acquisition.requestId,
-            reason,
-          },
-        ),
+        createVerserError('disconnected-target', 'Guest disconnected while waiting for a lease', {
+          targetId: guestId,
+          requestId: acquisition.requestId,
+          reason,
+        }),
       );
     }
   }
@@ -222,11 +207,8 @@ export class LeasePool {
    * Removes a single queued acquisition from its guest's queue. Used when
    * an acquisition times out.
    */
-  removeQueuedLeaseAcquisition(
-    acquisition: QueuedLeaseAcquisition,
-  ): void {
-    const queued =
-      this.queuedLeaseAcquisitions.get(acquisition.guestId) ?? [];
+  removeQueuedLeaseAcquisition(acquisition: QueuedLeaseAcquisition): void {
+    const queued = this.queuedLeaseAcquisitions.get(acquisition.guestId) ?? [];
     this.queuedLeaseAcquisitions.set(
       acquisition.guestId,
       queued.filter((candidate) => candidate !== acquisition),

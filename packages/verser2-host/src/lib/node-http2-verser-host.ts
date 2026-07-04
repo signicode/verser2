@@ -24,7 +24,6 @@ import {
   type VerserRegistrationRequest,
   type VerserRegistrationResponse,
   type VerserResponseEnvelopeMetadata,
-  type VerserRouteGeneration,
   type VerserRouteLifecycleEvent,
   createBrokerRouteLifecycleControlFrame,
   createBrokerRoutesControlFrame,
@@ -55,8 +54,9 @@ import {
   toVerserErrorCode,
   validateVerserHeaders,
 } from '@signicode/verser-common';
+import { DegradedRouteCleanup, type DegradedRouteCleanupCallbacks } from './degraded-route-cleanup';
 import { sendError, writeJsonLine } from './http2-io';
-import { LeasePool, type GuestLeaseStream } from './lease-pool';
+import { type GuestLeaseStream, LeasePool } from './lease-pool';
 import {
   type LocalBrokerState,
   type LocalDispatchRequest,
@@ -170,6 +170,8 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly routeRegistry: HostRouteRegistry;
 
+  private readonly degradedCleanup: DegradedRouteCleanup;
+
   private readonly activeLocalRequests = new Map<VerserPeerId, Set<AbortController>>();
 
   private readonly upstreamLinks = new Map<string, UpstreamLink>();
@@ -198,6 +200,30 @@ export class NodeHttp2VerserHost implements VerserHost {
   public constructor(options: VerserHostOptions) {
     this.options = options;
     this.routeRegistry = createHostRouteRegistry(options);
+    this.degradedCleanup = new DegradedRouteCleanup(
+      this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS,
+      this.createDegradedCleanupCallbacks(),
+    );
+  }
+
+  /**
+   * Builds the callbacks object for {@link DegradedRouteCleanup}.
+   * Passed by reference so the Host retains coordination of route registry
+   * mutation, route advertisements, and lifecycle emission.
+   */
+  private createDegradedCleanupCallbacks(): DegradedRouteCleanupCallbacks {
+    return {
+      removeExpiredDegradedRoutes: (now, timeoutMs) =>
+        this.routeRegistry.removeExpiredDegradedRoutes(now, timeoutMs),
+      hasAnyDegradedRoutes: () => this.routeRegistry.hasAnyDegradedRoutes(),
+      getDegradedPeerIds: () => [...this.routeRegistry.getDegradedEntries().keys()],
+      getDegradedBrokerRoutesForPeer: (peerId) =>
+        this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId),
+      getRouteGeneration: (peerId, domain) => this.routeRegistry.getRouteGeneration(peerId, domain),
+      advertiseRouteLifecycleEvents: (events) => this.advertiseRouteLifecycleEvents(events),
+      advertiseRoutes: () => this.advertiseRoutes(),
+      advertiseFederatedRoutes: () => this.advertiseFederatedRoutes(),
+    };
   }
 
   /**
@@ -2310,78 +2336,12 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
-  /**
-   * Starts the degraded route cleanup timer if not already running.
-   * Checked periodically to remove routes whose degraded timeout has expired.
-   */
-  private degradedCleanupTimer: ReturnType<typeof setInterval> | undefined;
   private startDegradedRouteCleanupTimer(): void {
-    if (this.degradedCleanupTimer !== undefined) {
-      return;
-    }
-    const timeoutMs = this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS;
-    // Use a shorter check interval so we don't overshoot by much
-    const checkInterval = Math.max(100, Math.floor(timeoutMs / 10));
-    this.degradedCleanupTimer = setInterval(() => {
-      void this.checkExpiredDegradedRoutes();
-    }, checkInterval);
+    this.degradedCleanup.start();
   }
 
   private stopDegradedRouteCleanupTimer(): void {
-    if (this.degradedCleanupTimer !== undefined) {
-      clearInterval(this.degradedCleanupTimer);
-      this.degradedCleanupTimer = undefined;
-    }
-  }
-
-  private async checkExpiredDegradedRoutes(): Promise<void> {
-    const timeoutMs = this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS;
-
-    // Capture generation metadata before removal
-    const genCache = new Map<string, Map<string, VerserRouteGeneration>>();
-    for (const [peerId] of this.routeRegistry.getDegradedEntries()) {
-      const domainMap = new Map();
-      const routes = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
-      for (const r of routes) {
-        const gen = this.routeRegistry.getRouteGeneration(peerId, r.domain);
-        if (gen !== undefined) domainMap.set(r.domain, gen);
-      }
-      if (domainMap.size > 0) genCache.set(peerId, domainMap);
-    }
-
-    const result = this.routeRegistry.removeExpiredDegradedRoutes(Date.now(), timeoutMs);
-    if (result.expiredPeers.length === 0) {
-      // Stop timer if no more degraded routes
-      if (!this.routeRegistry.hasAnyDegradedRoutes()) {
-        this.stopDegradedRouteCleanupTimer();
-      }
-      return;
-    }
-
-    // Emit lifecycle events for expired degraded routes with generation metadata
-    const events: VerserRouteLifecycleEvent[] = result.expiredRouteEntries.map((entry) => {
-      const peerGen = genCache.get(entry.peerId);
-      const domainGen = peerGen?.get(entry.domain);
-      return createRouteLifecycleEvent({
-        type: 'removed',
-        targetId: entry.peerId,
-        domain: entry.domain,
-        reason: 'timeout',
-        generation: domainGen,
-      });
-    });
-
-    if (events.length > 0) {
-      this.advertiseRouteLifecycleEvents(events);
-    }
-
-    this.advertiseRoutes();
-    this.advertiseFederatedRoutes();
-
-    // Stop timer if no more degraded routes
-    if (!this.routeRegistry.hasAnyDegradedRoutes()) {
-      this.stopDegradedRouteCleanupTimer();
-    }
+    this.degradedCleanup.stop();
   }
 
   private attachGuestControlStream(
@@ -2921,5 +2881,4 @@ export class NodeHttp2VerserHost implements VerserHost {
   private emitLifecycle(event: VerserHostLifecycleEvent): void {
     this.lifecycle.emit('event', event);
   }
-
 }
