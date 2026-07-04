@@ -96,14 +96,29 @@
 
 ## Phase 3: Extract Broker Routing and Federated Forwarding Boundaries
 
-- [ ] Task: Extract Broker request routing helpers
-    - [ ] Review existing common libraries and confirm Broker routing orchestration remains Host-internal.
-    - [ ] Create a Host-internal broker-routing module for Broker request dispatch, local lease routing, federated routing selection, cancellation propagation, and structured error preservation.
-    - [ ] Keep `NodeHttp2VerserHost` responsible for high-level orchestration, peer/session ownership, route registry ownership, lifecycle emission, and route advertisement.
-    - [ ] Preserve all existing timeout, abort, stream close, and response propagation behavior.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host`.
-    - [ ] Run `node --test test/broker-routing.test.js test/local-peers.test.js`.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Extract Broker request routing helpers
+    - [x] Review existing common libraries and confirm Broker routing orchestration remains Host-internal.
+        - Broker routing orchestration is Host-internal because it coordinates Host-owned route registry decisions, local peer dispatch, lease-pool acquisition, federated fallback hooks, HTTP/2 stream response handling, and Host lifecycle/error semantics. Common protocol helpers remain reused from `@signicode/verser-common`.
+    - [x] Create a Host-internal broker-routing module (`packages/verser2-host/src/lib/broker-routing.ts`) for Broker request dispatch, local lease routing, federated routing selection, cancellation propagation, and structured error preservation.
+        - Extracted functions: `routeBrokerRequest`, `tryRouteH2BrokerRequestToFederatedHost`, `routeH2BrokerRequestOverFederationStream`, `routeH2BrokerRequestToLocalGuest`, `routeBrokerRequestOverLease`, `routeLocalBrokerRequest`, `routeLocalRequestDispatch`, `tryRouteLocalRequestToFederatedHost`, `routeLocalRequestOverFederationStream`, `routeLocalRequestToAttachedGuest`, `routeLocalRequestToH2Guest`, `readFederatedResponseMetadata`.
+        - Uses `BrokerRoutingCallbacks` interface for Host-dependency injection to avoid circular imports.
+        - Host remains the orchestrator; thin wrappers in `NodeHttp2VerserHost` delegate to module functions.
+        - The extracted `routeLocalRequestDispatch` preserves the `localGuest`-defined check before dispatching to `routeLocalRequestToAttachedGuest`.
+    - [x] Keep `NodeHttp2VerserHost` responsible for high-level orchestration, peer/session ownership, route registry ownership, lifecycle emission, and route advertisement.
+        - Host retains: `routeBrokerRequest`, `routeLocalBrokerRequest`, `routeLocalRequest` as thin delegating wrappers.
+        - Unused Host wrappers for sub-methods that are now called only from module internals removed to avoid TypeScript unused-private warnings.
+    - [x] Preserve all existing timeout, abort, stream close, and response propagation behavior.
+        - All stream plumbing (cancellation, piping, response metadata reading, error propagation) preserved in extracted functions.
+    - [x] Run `npm run build --workspace=@signicode/verser2-host`.
+        - Build succeeded.
+    - [x] Run `node --test test/broker-routing.test.js test/local-peers.test.js`.
+        - 65/65 tests passed.
+        - Additional review validation: `node --test test/host-upstreams.test.js` passed 34/34.
+    - [x] Lint clean.
+        - `npm run lint` passed.
+    - [x] Review cleanup applied.
+        - @oracle found no P0/P1 findings. P2 cleanup reworded the plan note, narrowed helper exports, and replaced lifecycle string literals with `VERSER_LIFECYCLE_EVENTS` constants.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Extract federation and upstream-link helpers
     - [ ] Pause for review before this major architecture refactor if the required dependency shape changes beyond internal helper/module extraction.
     - [ ] Review existing common libraries and confirm federation orchestration remains Host-internal while protocol constants/types continue to come from `@signicode/verser-common`.

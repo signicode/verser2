@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import * as http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
-import { PassThrough } from 'node:stream';
+
 import { text as readStreamText } from 'node:stream/consumers';
 import type { TLSSocket } from 'node:tls';
 
@@ -14,7 +14,6 @@ import {
   type VerserBrokerRouteLifecycleControlFrame,
   type VerserCertificateIdentity,
   type VerserError,
-  type VerserErrorEnvelopeMetadata,
   type VerserGuestRevocationRequest,
   type VerserHostFederationHandshake,
   type VerserHostId,
@@ -23,7 +22,6 @@ import {
   type VerserRegistrationAuthorizationContext,
   type VerserRegistrationRequest,
   type VerserRegistrationResponse,
-  type VerserResponseEnvelopeMetadata,
   type VerserRouteLifecycleEvent,
   createBrokerRouteLifecycleControlFrame,
   createBrokerRoutesControlFrame,
@@ -36,7 +34,6 @@ import {
   createVerserError,
   createVerserHostFederationHandshake,
   createVerserHostId,
-  decodeHeaderMap,
   encodeJsonLine,
   encodeVerserEnvelope,
   extractCertificateIdentity,
@@ -44,16 +41,18 @@ import {
   normalizeClientTlsOptions,
   normalizeHostClientAuthTlsOptions,
   normalizeServerTlsOptions,
-  parseLeaseAcquireTimeoutMs,
   parseRegistrationRequest,
   readLeaseRequestMetadataFromStream,
-  readLeaseResponseMetadataFromStream,
   readNdjsonLines,
-  readVerserEnvelopeFromStream,
   sanitizeHttp2ResponseHeaders,
-  toVerserErrorCode,
   validateVerserHeaders,
 } from '@signicode/verser-common';
+import {
+  type BrokerRoutingCallbacks,
+  routeBrokerRequest as routeBrokerRequestModule,
+  routeLocalBrokerRequest as routeLocalBrokerRequestModule,
+  routeLocalRequestDispatch as routeLocalRequestDispatchModule,
+} from './broker-routing';
 import { DegradedRouteCleanup, type DegradedRouteCleanupCallbacks } from './degraded-route-cleanup';
 import { sendError, writeJsonLine } from './http2-io';
 import { type GuestLeaseStream, LeasePool } from './lease-pool';
@@ -63,10 +62,8 @@ import {
   type LocalGuestState,
   closeLocalBrokerState,
   createLocalBrokerState,
-  dispatchLocalGuestRequest,
   emitLocalBrokerRouteChange,
   extractLocalGuestListener,
-  toReadableBody,
   updateLocalBrokerRoutes,
   waitForLocalBrokerRoute,
 } from './local-peers';
@@ -223,6 +220,36 @@ export class NodeHttp2VerserHost implements VerserHost {
       advertiseRouteLifecycleEvents: (events) => this.advertiseRouteLifecycleEvents(events),
       advertiseRoutes: () => this.advertiseRoutes(),
       advertiseFederatedRoutes: () => this.advertiseFederatedRoutes(),
+    };
+  }
+
+  /**
+   * Builds the callbacks object for {@link BrokerRoutingCallbacks}.
+   * Passed by reference so routing functions can access Host-owned state
+   * without importing the Host class.
+   */
+  private getBrokerRoutingCallbacks(): BrokerRoutingCallbacks {
+    return {
+      getPeer: (id) => {
+        const peer = this.peers.get(id);
+        if (peer === undefined) return undefined;
+        return {
+          role: peer.role,
+          transport: peer.transport,
+          localGuest: peer.localGuest,
+        };
+      },
+      emitLifecycle: (event) => this.emitLifecycle(event),
+      getRouteCandidates: (targetId) => this.routeRegistry.getCandidates(targetId),
+      tryAcquireLease: (guestId, requestId, timeoutMs) =>
+        this.leasePool.tryAcquireLease(guestId, requestId, timeoutMs),
+      acquireLease: (guestId, requestId, timeoutMs) =>
+        this.leasePool.acquireLease(guestId, requestId, timeoutMs),
+      tryAcquireFederatedRequestStream: (hostId, timeoutMs) =>
+        this.tryAcquireFederatedRequestStream(hostId, timeoutMs),
+      trackController: (peerId, controller) => this.trackLocalRequestController(peerId, controller),
+      untrackController: (peerId, controller) =>
+        this.untrackLocalRequestController(peerId, controller),
     };
   }
 
@@ -1816,154 +1843,18 @@ export class NodeHttp2VerserHost implements VerserHost {
     broker: LocalBrokerState,
     request: VerserLocalBrokerRequest,
   ): Promise<VerserLocalBrokerResponse> {
-    if (broker.closed) {
-      return Promise.reject(createVerserError('disconnected-target', 'Local Broker is closed'));
-    }
-
-    const requestId = `${sourceId}-${++broker.requestCounter}`;
-    const targetId = createPeerId(request.targetId);
-    const body = toReadableBody(request.body);
-    return this.routeLocalRequest({
-      requestId,
+    return routeLocalBrokerRequestModule(
       sourceId,
-      targetId,
-      method: request.method,
-      path: request.path,
-      headers: flattenVerserHeaders(validateVerserHeaders(request.headers ?? {})),
-      body,
-      leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs({
-        'x-verser-lease-acquire-timeout-ms': request.leaseAcquireTimeoutMs,
-      }),
-    });
+      broker,
+      request,
+      this.getBrokerRoutingCallbacks(),
+    );
   }
 
   private async routeLocalRequest(
     request: LocalDispatchRequest,
   ): Promise<VerserLocalBrokerResponse> {
-    const target = this.peers.get(request.targetId);
-    if (target === undefined || target.role !== 'guest') {
-      const forwarded = await this.tryRouteLocalRequestToFederatedHost(request);
-      if (forwarded !== undefined) {
-        return forwarded;
-      }
-      throw createVerserError('missing-guest', 'Target Guest is not registered', {
-        targetId: request.targetId,
-      });
-    }
-
-    this.emitLifecycle({
-      name: VERSER_LIFECYCLE_EVENTS.requestStarted,
-      peerId: request.targetId,
-      role: 'guest',
-    });
-    const controller = new AbortController();
-    const cancelFromUpstream = (): void => controller.abort();
-    if (request.signal?.aborted) {
-      controller.abort();
-    } else {
-      request.signal?.addEventListener('abort', cancelFromUpstream, { once: true });
-    }
-    this.trackLocalRequestController(request.sourceId, controller);
-    this.trackLocalRequestController(request.targetId, controller);
-    let response: VerserLocalBrokerResponse | undefined;
-    const untrackController = (): void => {
-      request.signal?.removeEventListener('abort', cancelFromUpstream);
-      this.untrackLocalRequestController(request.sourceId, controller);
-      this.untrackLocalRequestController(request.targetId, controller);
-    };
-    try {
-      response =
-        target.transport === 'local'
-          ? await this.routeLocalRequestToAttachedGuest(
-              { ...request, signal: controller.signal },
-              target,
-            )
-          : await this.routeLocalRequestToH2Guest({ ...request, signal: controller.signal });
-      this.emitLifecycle({
-        name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
-        peerId: request.targetId,
-        role: 'guest',
-      });
-      const cancelResponse = (): void => {
-        response?.body.destroy(
-          createVerserError('disconnected-target', 'Local peer disconnected during request', {
-            requestId: request.requestId,
-            targetId: request.targetId,
-            sourceId: request.sourceId,
-          }),
-        );
-      };
-      response.body.once('close', untrackController);
-      response.body.once('end', untrackController);
-      response.body.once('error', untrackController);
-      controller.signal.addEventListener('abort', cancelResponse, { once: true });
-      return response;
-    } catch (error) {
-      const verserError = toVerserError(error);
-      this.emitLifecycle({
-        name: VERSER_LIFECYCLE_EVENTS.error,
-        peerId: request.targetId,
-        role: 'guest',
-        error: verserError,
-      });
-      throw verserError;
-    } finally {
-      if (response === undefined) {
-        untrackController();
-      }
-    }
-  }
-
-  private async tryRouteLocalRequestToFederatedHost(
-    request: LocalDispatchRequest,
-  ): Promise<VerserLocalBrokerResponse | undefined> {
-    let hadUpstreamCandidate = false;
-    const unavailableCandidates: Array<{
-      readonly domain: string;
-      readonly originHostId: string;
-      readonly nextHopHostId: string;
-      readonly hopCount: number;
-    }> = [];
-    for (const candidate of this.routeRegistry.getCandidates(request.targetId)) {
-      if (candidate.source !== 'upstream') {
-        continue;
-      }
-      hadUpstreamCandidate = true;
-      unavailableCandidates.push({
-        domain: candidate.domain,
-        originHostId: candidate.originHostId,
-        nextHopHostId: candidate.nextHopHostId,
-        hopCount: candidate.hopCount,
-      });
-      const acquired = await this.tryAcquireFederatedRequestStream(
-        candidate.nextHopHostId,
-        request.leaseAcquireTimeoutMs,
-      );
-      if (acquired === undefined) {
-        continue;
-      }
-
-      return this.routeLocalRequestOverFederationStream(request, acquired.stream);
-    }
-
-    if (hadUpstreamCandidate) {
-      throw createVerserError(
-        'upstream-unavailable',
-        'No federated route candidates are available',
-        {
-          targetId: request.targetId,
-          direction: 'federated-candidates',
-          candidateCount: unavailableCandidates.length,
-          nextHopHostIds: unavailableCandidates
-            .map((candidate) => candidate.nextHopHostId)
-            .join(','),
-          originHostIds: unavailableCandidates.map((candidate) => candidate.originHostId).join(','),
-          domains: unavailableCandidates.map((candidate) => candidate.domain).join(','),
-        },
-      );
-    }
-
-    return undefined;
+    return routeLocalRequestDispatchModule(request, this.getBrokerRoutingCallbacks());
   }
 
   private async tryAcquireFederatedRequestStream(
@@ -2066,148 +1957,6 @@ export class NodeHttp2VerserHost implements VerserHost {
     clearTimeout(waiter.timeout);
     this.inboundFederationHosts.set(hostId, { ...link, requestBusy: true });
     waiter.resolve(link.requestStream);
-  }
-
-  private async routeLocalRequestOverFederationStream(
-    request: LocalDispatchRequest,
-    requestStream: FederationRequestStream,
-  ): Promise<VerserLocalBrokerResponse> {
-    const body = new PassThrough();
-    const responsePromise = this.readFederatedResponseMetadata(requestStream, {
-      requestId: request.requestId,
-      targetId: request.targetId,
-    });
-    requestStream.write(
-      encodeVerserEnvelope({
-        type: 'request',
-        metadata: {
-          requestId: request.requestId,
-          sourceId: request.sourceId,
-          targetId: request.targetId,
-          method: request.method,
-          path: request.path,
-          headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
-        },
-      }),
-    );
-    request.body.once('error', (error) => requestStream.destroy(error));
-    request.body.pipe(requestStream);
-    const metadata = await responsePromise;
-    requestStream.pipe(body);
-    requestStream.once('end', () => body.end());
-    requestStream.once('error', (error) => body.destroy(error));
-    requestStream.once('close', () => body.end());
-
-    return {
-      requestId: request.requestId,
-      statusCode: metadata.statusCode,
-      headers: flattenVerserHeaders(
-        validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
-      ),
-      body,
-    };
-  }
-
-  private routeLocalRequestToAttachedGuest(
-    request: LocalDispatchRequest,
-    target: RegisteredPeer,
-  ): Promise<VerserLocalBrokerResponse> {
-    if (target.localGuest === undefined) {
-      return Promise.reject(
-        createVerserError('disconnected-target', 'Target local Guest is not attached', {
-          targetId: request.targetId,
-        }),
-      );
-    }
-
-    return dispatchLocalGuestRequest(request, target.localGuest.listener);
-  }
-
-  private async readFederatedResponseMetadata(
-    stream: FederationRequestStream,
-    options: { readonly requestId: string; readonly targetId: string },
-  ): Promise<VerserResponseEnvelopeMetadata> {
-    const parsed = await readVerserEnvelopeFromStream(stream, {
-      context: { requestId: options.requestId, targetId: options.targetId },
-    });
-
-    if (parsed.type === 'response') {
-      return parsed.metadata as VerserResponseEnvelopeMetadata;
-    }
-
-    if (parsed.type === 'error') {
-      const errorMetadata = parsed.metadata as VerserErrorEnvelopeMetadata;
-      throw createVerserError(toVerserErrorCode(errorMetadata.code), errorMetadata.message, {
-        targetId: options.targetId,
-        requestId: options.requestId,
-        ...(errorMetadata.context ?? {}),
-      });
-    }
-
-    throw createVerserError(
-      'protocol-error',
-      'Federated request returned a non-response envelope',
-      {
-        targetId: options.targetId,
-        requestId: options.requestId,
-      },
-    );
-  }
-
-  private async routeLocalRequestToH2Guest(
-    request: LocalDispatchRequest,
-  ): Promise<VerserLocalBrokerResponse> {
-    const lease = await this.leasePool.acquireLease(
-      request.targetId,
-      request.requestId,
-      request.leaseAcquireTimeoutMs,
-    );
-    const cancelLease = (): void => {
-      if (!lease.stream.closed) {
-        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-      }
-    };
-    if (request.signal?.aborted) {
-      cancelLease();
-      throw createVerserError('disconnected-target', 'Local peer disconnected during request', {
-        requestId: request.requestId,
-        targetId: request.targetId,
-        sourceId: request.sourceId,
-      });
-    }
-    request.signal?.addEventListener('abort', cancelLease, { once: true });
-    const responsePromise = readLeaseResponseMetadataFromStream(lease.stream, {
-      requestId: request.requestId,
-      targetId: request.targetId,
-    });
-    lease.stream.write(
-      encodeVerserEnvelope({
-        type: 'request',
-        metadata: {
-          requestId: request.requestId,
-          sourceId: request.sourceId,
-          targetId: request.targetId,
-          method: request.method,
-          path: request.path,
-          headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
-        },
-      }),
-    );
-    request.body.once('error', (error) => lease.stream.destroy(error));
-    request.body.pipe(lease.stream);
-    try {
-      const metadata = await responsePromise;
-      return {
-        requestId: request.requestId,
-        statusCode: metadata.statusCode,
-        headers: flattenVerserHeaders(
-          validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
-        ),
-        body: lease.stream,
-      };
-    } finally {
-      request.signal?.removeEventListener('abort', cancelLease);
-    }
   }
 
   private trackLocalRequestController(peerId: VerserPeerId, controller: AbortController): void {
@@ -2541,287 +2290,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders,
   ): Promise<void> {
-    const targetId = String(headers['x-verser-target-id'] ?? '');
-    const requestId = String(headers['x-verser-request-id'] ?? `req-${Date.now()}`);
-    const target = this.peers.get(targetId);
-
-    if (target === undefined) {
-      if (await this.tryRouteH2BrokerRequestToFederatedHost(stream, headers, requestId, targetId)) {
-        return;
-      }
-      throw createVerserError('missing-guest', 'Target Guest is not registered', { targetId });
-    }
-    if (target.role !== 'guest') {
-      throw createVerserError('missing-guest', 'Target peer is not a Guest', { targetId });
-    }
-    if (target.transport === 'local') {
-      await this.routeH2BrokerRequestToLocalGuest(
-        stream,
-        headers,
-        requestId,
-        createPeerId(targetId),
-      );
-      return;
-    }
-    const lease = await this.leasePool.tryAcquireLease(
-      createPeerId(targetId),
-      requestId,
-      parseLeaseAcquireTimeoutMs(headers),
-    );
-    if (lease !== undefined) {
-      await this.routeBrokerRequestOverLease(stream, headers, lease, requestId, targetId);
-      return;
-    }
-
-    const queuedLease = await this.leasePool.acquireLease(
-      createPeerId(targetId),
-      requestId,
-      parseLeaseAcquireTimeoutMs(headers),
-    );
-    await this.routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
-  }
-
-  private async tryRouteH2BrokerRequestToFederatedHost(
-    stream: http2.ServerHttp2Stream,
-    headers: http2.IncomingHttpHeaders,
-    requestId: string,
-    targetId: string,
-  ): Promise<boolean> {
-    let hadUpstreamCandidate = false;
-    const unavailableCandidates: Array<{
-      readonly domain: string;
-      readonly originHostId: string;
-      readonly nextHopHostId: string;
-      readonly hopCount: number;
-    }> = [];
-    for (const candidate of this.routeRegistry.getCandidates(targetId)) {
-      if (candidate.source !== 'upstream') {
-        continue;
-      }
-      hadUpstreamCandidate = true;
-      unavailableCandidates.push({
-        domain: candidate.domain,
-        originHostId: candidate.originHostId,
-        nextHopHostId: candidate.nextHopHostId,
-        hopCount: candidate.hopCount,
-      });
-      const acquired = await this.tryAcquireFederatedRequestStream(
-        candidate.nextHopHostId,
-        parseLeaseAcquireTimeoutMs(headers),
-      );
-      if (acquired === undefined) {
-        continue;
-      }
-
-      await this.routeH2BrokerRequestOverFederationStream(
-        stream,
-        headers,
-        acquired.stream,
-        requestId,
-        targetId,
-      );
-      return true;
-    }
-
-    if (hadUpstreamCandidate) {
-      throw createVerserError(
-        'upstream-unavailable',
-        'No federated route candidates are available',
-        {
-          targetId,
-          direction: 'federated-candidates',
-          candidateCount: unavailableCandidates.length,
-          nextHopHostIds: unavailableCandidates
-            .map((candidate) => candidate.nextHopHostId)
-            .join(','),
-          originHostIds: unavailableCandidates.map((candidate) => candidate.originHostId).join(','),
-          domains: unavailableCandidates.map((candidate) => candidate.domain).join(','),
-        },
-      );
-    }
-
-    return false;
-  }
-
-  private async routeH2BrokerRequestOverFederationStream(
-    stream: http2.ServerHttp2Stream,
-    headers: http2.IncomingHttpHeaders,
-    requestStream: FederationRequestStream,
-    requestId: string,
-    targetId: string,
-  ): Promise<void> {
-    let completed = false;
-    const cancelForwarding = (): void => {
-      if (!completed && !requestStream.closed) {
-        requestStream.close(http2.constants.NGHTTP2_CANCEL);
-      }
-    };
-    const cleanupCancellation = (): void => {
-      stream.off('aborted', cancelForwarding);
-      stream.off('close', cancelOnReset);
-      stream.off('error', cancelForwarding);
-    };
-    const cancelOnReset = (): void => {
-      if (stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR) {
-        cancelForwarding();
-      }
-    };
-    stream.once('aborted', cancelForwarding);
-    stream.once('close', cancelOnReset);
-    stream.once('error', cancelForwarding);
-    const responsePromise = this.readFederatedResponseMetadata(requestStream, {
-      requestId,
-      targetId,
-    });
-    requestStream.write(
-      encodeVerserEnvelope({
-        type: 'request',
-        metadata: {
-          requestId,
-          sourceId: String(headers['x-verser-source-id'] ?? ''),
-          targetId,
-          method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
-          path: String(headers['x-verser-path'] ?? '/'),
-          headers: flattenVerserHeaders(
-            validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
-          ),
-        },
-      }),
-    );
-    stream.once('error', (error) => requestStream.destroy(error));
-    stream.pipe(requestStream);
-
-    try {
-      const responseMetadata = await responsePromise;
-      stream.respond({
-        ':status': responseMetadata.statusCode,
-        ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
-      });
-      requestStream.once('error', () => {
-        if (!stream.closed) {
-          stream.close(http2.constants.NGHTTP2_CANCEL);
-        }
-      });
-      requestStream.pipe(stream);
-      stream.once('finish', () => {
-        completed = true;
-        cleanupCancellation();
-      });
-    } finally {
-      if (stream.writableEnded || stream.closed) {
-        cleanupCancellation();
-      }
-    }
-  }
-
-  private async routeH2BrokerRequestToLocalGuest(
-    stream: http2.ServerHttp2Stream,
-    headers: http2.IncomingHttpHeaders,
-    requestId: string,
-    targetId: VerserPeerId,
-  ): Promise<void> {
-    const controller = new AbortController();
-    let completed = false;
-    const cancelLocalDispatch = (): void => {
-      if (!completed) {
-        controller.abort();
-      }
-    };
-    const cleanupCancellation = (): void => {
-      stream.off('aborted', cancelLocalDispatch);
-      stream.off('error', cancelLocalDispatch);
-      stream.off('close', cancelLocalDispatch);
-    };
-    stream.once('aborted', cancelLocalDispatch);
-    stream.once('error', cancelLocalDispatch);
-    stream.once('close', cancelLocalDispatch);
-
-    try {
-      const response = await this.routeLocalRequest({
-        requestId,
-        sourceId: String(headers['x-verser-source-id'] ?? ''),
-        targetId,
-        method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
-        path: String(headers['x-verser-path'] ?? '/'),
-        headers: flattenVerserHeaders(
-          validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
-        ),
-        body: stream,
-        leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs(headers),
-        signal: controller.signal,
-      });
-      stream.respond({
-        ':status': response.statusCode,
-        ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(response.headers)),
-      });
-      response.body.once('error', () => {
-        if (!stream.closed) {
-          stream.close(http2.constants.NGHTTP2_CANCEL);
-        }
-      });
-      response.body.pipe(stream);
-      stream.once('finish', () => {
-        completed = true;
-        cleanupCancellation();
-      });
-    } catch (error) {
-      cleanupCancellation();
-      throw error;
-    }
-  }
-
-  private async routeBrokerRequestOverLease(
-    stream: http2.ServerHttp2Stream,
-    headers: http2.IncomingHttpHeaders,
-    lease: GuestLeaseStream,
-    requestId: string,
-    targetId: string,
-  ): Promise<void> {
-    let completed = false;
-    const cancelLease = (): void => {
-      if (!completed && !lease.stream.closed) {
-        lease.stream.close(http2.constants.NGHTTP2_CANCEL);
-      }
-    };
-    stream.once('aborted', cancelLease);
-    stream.once('error', cancelLease);
-    stream.once('close', cancelLease);
-
-    const responsePromise = readLeaseResponseMetadataFromStream(lease.stream, {
-      requestId,
-      targetId,
-    });
-    lease.stream.write(
-      encodeVerserEnvelope({
-        type: 'request',
-        metadata: {
-          requestId,
-          sourceId: String(headers['x-verser-source-id'] ?? ''),
-          targetId,
-          method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
-          path: String(headers['x-verser-path'] ?? '/'),
-          headers: flattenVerserHeaders(
-            validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
-          ),
-        },
-      }),
-    );
-    stream.pipe(lease.stream);
-
-    const responseMetadata = await responsePromise;
-    stream.respond({
-      ':status': responseMetadata.statusCode,
-      ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
-    });
-    lease.stream.once('error', () => {
-      if (!stream.closed) {
-        stream.close(http2.constants.NGHTTP2_CANCEL);
-      }
-    });
-    lease.stream.pipe(stream);
-    stream.once('finish', () => {
-      completed = true;
-    });
+    return routeBrokerRequestModule(stream, headers, this.getBrokerRoutingCallbacks());
   }
 
   private removeSessionPeers(session: http2.ServerHttp2Session): void {
