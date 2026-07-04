@@ -8,11 +8,15 @@
     - [x] Do NOT make granular start-marker commits or open a PR early during planning or track creation.
     - [x] Perform implementation work on this branch, making commits according to the resolved commit frequency policy: per task.
     - [ ] Open or update a draft PR targeting the captured base branch when the Branching Policy requires PR visibility or finalization.
-- [ ] Task: Establish source and behavior baseline
-    - [ ] Read `packages/verser2-host/codemap.md` and any Host library codemap before editing Host internals.
-    - [ ] Inspect `packages/verser2-host/src/lib/node-http2-verser-host.ts`, `route-registry.ts`, `local-peers.ts`, `types.ts`, and `http2-io.ts` for current boundaries and dependency direction.
-    - [ ] Record the intended extraction boundaries in this plan before implementation: federation/upstream handling, broker routing, Guest lease pool, and degraded-route cleanup.
-    - [ ] Confirm no public exports from `packages/verser2-host/src/index.ts` need to change.
+- [x] Task: Establish source and behavior baseline
+    - [x] Read `packages/verser2-host/codemap.md` and any Host library codemap before editing Host internals.
+    - [x] Inspect `packages/verser2-host/src/lib/node-http2-verser-host.ts`, `route-registry.ts`, `local-peers.ts`, `types.ts`, and `http2-io.ts` for current boundaries and dependency direction.
+    - [x] Record the intended extraction boundaries in this plan before implementation: federation/upstream handling, broker routing, Guest lease pool, and degraded-route cleanup.
+        - Baseline responsibility map: `node-http2-verser-host.ts` currently owns private state shapes, peer/session registration, inbound and outbound federation links, federated route/request stream handling, local and HTTP/2 Broker request routing, route advertisements, degraded-route cleanup timers, Guest control/revocation, lease stream attachment, and lease pool state.
+        - Intended extraction boundaries: `lease-pool.ts` for idle/active leases, acquisition queues, lease removal, timeout, and close/failure cleanup; `degraded-route-cleanup.ts` for timer start/stop and expired degraded-route checks with Host-owned callbacks; `broker-routing.ts` for Broker request dispatch, local lease routing, federated fallback/acquisition, cancellation propagation, and structured error preservation; federation/upstream helpers for upstream lifecycle, inbound federation handshake/streams, route frames, lifecycle forwarding, and federated request stream acquisition.
+        - Dependency direction to preserve: `node-http2-verser-host.ts` remains the orchestrator and imports Host-internal leaf modules. Extracted modules must not import the Host class; dependencies should be passed through explicit callback/state interfaces to avoid cycles.
+        - Common-library reuse decision: existing `@signicode/verser-common` protocol helpers, constants, route/federation factories, envelope/header utilities, TLS helpers, route-generation helpers, and loop/hop validation remain reused. New extraction logic stays Host-internal because it manages Node HTTP/2 stream/session state, Host-private lifecycle maps, lease queues, degraded-route timers, and federation link ownership.
+    - [x] Confirm no public exports from `packages/verser2-host/src/index.ts` need to change.
 - [ ] Task: Write or update characterization tests before implementation
     - [ ] Identify existing focused tests covering Host start/close, route lifecycle, degraded cleanup, Guest revocation, federation, Broker routing, and local peers.
     - [ ] Add only minimal characterization/regression tests if an existing behavior boundary is not already covered.
