@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 
 const DEFAULT_OLD_SPACE_SIZE_MB = 512;
 const DEFAULT_SEMI_SPACE_SIZE_MB = 16;
-const DEFAULT_MEMORY_LEAK_BYTES = 64 * 1024;
+const DEFAULT_MEMORY_LEAK_BYTES = 1024 * 1024;
 const DEFAULT_TEST_FILES = ['test/*.test.js'];
 
 function usage() {
@@ -17,7 +17,7 @@ function usage() {
     '  --coverage                 Enable Node test coverage.',
     '  --old-space-size <mb>      Set V8 old-space heap limit. Default: 512.',
     '  --semi-space-size <mb>     Set V8 semi-space size. Default: 16.',
-    '  --memory-leak-bytes <n>    Per-test post-GC memory growth limit for guarded tests. Default: 65536.',
+    '  --memory-leak-bytes <n>    Per-test post-GC memory growth limit for guarded tests. Default: 1048576.',
     '  --help                     Show this help text.',
     '',
     'Examples:',

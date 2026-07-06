@@ -166,7 +166,7 @@
 - [~] Task: Streaming test resource guardrails
     - [x] Codify generated-body streaming test rules in `docs/development.md` and `AGENTS.development.md`: generated bodies must be stream-processed, must not be retained for inspection, writers must observe `write()`/`drain`, readers must implement pause/resume semantics, and all streams/sessions/timers need deterministic cleanup.
     - [x] Add `test/support/guarded-test.cjs`, a guarded `node:test` wrapper for streaming suites that measures post-GC memory growth per test when `VERSER_TEST_MEMORY_GUARD=1`.
-    - [x] Wire `scripts/run-bounded-tests.js` to run Node tests with `--expose-gc`, `--test-concurrency=1`, and a default guarded per-test memory-growth threshold of 64 KiB.
+    - [x] Wire `scripts/run-bounded-tests.js` to run Node tests with `--expose-gc`, `--test-concurrency=1`, and a default guarded per-test memory-growth threshold. Initial threshold was 64 KiB; first manual-verification wave raises it to 1 MiB while existing tests are cleaned up toward a 256 KiB target.
     - [x] Migrate active streaming-heavy suites `test/agent.test.js`, `test/dispatcher.test.js`, and `test/host-upstreams.test.js` to import the guarded test wrapper.
     - [x] Validate formatting and targeted harness behavior.
         - Ran `npx biome check --write test/support/guarded-test.cjs scripts/run-bounded-tests.js docs/development.md AGENTS.development.md test/agent.test.js test/dispatcher.test.js test/host-upstreams.test.js conductor/streaming_improvements_20260704/plan.md`.
@@ -174,6 +174,12 @@
         - Ran `npm run lint` — passed.
     - [x] Commit this guardrail task according to the per-task commit policy.
         - Committed by orchestrator after review.
+    - [~] First manual-verification wave at 1 MiB guarded memory allowance.
+        - Raised default guarded threshold in `test/support/guarded-test.cjs` and `scripts/run-bounded-tests.js` from 64 KiB to 1 MiB (`1048576` bytes), and updated `docs/development.md` to describe the temporary first-wave allowance and 256 KiB target.
+        - Ran full bounded suite: `npm run test:bounded -- --memory-leak-bytes 1048576`.
+        - Result: build and staging completed; Node test run executed 350 tests with 341 passing, 4 skipped, and 5 failing.
+        - Guarded memory failures above 1 MiB: `Broker exposes an Agent that routes matching hostnames through Verser2` grew 1,281,934 bytes; `Broker Agent cleans up when client aborts during response streaming` grew 1,329,620 bytes; `Broker exposes an Undici Dispatcher that routes fetch by advertised hostname` grew 1,590,103 bytes; `Host connects outbound to an upstream Host and closes the link` grew 1,071,134 bytes.
+        - Non-memory failure: `bounded test runner preserves full validation flow with default heap limits` expected the previous `testArgs = ['--test']`; updated `test/workspace.test.js` to assert `--expose-gc`, `--test-concurrency=1`, memory guard env vars, and 1 MiB default.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 

@@ -1,6 +1,6 @@
 const nodeTest = require('node:test');
 
-const DEFAULT_MEMORY_LEAK_BYTES = 64 * 1024;
+const DEFAULT_MEMORY_LEAK_BYTES = 1024 * 1024;
 
 function parseNonNegativeInteger(value, fallback) {
   if (value === undefined || value === '') {

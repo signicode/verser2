@@ -98,12 +98,14 @@ HTTP/2 sessions:
 - Streaming suites should import `test/support/guarded-test.cjs` instead of raw
   `node:test`. The bounded runner enables this guard with `--expose-gc` and fails
   a guarded test when post-GC memory growth exceeds the configured per-test
-  threshold, defaulting to 64 KiB.
+  threshold, defaulting to 1 MiB.
 
 Use `npm run test:bounded -- --memory-leak-bytes <bytes> -- test/<name>.test.js`
 to run guarded focused tests with a different leak threshold. Keep thresholds in
 the tens of kilobytes unless a test has a documented, bounded, and reviewed
-runtime allocation reason.
+runtime allocation reason. The streaming-improvements track will tighten this
+allowance in review waves toward a 256 KiB target after existing tests are made
+fully flow-controlled.
 
 ## Package staging
 

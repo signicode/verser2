@@ -41,7 +41,13 @@ test('bounded test runner preserves full validation flow with default heap limit
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*build/);
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*stage:packages/);
   assert.match(runnerSource, /DEFAULT_TEST_FILES\s*=\s*\['test\/\*\.test\.js'\]/);
-  assert.match(runnerSource, /testArgs\s*=\s*\['--test'\]/);
+  assert.match(runnerSource, /DEFAULT_MEMORY_LEAK_BYTES\s*=\s*1024\s*\*\s*1024/);
+  assert.match(
+    runnerSource,
+    /testArgs\s*=\s*\['--expose-gc',\s*'--test',\s*'--test-concurrency=1'\]/,
+  );
+  assert.match(runnerSource, /VERSER_TEST_MEMORY_GUARD:\s*'1'/);
+  assert.match(runnerSource, /VERSER_TEST_MEMORY_LEAK_BYTES:\s*String\(options\.memoryLeakBytes\)/);
   assert.match(runnerSource, /runCommand\(process\.execPath, testArgs/);
 });
 
