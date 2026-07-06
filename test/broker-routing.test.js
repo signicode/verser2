@@ -2471,14 +2471,26 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
   const guest = createGuest({ hostUrl, guestId: 'guest-revoke-active-1' });
 
   try {
-    let requestHeldResolve;
-    const requestHeld = new Promise((resolve) => { requestHeldResolve = resolve; });
-    let requestDataReceived = false;
+    let postRevokeDataResolve;
+    const postRevokeData = new Promise((resolve) => { postRevokeDataResolve = resolve; });
+    let preRevokeDataResolve;
+    const preRevokeData = new Promise((resolve) => { preRevokeDataResolve = resolve; });
+    let seenRevocation = false;
+
     guest.attach((request, response) => {
       request.on('data', (chunk) => {
-        requestDataReceived = true;
+        if (seenRevocation) {
+          // Resolve when the specific post-revocation data chunk arrives
+          if (chunk.toString('utf8').includes('more-data')) {
+            postRevokeDataResolve();
+          }
+        } else {
+          // Resolve on the first pre-revocation data chunk
+          if (chunk.toString('utf8').includes('start')) {
+            preRevokeDataResolve();
+          }
+        }
       });
-      requestHeldResolve();
     }, 'revoke-active.local.test');
 
     await broker.connect();
@@ -2499,23 +2511,36 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
       (error) => error,
     );
 
+    // Write the first chunk before revocation
     body.write(Buffer.from('start'));
 
-    // Wait for the request to reach the guest handler
-    await requestHeld;
+    // Wait for the first data chunk to arrive at the guest handler
+    await Promise.race([
+      preRevokeData,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('pre-revocation data did not arrive')), 200),
+      ),
+    ]);
 
     // Revoke the route
     const revokeResult = await guest.revokeRoutes(['revoke-active.local.test']);
     assert.equal(revokeResult.status, 'ack');
 
+    // Signal the handler that revocation has occurred
+    seenRevocation = true;
+
     // Revocation alone does NOT close the active lease (known gap).
     // The request should still be alive after revocation.
-    // Verify by writing more data and ensuring it's received.
+    // Write more data and prove it arrives at the guest handler specifically after revocation.
     body.write(Buffer.from('more-data'));
 
-    // Give time for the extra data to arrive
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(requestDataReceived, true);
+    // Wait for the post-revocation data to arrive with a short timeout
+    await Promise.race([
+      postRevokeData,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('post-revocation data was not received — revocation may have cancelled the stream')), 100),
+      ),
+    ]);
 
     // Only Guest disconnect closes the active lease stream
     await guest.close('test-disconnect');

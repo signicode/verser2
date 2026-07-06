@@ -64,6 +64,11 @@
         - All added tests intentionally document these gaps without marking them as passing behavior.
         - Validation commands: `node --test --test-name-pattern="<pattern>" test/broker-routing.test.js test/dispatcher.test.js test/host-upstreams.test.js`
         - Validation results: 11/11 new characterization tests pass (3 document known gaps without failing).
+    - [x] Oracle review of Phase 1 characterization tests:
+        - Finding #1: `test/broker-routing.test.js` route-revocation test used `requestDataReceived` which was set by pre-revocation chunk. **Fixed**: Changed to promise-based tracking that specifically resolves when post-revocation (`more-data`) chunk arrives.
+        - Finding #2: `test/dispatcher.test.js` fetch cancellation test only checked `reader.cancel()` resolved. **Fixed**: Restructured to prove Guest-side request stream ends after cancel via `request.resume()` (flowing mode to consume buffered data) + `request.once('end')`.
+        - Timing flake reduction: Replaced polling/boolean patterns with promise races and bounded timeouts throughout touched tests.
+        - Validation after fixes: `node --test test/broker-routing.test.js test/dispatcher.test.js` → 57/57 pass, 0 fail.
 - [ ] Task: Conductor - Phase Checkpoint 'Track Setup, Design Baseline, and Roadmap Pruning' (Protocol in workflow.md)
 
 ## Phase 2: Core Node HTTP Streaming and Abort Propagation

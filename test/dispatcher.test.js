@@ -328,13 +328,23 @@ test('Broker Dispatcher streams large response bodies with controlled backpressu
 
 // ================ Characterization: Dispatcher Cancel During Streamed Response ================
 
-test('Broker Dispatcher fetch cancellation during streamed response closes the underlying stream', async () => {
+test('Broker Dispatcher fetch cancellation during streamed response propagates to Guest-side lease stream', async () => {
+  let requestEndResolve;
+  const requestEnded = new Promise((resolve) => { requestEndResolve = resolve; });
+
   const route = await createConnectedRoute(
     'dispatcher-cancel-response.local.test',
-    (_request, response) => {
+    (request, response) => {
       response.writeHead(200, { 'content-type': 'text/plain' });
       response.write(Buffer.from('first-chunk'));
-      // Don't end — keep streaming
+
+      // Put the request stream in flowing mode so that buffered data is
+      // consumed and the 'end' event can fire when the pipe completes.
+      // Without resume(), the PassThrough buffers data and neither 'end'
+      // nor 'close' fires even if the underlying source is destroyed.
+      request.resume();
+
+      request.once('end', requestEndResolve);
     },
     { brokerId: 'broker-dispatcher-cancel-response', guestId: 'guest-dispatcher-cancel-response' },
   );
@@ -346,9 +356,19 @@ test('Broker Dispatcher fetch cancellation during streamed response closes the u
     const reader = response.body.getReader();
     const first = await reader.read();
     assert.equal(Buffer.from(first.value).toString('utf8'), 'first-chunk');
-    // Cancel the reader — this should propagate back
+
+    // Cancel the reader — this sends RST_STREAM back through the Host,
+    // which closes the Guest lease stream.  The pipe in MinimalIncomingMessage
+    // detects the source 'close' and ends the PassThrough, which fires 'end'
+    // on the handler's request object.
     await reader.cancel();
-    // Verify no error — cancel should be clean
+
+    await Promise.race([
+      requestEnded,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Guest request stream did not end after fetch reader cancel')), 150),
+      ),
+    ]);
   } finally {
     await closeRoute(route);
   }
