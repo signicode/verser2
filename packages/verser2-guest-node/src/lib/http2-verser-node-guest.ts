@@ -420,15 +420,56 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     });
 
     return new Promise((resolve, reject) => {
+      let completed = false;
+      // Track whether we initiated the lease cancellation ourselves (e.g.
+      // handler threw after response start). When we close the lease stream
+      // with CANCEL, the same client-side H2 stream receives the RST and
+      // triggers 'aborted', which would re-emit a spurious error on the
+      // already-ended request. We suppress that case.
+      let selfCancelled = false;
+      const complete = (): void => {
+        if (completed) return;
+        completed = true;
+        resolve();
+      };
+
       localResponse.once('finish', () => {
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
           requestId: metadata.requestId,
         });
-        resolve();
+        complete();
       });
-      localResponse.once('error', reject);
-      lease.stream.once('close', resolve);
+      localResponse.once('error', (err) => {
+        completed = true;
+        reject(err);
+      });
+
+      // Detect H2 RST cancellation from the remote peer (e.g. Broker abort)
+      // and propagate as an 'error' event on the handler's request stream.
+      // Note: lease stream emits 'end' (from pipe cleanup) BEFORE 'aborted',
+      // so the PassThrough may have already ended normally by the time
+      // we detect the RST. We emit 'error' directly instead of calling
+      // destroy() because destroy() on an already-ended stream is a no-op.
+      lease.stream.once('aborted', () => {
+        if (completed || selfCancelled) return;
+        const rst = lease.stream.rstCode;
+        if (rst !== undefined && rst !== http2.constants.NGHTTP2_NO_ERROR) {
+          const cancelError = createVerserError(
+            'stream-failure',
+            'Request stream was cancelled by the remote peer',
+            {
+              requestId: metadata.requestId,
+              leaseId: lease.leaseId,
+              rstCode: String(rst),
+            },
+          );
+          localRequest.emit('error', cancelError);
+        }
+      });
+      lease.stream.once('close', () => {
+        complete();
+      });
 
       try {
         listener(localRequest, localResponse);
@@ -444,6 +485,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
           error: verserError,
         });
         if (localResponse.headersStarted) {
+          selfCancelled = true;
           lease.stream.close(http2.constants.NGHTTP2_CANCEL);
           resolve();
           return;

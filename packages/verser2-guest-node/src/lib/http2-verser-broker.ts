@@ -256,11 +256,33 @@ export class Http2VerserBroker implements VerserBroker {
       }
 
       if (body instanceof nodeStream.Readable) {
+        const cleanupBodyPipe = (): void => {
+          body.unpipe(stream);
+          body.destroy();
+        };
         body.once('error', (error) => {
+          cleanupBodyPipe();
           if (!stream.closed && !stream.destroyed) {
             stream.close(http2.constants.NGHTTP2_CANCEL);
           }
           reject(error);
+        });
+        // If the H2 stream is closed (e.g. by remote RST) while the body
+        // is still being piped, stop forwarding body data to the closed
+        // stream and reject the pending promise if no response arrived.
+        stream.once('close', () => {
+          cleanupBodyPipe();
+          if (
+            stream.rstCode !== undefined &&
+            stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR
+          ) {
+            reject(
+              createVerserError('stream-failure', 'Stream was reset by remote peer', {
+                targetId: request.targetId,
+                rstCode: String(stream.rstCode),
+              }),
+            );
+          }
         });
         body.pipe(stream);
         return;

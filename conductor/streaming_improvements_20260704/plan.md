@@ -105,12 +105,28 @@
     - *Route revocation during active stream*: The current behavior (revocation removes routes from the registry but does not interrupt active lease streams) is intentional — active requests complete normally, new routing fails with `missing-guest`. Changing this belongs in Phase 3 (Federation/Keep-Alive) where idle-lease and waiting-stream lifecycle semantics are addressed. The existing gap test at `test/broker-routing.test.js` line 2466 continues to characterize this behavior.
     - *Broker abort → Guest handler 'error' event*: NGHTTP2_CANCEL propagation to the Guest handler's request stream (`IncomingMessage`/`MinimalIncomingMessage`) requires Guest-side changes — either at the H2 stream level (detecting `rstCode !== NO_ERROR` in `dispatchLeasedRequest`) or in the `MinimalIncomingMessage` wrapper. This is part of Task 2 ("Harden Node Guest and Broker streaming surfaces"). The existing gap test at line 2560 continues to characterize the gap.
     - *Federated abort propagation*: The federation-stream paths (`routeH2BrokerRequestOverFederationStream`, `routeLocalRequestOverFederationStream`) already use the `cleanupCancellation()` pattern and correct error propagation. Federation-specific abort propagation changes belong in Phase 3.
-- [ ] Task: Harden Node Guest and Broker streaming surfaces
-    - [ ] Improve Node Broker `request()` streaming behavior, including large bodies and abort/cancel handling.
-    - [ ] Improve Node Guest minimal HTTP shim behavior for streamed request and response bodies where needed.
-    - [ ] Preserve semantic streaming without promising literal HTTP/1 chunk-frame preservation.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-guest-node` and focused Node Guest/Broker tests.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Harden Node Guest and Broker streaming surfaces
+     - [x] Review existing common helpers before implementation and avoid duplicating protocol-neutral logic.
+         - Common helpers in `@signicode/verser-common` (`envelope.ts`, `stream-readers.ts`, `body.ts`, `errors.ts`) were reviewed. No new common helpers were needed — the existing `createVerserError`, `encodeVerserEnvelope`, and `readLeaseRequestMetadataFromStream` surface is sufficient.
+         - Reuse decision: no common-library extraction needed. The `stream-failure` VerserError code already exists for stream-level failures.
+     - [x] Improve Node Broker `request()` streaming behavior, including large bodies and abort/cancel handling.
+         - `http2-verser-broker.ts` `requestOnce()`: Added `stream.once('close')` handler that cleans up the body pipe (`body.unpipe(stream)`, `body.destroy()`) when the H2 stream closes mid-stream. When `rstCode` indicates a non-NO_ERROR code, the pending request promise is rejected with a `stream-failure` error, preventing a hung promise when the remote peer resets the stream during body upload.
+     - [x] Improve Node Guest minimal HTTP shim behavior for streamed request and response bodies where needed.
+         - `http2-verser-node-guest.ts` `dispatchLeasedRequest()`: Added `lease.stream.once('aborted')` handler that detects H2 RST cancellation (non-NO_ERROR `rstCode`) and propagates a `stream-failure` error to the handler's request stream via `localRequest.emit('error', ...)`. The error fires after the request stream has ended normally (because H2 'end' fires before 'aborted'), so `emit('error')` is used instead of `destroy()` (which would be a no-op on an already-ended stream).
+         - Added `selfCancelled` flag to suppress spurious error emission when the Guest itself cancels the lease (e.g. handler throws after response start), avoiding double-reporting.
+         - `minimal-http.ts` `MinimalServerResponse`: Added `'close'` listener on output stream that emits `stream-failure` error if the output stream closes with a non-NO_ERROR RST code before the response finishes. Also added `finished` property to track whether `end()` was called.
+         - `minimal-http.ts` `MinimalIncomingMessage`: Added default no-op `'error'` handler to prevent process crashes from unhandled 'error' events on the PassThrough, matching Node.js `IncomingMessage` behavior. Handlers that explicitly listen for `'error'` still receive the event.
+     - [x] Preserve semantic streaming without promising literal HTTP/1 chunk-frame preservation.
+         - All changes work within the existing H2 DATA frame forwarding model. No chunked encoding re-introduction or HTTP/1 frame preservation.
+     - [x] Run `npm run build --workspace=@signicode/verser2-guest-node` and focused Node Guest/Broker tests.
+         - Build: `npm run build --workspace=@signicode/verser2-guest-node` passes.
+         - Host regression build: `npm run build --workspace=@signicode/verser2-host` passes.
+         - `node --test test/broker-routing.test.js test/guest-node.test.js test/dispatcher.test.js test/agent.test.js test/host-upstreams.test.js test/end-to-end.test.js`: 126/126 pass.
+         - `node --test test/common-envelope.test.js test/docs.test.js`: 18/18 pass.
+         - New passing behavior: "Broker request abort propagates as an error event to Guest handler request stream" — previously a characterization gap, now the Guest request stream receives `'error'` with `code='stream-failure'` when the remote peer cancels.
+         - Existing gap restored: "Federated forwarding does NOT propagate mid-stream Broker abort as an explicit error to downstream Guest" — federation-local-guest path requires separate work in Phase 3 (AbortController/signal propagation in `routeLocalRequestDispatch`).
+     - [x] Commit this completed task according to the per-task commit policy.
+         - Committed by orchestrator after review and validation.
 - [ ] Task: Harden Agent and Dispatcher/fetch streaming surfaces
     - [ ] Improve Agent request body streaming, response streaming, chunked upload handling, and abort signal propagation where feasible.
     - [ ] Improve Dispatcher/fetch streaming and abort behavior while preserving Undici-compatible semantics.

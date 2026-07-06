@@ -2557,20 +2557,23 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
 
 // ================ Characterization: Broker Abort Propagation to Guest Handler ================
 
-test('Broker request abort does NOT propagate as an explicit error event to Guest handler request stream (gap: cancellation closes lease but no error event)', async () => {
+test('Broker request abort propagates as an error event to Guest handler request stream', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-abort-guest-1' });
-  const guest = createGuest({ hostUrl, guestId: 'guest-abort-guest-1' });
+  const broker = createBroker({ hostUrl, brokerId: 'broker-abort-guest-2' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-abort-guest-2' });
 
   try {
     let requestError;
+    let requestErrorResolve;
+    const requestErrorEvent = new Promise((resolve) => { requestErrorResolve = resolve; });
     const requestClosed = new Promise((resolve) => {
       guest.attach((request, response) => {
         request.resume();
         request.once('error', (err) => {
           requestError = err;
+          requestErrorResolve();
         });
         request.once('close', () => {
           resolve();
@@ -2587,9 +2590,9 @@ test('Broker request abort does NOT propagate as an explicit error event to Gues
       const brokerStream = rawBrokerSession.request({
         ':method': 'POST',
         ':path': '/verser/request',
-        'x-verser-target-id': 'guest-abort-guest-1',
-        'x-verser-request-id': 'req-abort-guest-1',
-        'x-verser-source-id': 'broker-abort-guest-1',
+        'x-verser-target-id': 'guest-abort-guest-2',
+        'x-verser-request-id': 'req-abort-guest-2',
+        'x-verser-source-id': 'broker-abort-guest-2',
         'x-verser-method': 'POST',
         'x-verser-path': '/abort-test',
       });
@@ -2597,8 +2600,7 @@ test('Broker request abort does NOT propagate as an explicit error event to Gues
       await new Promise((resolve) => setTimeout(resolve, 50));
       brokerStream.close(http2.constants.NGHTTP2_CANCEL);
 
-      // The lease stream closes (detected via request.on('close')),
-      // but the request does NOT receive an explicit 'error' event — this is a known gap.
+      // The lease stream closes, detected via request.on('close')
       await Promise.race([
         requestClosed,
         new Promise((_, reject) =>
@@ -2606,9 +2608,19 @@ test('Broker request abort does NOT propagate as an explicit error event to Gues
         ),
       ]);
 
-      // The stream closes but no error event fires — this characterizes the gap
-      assert.equal(requestError, undefined,
-        'Expected no error event — Broker abort does not propagate as Guest request error (known gap)');
+      // Wait for error event to fire (it fires after close due to H2 event ordering)
+      await Promise.race([
+        requestErrorEvent,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Error event did not fire after close')), 500),
+        ),
+      ]);
+
+      // The request SHOULD receive an explicit error event with stream-failure code
+      assert.notEqual(requestError, undefined,
+        'Expected error event — Broker abort should propagate as Guest request error');
+      assert.equal(requestError.code, 'stream-failure');
+      assert.match(requestError.message, /cancelled|cancel/i);
     } finally {
       rawBrokerSession.destroy();
     }
