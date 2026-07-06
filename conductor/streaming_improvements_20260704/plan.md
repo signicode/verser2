@@ -69,7 +69,13 @@
         - Finding #2: `test/dispatcher.test.js` fetch cancellation test used GET with empty body; `request.once('end')` could fire before `reader.cancel()` due to natural stream end, so it did not prove cancellation propagation. **Fixed**: Changed to POST with a streaming `PassThrough` request body that stays open — the handler's request stream cannot end on its own. Pre-cancel 30ms window proves `end`/`close` did not fire before cancel. After `reader.cancel()`, the Guest-side request stream `end`/`close` fires within 150ms, proving remote propagation.
         - Timing flake reduction: Replaced polling/boolean patterns with promise races and bounded timeouts throughout touched tests.
         - Validation after fixes: `node --test test/broker-routing.test.js test/dispatcher.test.js` → 57/57 pass, 0 fail.
-- [ ] Task: Conductor - Phase Checkpoint 'Track Setup, Design Baseline, and Roadmap Pruning' (Protocol in workflow.md)
+- [x] Task: Conductor - Phase Checkpoint 'Track Setup, Design Baseline, and Roadmap Pruning' (Protocol in workflow.md)
+    - Phase 1 completed on branch `conductor/streaming_improvements` with draft PR https://github.com/signicode/verser2/pull/51.
+    - Common-library review/deduplication: Phase 1 was documentation and characterization-test work. Existing common helpers in `@signicode/verser-common` were inventoried for future phases; no new reusable code emerged and no common-code movement was needed.
+    - Validation: `node --test test/docs.test.js test/python-guest-documentation.test.js` passed 9/9; `node --test test/broker-routing.test.js test/dispatcher.test.js test/host-upstreams.test.js` passed 94/94 before review fixes; post-review targeted validation `node --test test/dispatcher.test.js` passed 10/10 and `node --test test/broker-routing.test.js test/dispatcher.test.js` passed 57/57.
+    - Coverage: no production behavior changed; Phase 1 added characterization tests and documentation updates, so coverage threshold is not applicable to production code changes.
+    - Review: Oracle review initially held Phase 2 for two characterization-test issues. The route-revocation and dispatcher-cancellation tests were strengthened, then oracle final re-review reported no blocking findings and approved beginning Phase 2.
+    - Phase checkpoint commits: setup `19d1d59`, PR record `ea15b2c`, inventory `2908a85`, roadmap/docs pruning `ee6e447`, characterization tests `a86ec24`, characterization review fixes `5d0607e`, dispatcher cancellation proof `5129297`.
 
 ## Phase 2: Core Node HTTP Streaming and Abort Propagation
 
