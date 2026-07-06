@@ -67,6 +67,44 @@ unsafe inherited virtual-memory cap. Prefer focused Bun or Python validation whe
 diagnosing those paths, and keep output/timeouts bounded so failed subprocesses do
 not leak handles or accumulate unbounded logs.
 
+### Streaming test resource rules
+
+Streaming tests must prove streaming behavior without retaining generated bodies
+for inspection. These rules are mandatory for tests that generate request or
+response bodies, keep streams open, exercise abort/cancel behavior, or use raw
+HTTP/2 sessions:
+
+- Process generated request and response bodies incrementally. Do not use
+  `text()`, `readBody()`, `Buffer.concat()`, unbounded `chunks.push(...)`, or
+  whole-body equality assertions for generated payloads.
+- Prefer `Writable` sinks, byte counters, hashes, or immediate `data` handlers on
+  the read side. Keep only scalar totals, hashes, or the last bounded diagnostic
+  sample.
+- Writers must observe flow-control signals. If `write()` returns `false`, wait
+  for `drain` before writing more. Do not loop writes into a stream without a
+  drain path.
+- Readers must implement pause/resume or equivalent backpressure behavior when
+  testing slow consumers. Do not let a generated producer write faster than the
+  test reader can consume.
+- Every `PassThrough`, raw HTTP/2 stream/session, request, response, Host, Guest,
+  Broker, Agent, Dispatcher body, and timer must be ended, destroyed, closed, or
+  cleared in `finally`.
+- Intentionally open streams require a deterministic rendezvous promise, a hard
+  watchdog, and an explicit cancellation path. Avoid sleeps as flow-control or
+  setup synchronization.
+- Event collectors must be bounded. Store counts and the last few events instead
+  of unbounded arrays, and never stringify complete event histories in assertion
+  messages.
+- Streaming suites should import `test/support/guarded-test.cjs` instead of raw
+  `node:test`. The bounded runner enables this guard with `--expose-gc` and fails
+  a guarded test when post-GC memory growth exceeds the configured per-test
+  threshold, defaulting to 64 KiB.
+
+Use `npm run test:bounded -- --memory-leak-bytes <bytes> -- test/<name>.test.js`
+to run guarded focused tests with a different leak threshold. Keep thresholds in
+the tens of kilobytes unless a test has a documented, bounded, and reviewed
+runtime allocation reason.
+
 ## Package staging
 
 Build before staging packages:

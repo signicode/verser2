@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const http2 = require('node:http2');
 const { PassThrough } = require('node:stream');
 const { text } = require('node:stream/consumers');
-const { test } = require('node:test');
+const { test } = require('./support/guarded-test.cjs');
 
 const {
   loadVerserGuestBun,

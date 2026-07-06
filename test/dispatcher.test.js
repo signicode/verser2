@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { PassThrough } = require('node:stream');
-const test = require('node:test');
+const test = require('./support/guarded-test.cjs');
 const { fetch } = require('undici');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');

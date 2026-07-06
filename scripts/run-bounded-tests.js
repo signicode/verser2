@@ -4,6 +4,7 @@ const { spawnSync } = require('node:child_process');
 
 const DEFAULT_OLD_SPACE_SIZE_MB = 512;
 const DEFAULT_SEMI_SPACE_SIZE_MB = 16;
+const DEFAULT_MEMORY_LEAK_BYTES = 64 * 1024;
 const DEFAULT_TEST_FILES = ['test/*.test.js'];
 
 function usage() {
@@ -16,6 +17,7 @@ function usage() {
     '  --coverage                 Enable Node test coverage.',
     '  --old-space-size <mb>      Set V8 old-space heap limit. Default: 512.',
     '  --semi-space-size <mb>     Set V8 semi-space size. Default: 16.',
+    '  --memory-leak-bytes <n>    Per-test post-GC memory growth limit for guarded tests. Default: 65536.',
     '  --help                     Show this help text.',
     '',
     'Examples:',
@@ -38,6 +40,7 @@ function parseArgs(argv) {
     coverage: false,
     oldSpaceSizeMb: DEFAULT_OLD_SPACE_SIZE_MB,
     semiSpaceSizeMb: DEFAULT_SEMI_SPACE_SIZE_MB,
+    memoryLeakBytes: DEFAULT_MEMORY_LEAK_BYTES,
     testFiles: [],
   };
 
@@ -84,6 +87,24 @@ function parseArgs(argv) {
       }
       options.semiSpaceSizeMb = parsePositiveInteger(next, '--semi-space-size');
       index += 1;
+      continue;
+    }
+
+    if (arg === '--memory-leak-bytes') {
+      const next = argv[index + 1];
+      if (!next) {
+        throw new Error('Missing value for --memory-leak-bytes');
+      }
+      options.memoryLeakBytes = parsePositiveInteger(next, '--memory-leak-bytes');
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--memory-leak-bytes=')) {
+      options.memoryLeakBytes = parsePositiveInteger(
+        arg.slice('--memory-leak-bytes='.length),
+        '--memory-leak-bytes',
+      );
       continue;
     }
 
@@ -146,7 +167,7 @@ function main() {
   }
 
   const testFiles = options.testFiles.length > 0 ? options.testFiles : DEFAULT_TEST_FILES;
-  const testArgs = ['--test'];
+  const testArgs = ['--expose-gc', '--test', '--test-concurrency=1'];
   if (options.coverage) {
     testArgs.push('--experimental-test-coverage');
   }
@@ -155,10 +176,12 @@ function main() {
   const runEnv = {
     ...process.env,
     NODE_OPTIONS: mergeNodeOptions(process.env.NODE_OPTIONS || '', options),
+    VERSER_TEST_MEMORY_GUARD: '1',
+    VERSER_TEST_MEMORY_LEAK_BYTES: String(options.memoryLeakBytes),
   };
 
   console.log(
-    `Running bounded tests with --max-old-space-size=${options.oldSpaceSizeMb} and --max-semi-space-size=${options.semiSpaceSizeMb}`,
+    `Running bounded tests with --max-old-space-size=${options.oldSpaceSizeMb}, --max-semi-space-size=${options.semiSpaceSizeMb}, --test-concurrency=1, and guarded per-test memory growth <= ${options.memoryLeakBytes} bytes`,
   );
 
   runCommand(npmCommand(), ['run', 'build'], { env: runEnv });

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const test = require('node:test');
+const test = require('./support/guarded-test.cjs');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
 const {

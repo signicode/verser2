@@ -163,6 +163,17 @@
     - Coverage: production behavior changed in Host and Node transport surfaces; focused success, abort, cancellation, redirect replay, large-body, and regression tests were added/updated for the changed behavior.
     - Review: Oracle Phase 2 review reported no blocking findings and approved beginning Phase 3. Non-blocking recommendations: some abort tests still use short fixed sleeps and Agent abort tests could later add stronger Guest-side close/error observations.
     - Phase checkpoint commits: Host lease cleanup `fa852ba`, Node lease cancellation `9371d28`, Agent/Dispatcher cleanup `1fdc185`.
+- [~] Task: Streaming test resource guardrails
+    - [x] Codify generated-body streaming test rules in `docs/development.md` and `AGENTS.development.md`: generated bodies must be stream-processed, must not be retained for inspection, writers must observe `write()`/`drain`, readers must implement pause/resume semantics, and all streams/sessions/timers need deterministic cleanup.
+    - [x] Add `test/support/guarded-test.cjs`, a guarded `node:test` wrapper for streaming suites that measures post-GC memory growth per test when `VERSER_TEST_MEMORY_GUARD=1`.
+    - [x] Wire `scripts/run-bounded-tests.js` to run Node tests with `--expose-gc`, `--test-concurrency=1`, and a default guarded per-test memory-growth threshold of 64 KiB.
+    - [x] Migrate active streaming-heavy suites `test/agent.test.js`, `test/dispatcher.test.js`, and `test/host-upstreams.test.js` to import the guarded test wrapper.
+    - [x] Validate formatting and targeted harness behavior.
+        - Ran `npx biome check --write test/support/guarded-test.cjs scripts/run-bounded-tests.js docs/development.md AGENTS.development.md test/agent.test.js test/dispatcher.test.js test/host-upstreams.test.js conductor/streaming_improvements_20260704/plan.md`.
+        - Ran guarded smoke test: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=65536 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker Dispatcher rejects fetch requests for non-advertised hostnames" test/dispatcher.test.js` — failed fast with post-test memory growth of 186,856 bytes, confirming the guard is active and that existing streaming tests need cleanup before bounded guarded validation can pass.
+        - Ran `npm run lint` — passed.
+    - [x] Commit this guardrail task according to the per-task commit policy.
+        - Committed by orchestrator after review.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 

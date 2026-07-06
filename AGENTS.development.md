@@ -29,6 +29,11 @@
 - Biome ignores `conductor/setup_state.json`, `dist`, `node_modules`, and `package-lock.json`.
 - Biome enforces single quotes, semicolons, trailing commas, and no explicit `any`.
 
+## Streaming test rules
+- Tests that generate request/response bodies must stream-process them. Do not retain generated bodies with `Buffer.concat`, `text()`, unbounded `chunks.push`, or whole-body inspection.
+- Generated-body writers must respect `write()`/`drain`; readers must implement pause/resume or equivalent backpressure.
+- Use bounded counters/hashes/Writable sinks for assertions, close all streams/sessions/timers in `finally`, and import `test/support/guarded-test.cjs` for streaming suites so bounded runs fail on post-test memory growth above the configured tens-of-kilobytes threshold.
+
 ## Product terminology
 - Use the repo terms precisely: Host accepts guest connections and routes requests; Guest connects outbound to a Host; Broker is the guest-side component that connects to hosts; Peer is any connected client that can send/receive through the host or directly when supported.
 - Do not add HTTP/2 multiplexing, routing, or HTTP/3 behavior unless a track explicitly asks for it.
