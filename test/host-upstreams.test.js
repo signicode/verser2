@@ -15,6 +15,19 @@ const { createVerserHost } = loadVerserHost();
 const { createVerserBroker } = loadVerserGuestNode();
 const { createVerserBroker: createVerserBunBroker } = loadVerserGuestBun();
 
+function once(emitter, eventName) {
+  return new Promise((resolve, reject) => {
+    emitter.once(eventName, resolve);
+    emitter.once('error', reject);
+  });
+}
+
+async function connectRawClient(port) {
+  const session = http2.connect(`https://127.0.0.1:${port}`, { ca: trusted.certificate });
+  await once(session, 'connect');
+  return session;
+}
+
 function tlsOptions(clientAuth) {
   return {
     cert: trusted.certificate,
@@ -1716,6 +1729,214 @@ test('Federated lifecycle loop safety — route-lifecycle frame with duplicate _
     );
   } finally {
     await hub.close();
+    await manager.close();
+  }
+});
+
+// ================ Characterization: Federation Upstream Disconnect During Active Stream ================
+
+test('Upstream disconnect during an active federated request fails the Broker request', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    let requestHeldResolve;
+    const requestHeld = new Promise((resolve) => { requestHeldResolve = resolve; });
+    await runner.attachLocalGuest({
+      guestId: 'guest-federated-disconnect',
+      routedDomains: ['federated-disconnect.verser.test'],
+      listener: (request, response) => {
+        request.resume();
+        requestHeldResolve();
+        // Do not end — keep stream open
+      },
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-federated-disconnect', 'federated-disconnect.verser.test').length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-federated-disconnect',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('federated-disconnect.verser.test');
+
+    const body = new PassThrough();
+    const requestPromise = broker.request({
+      targetId: 'guest-federated-disconnect',
+      method: 'POST',
+      path: '/federated-disconnect',
+      headers: { host: 'federated-disconnect.verser.test' },
+      body,
+    });
+    body.write(Buffer.from('start'));
+    await requestHeld;
+
+    // Disconnect the upstream link
+    await runner.close('upstream-disconnect-test');
+
+    // The Broker request should fail
+    await assert.rejects(requestPromise, (error) => {
+      assert.match(error.message, /closed|disconnect|metadata|upstream|lease/i);
+      return true;
+    });
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+// ================ Characterization: Federation Upstream Abort Propagation ================
+
+test('Federated forwarding does NOT propagate mid-stream Broker abort as an explicit error to downstream Guest (gap: cancellation closes lease but no error event through federation)', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    let guestRequestError;
+    const requestClosed = new Promise((resolve) => {
+      runner.attachLocalGuest({
+        guestId: 'guest-federated-abort',
+        routedDomains: ['federated-abort.verser.test'],
+        listener: (request, response) => {
+          request.resume();
+          request.once('error', (err) => {
+            guestRequestError = err;
+          });
+          request.once('close', () => {
+            resolve();
+          });
+        },
+      });
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-federated-abort', 'federated-abort.verser.test').length,
+        1,
+      ),
+    );
+
+    // Use a raw H2 session to send a broker request and then cancel it
+    const rawBrokerSession = await connectRawClient(manager.address.port);
+    try {
+      const brokerStream = rawBrokerSession.request({
+        ':method': 'POST',
+        ':path': '/verser/request',
+        'x-verser-target-id': 'guest-federated-abort',
+        'x-verser-request-id': 'req-federated-abort-1',
+        'x-verser-source-id': 'broker-federated-abort',
+        'x-verser-method': 'POST',
+        'x-verser-path': '/federated-abort',
+      });
+      brokerStream.write(Buffer.from('body'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      brokerStream.close(http2.constants.NGHTTP2_CANCEL);
+
+      // The lease stream closes (detected via request.on('close')),
+      // but the request does NOT receive an explicit 'error' event through federation
+      await Promise.race([
+        requestClosed,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Guest request stream was not closed after Broker abort through federation')), 1500),
+        ),
+      ]);
+
+      // The stream closes but no error event fires — characterizes the gap
+      assert.equal(guestRequestError, undefined,
+        'Expected no error event — Broker abort does not propagate as Guest request error through federation (known gap)');
+    } finally {
+      rawBrokerSession.destroy();
+    }
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+// ================ Characterization: Waiter Cleanup After Host Close ================
+
+test('Federated request completes or fails cleanly when upstream Host closes during dispatch (characterization: no leaked state)', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    // Register a Guest on the runner
+    await runner.attachLocalGuest({
+      guestId: 'guest-federated-waiter',
+      routedDomains: ['federated-waiter.verser.test'],
+      listener: (_request, response) => response.end('never-called'),
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-federated-waiter', 'federated-waiter.verser.test').length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-federated-waiter',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('federated-waiter.verser.test');
+
+    const requestPromise = broker.request({
+      targetId: 'guest-federated-waiter',
+      method: 'GET',
+      path: '/federated-waiter',
+      headers: { host: 'federated-waiter.verser.test' },
+    });
+
+    // Close the runner (upstream) while request is in-flight
+    await runner.close('upstream-close-during-wait');
+
+    // The request should either succeed (if already dispatched) or fail (if waiting)
+    // Either outcome is acceptable for this characterization — the key is no leaked state
+    try {
+      const response = await requestPromise;
+      const body = await text(response.body);
+      assert.equal(body, 'never-called');
+    } catch {
+      // Failure due to upstream disconnect is also acceptable
+    }
+
+    // Verify the upstream is gone — no leaked state
+    assert.deepEqual(manager.getUpstreams(), []);
+  } finally {
+    await broker?.close();
+    await runner.close();
     await manager.close();
   }
 });

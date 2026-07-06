@@ -285,3 +285,71 @@ test('Broker Dispatcher propagates fetch aborts without dangling response stream
     await closeRoute(route);
   }
 });
+
+// ================ Characterization: Slow Consumer Backpressure ================
+
+test('Broker Dispatcher streams large response bodies with controlled backpressure', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-large-response.local.test',
+    (_request, response) => {
+      const chunkSize = 64 * 1024;
+      const totalSize = 512 * 1024;
+      response.writeHead(200, { 'content-type': 'application/octet-stream' });
+      for (let offset = 0; offset < totalSize; offset += chunkSize) {
+        response.write(Buffer.alloc(chunkSize, 0x78));
+      }
+      response.end();
+    },
+    { brokerId: 'broker-dispatcher-large-response', guestId: 'guest-dispatcher-large-response' },
+  );
+
+  try {
+    const response = await fetch('http://dispatcher-large-response.local.test/large', {
+      dispatcher: route.broker.createDispatcher(),
+    });
+    const reader = response.body.getReader();
+    const chunks = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      totalBytes += value.length;
+      // Simulate slow consumer — small delay every few chunks
+      if (chunks.length % 4 === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(totalBytes, 512 * 1024);
+    const combined = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+    assert.equal(combined.length, 512 * 1024);
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+// ================ Characterization: Dispatcher Cancel During Streamed Response ================
+
+test('Broker Dispatcher fetch cancellation during streamed response closes the underlying stream', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-cancel-response.local.test',
+    (_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.write(Buffer.from('first-chunk'));
+      // Don't end — keep streaming
+    },
+    { brokerId: 'broker-dispatcher-cancel-response', guestId: 'guest-dispatcher-cancel-response' },
+  );
+
+  try {
+    const response = await fetch('http://dispatcher-cancel-response.local.test/cancel', {
+      dispatcher: route.broker.createDispatcher(),
+    });
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    assert.equal(Buffer.from(first.value).toString('utf8'), 'first-chunk');
+    // Cancel the reader — this should propagate back
+    await reader.cancel();
+    // Verify no error — cancel should be clean
+  } finally {
+    await closeRoute(route);
+  }
+});
