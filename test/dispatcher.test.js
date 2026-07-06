@@ -328,39 +328,64 @@ test('Broker Dispatcher streams large response bodies with controlled backpressu
 
 // ================ Characterization: Dispatcher Cancel During Streamed Response ================
 
-test('Broker Dispatcher fetch cancellation during streamed response propagates to Guest-side lease stream', async () => {
+test('Broker Dispatcher fetch cancel during streamed POST response propagates to Guest-side request stream', async () => {
   let requestEndResolve;
   const requestEnded = new Promise((resolve) => { requestEndResolve = resolve; });
+  let requestEndedBeforeCancel = false;
 
   const route = await createConnectedRoute(
-    'dispatcher-cancel-response.local.test',
+    'dispatcher-cancel-post.test',
     (request, response) => {
+      // Consume request body in flowing mode so pipe data is drained and
+      // the stream can close when the source lease stream is destroyed.
+      request.resume();
+
+      // Write first response chunk early while the streaming request body
+      // is still being sent (keeps the Guest handler live).
       response.writeHead(200, { 'content-type': 'text/plain' });
       response.write(Buffer.from('first-chunk'));
 
-      // Put the request stream in flowing mode so that buffered data is
-      // consumed and the 'end' event can fire when the pipe completes.
-      // Without resume(), the PassThrough buffers data and neither 'end'
-      // nor 'close' fires even if the underlying source is destroyed.
-      request.resume();
-
-      request.once('end', requestEndResolve);
+      // Track end/close — with a streaming request body that never ends on
+      // its own, neither event fires until the remote response cancellation
+      // (reader.cancel()) destroys the lease and the pipe completes.
+      request.once('end', () => { requestEndResolve(); });
+      request.once('close', () => { requestEndResolve(); });
     },
-    { brokerId: 'broker-dispatcher-cancel-response', guestId: 'guest-dispatcher-cancel-response' },
+    { brokerId: 'broker-dispatcher-cancel-post', guestId: 'guest-dispatcher-cancel-post' },
   );
 
   try {
-    const response = await fetch('http://dispatcher-cancel-response.local.test/cancel', {
+    // POST with a streaming request body that stays open — the handler's
+    // request stream will NOT end on its own because the body is never
+    // closed.  Only response-stream cancellation will terminate it.
+    const reqBody = new PassThrough();
+    reqBody.write(Buffer.from('streaming-body'));
+
+    const response = await fetch('http://dispatcher-cancel-post.test/cancel-post', {
+      method: 'POST',
+      body: reqBody,
+      duplex: 'half',
       dispatcher: route.broker.createDispatcher(),
     });
     const reader = response.body.getReader();
     const first = await reader.read();
     assert.equal(Buffer.from(first.value).toString('utf8'), 'first-chunk');
 
+    // At this point the request body stream is still open (never ended),
+    // so the Guest request stream should NOT have ended yet.  Prove it by
+    // racing a short timeout; if the promise already resolved it means
+    // the stream ended for reasons other than our cancel.
+    await Promise.race([
+      requestEnded.then(() => { requestEndedBeforeCancel = true; }),
+      new Promise((resolve) => setTimeout(resolve, 30)),
+    ]);
+    assert.equal(requestEndedBeforeCancel, false,
+      'Guest request stream ended before reader.cancel() — test design invalid');
+
     // Cancel the reader — this sends RST_STREAM back through the Host,
-    // which closes the Guest lease stream.  The pipe in MinimalIncomingMessage
-    // detects the source 'close' and ends the PassThrough, which fires 'end'
-    // on the handler's request object.
+    // which destroys the Guest lease stream.  The pipe in
+    // MinimalIncomingMessage detects the source close and ends the
+    // PassThrough, firing end/close on the handler's request object.
     await reader.cancel();
 
     await Promise.race([
