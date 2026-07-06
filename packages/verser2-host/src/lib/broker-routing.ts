@@ -226,14 +226,27 @@ async function routeBrokerRequestOverLease(
   targetId: string,
 ): Promise<void> {
   let completed = false;
+
+  const cleanupCancellation = (): void => {
+    stream.off('aborted', cancelLease);
+    stream.off('error', cancelLease);
+  };
+
   const cancelLease = (): void => {
-    if (!completed && !lease.stream.closed) {
+    if (completed || lease.stream.closed) {
+      return;
+    }
+    cleanupCancellation();
+    // Unpipe so the lease stream no longer receives body data from the
+    // cancelled Broker stream before we close it.
+    stream.unpipe(lease.stream);
+    if (!lease.stream.closed) {
       lease.stream.close(http2.constants.NGHTTP2_CANCEL);
     }
   };
+
   stream.once('aborted', cancelLease);
   stream.once('error', cancelLease);
-  stream.once('close', cancelLease);
 
   const responsePromise = readLeaseResponseMetadataFromStream(lease.stream, {
     requestId,
@@ -261,14 +274,28 @@ async function routeBrokerRequestOverLease(
     ':status': responseMetadata.statusCode,
     ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
   });
+
+  // After response headers are sent, pipe the response body.
+  // Guest-side errors during response use NGHTTP2_INTERNAL_ERROR to
+  // distinguish from Broker-originated CANCEL in diagnostics.
   lease.stream.once('error', () => {
+    completed = true;
     if (!stream.closed) {
-      stream.close(http2.constants.NGHTTP2_CANCEL);
+      stream.close(http2.constants.NGHTTP2_INTERNAL_ERROR);
     }
+  });
+  lease.stream.once('close', () => {
+    completed = true;
+    cleanupCancellation();
   });
   lease.stream.pipe(stream);
   stream.once('finish', () => {
     completed = true;
+    cleanupCancellation();
+  });
+  stream.once('error', () => {
+    completed = true;
+    cleanupCancellation();
   });
 }
 

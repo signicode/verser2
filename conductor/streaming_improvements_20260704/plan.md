@@ -79,13 +79,32 @@
 
 ## Phase 2: Core Node HTTP Streaming and Abort Propagation
 
-- [ ] Task: Harden Host lease-stream request/response forwarding
-    - [ ] Review existing common helpers before implementation and avoid duplicating protocol-neutral stream/error logic.
-    - [ ] Improve Host Broker-to-Guest lease stream forwarding to preserve streaming/backpressure behavior and deterministic cleanup.
-    - [ ] Propagate Broker-side abort/cancel to Guest lease streams and clean up Host active/idle lease state.
-    - [ ] Propagate Guest-side response abort/failure to Broker response streams with structured diagnostics.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host` and focused Host routing tests.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Harden Host lease-stream request/response forwarding
+    - [x] Review existing common helpers before implementation and avoid duplicating protocol-neutral stream/error logic.
+        - Common helpers in `@signicode/verser-common` (`envelope.ts`, `stream-readers.ts`, `body.ts`, `errors.ts`) provide protocol-neutral envelope encode/decode, stream-based metadata reading, body normalization, and `VerserError` creation. No new common helpers were needed — the existing `encodeVerserEnvelope`, `readLeaseResponseMetadataFromStream`, and `createVerserError` surface is sufficient for the Host-only improvements.
+        - Host-side `utils.ts` `toVerserError()` is used for wrapping unknown errors and is already imported by `broker-routing.ts`.
+        - Reuse decision: no common-library extraction needed at this point. The `routeBrokerRequestOverLease` and `routeLocalRequestToH2Guest` patterns are Host-specific and do not duplicate protocol logic available in common.
+    - [x] Improve Host Broker-to-Guest lease stream forwarding to preserve streaming/backpressure behavior and deterministic cleanup.
+        - `routeBrokerRequestOverLease` (`broker-routing.ts`): Removed the overly broad `stream.once('close', cancelLease)` listener (which fired on *any* stream closure including normal completion) and replaced with focused `'aborted'` + `'error'` listeners only. Added proper listener cleanup (`cleanupCancellation()`) that fires on response-body pipeline completion (finish/error/close). Added `stream.unpipe()` before closing the lease on Broker abort to stop body data flow cleanly.
+        - `routeLocalRequestToH2Guest`: No changes needed — the signal-based cancellation and `finally`-based listener cleanup already provide correct cleanup.
+    - [x] Propagate Broker-side abort/cancel to Guest lease streams and clean up Host active/idle lease state.
+        - When Broker stream is aborted or errors, `cancelLease()` unipes the body pipe and closes the lease stream with `NGHTTP2_CANCEL`. The lease pool's existing `removeLease` handler (registered on lease stream 'close' in `node-http2-verser-host.ts`) already cleans up the active/idle maps.
+        - The error-envelope approach (writing a structured `'error'` envelope to the lease stream before closing) was considered but rejected: the Guest side is already past the request-envelope phase and reading body bytes at abort time, so an additional envelope would be consumed as corrupted body data rather than detected as a protocol error.
+    - [x] Propagate Guest-side response abort/failure to Broker response streams with structured diagnostics.
+        - Changed `lease.stream.once('error')` handler in `routeBrokerRequestOverLease` (post-response phase) to use `NGHTTP2_INTERNAL_ERROR` instead of `NGHTTP2_CANCEL`. This distinguishes Guest-side stream failures from Broker-originated cancellations in H2-level diagnostics.
+        - The response error handler now also sets `completed = true` to prevent any stale cancellation action.
+    - [x] Run `npm run build --workspace=@signicode/verser2-host` and focused Host routing tests.
+        - Build: `npm run build --workspace=@signicode/verser2-host` passes.
+        - `node --test test/broker-routing.test.js`: 47/47 pass (gap tests remain passing as characterization — behavior unchanged for Guest-side 'error' event propagation, which requires Guest code changes in the next task).
+        - `node --test test/dispatcher.test.js test/host-upstreams.test.js`: 47/47 pass.
+        - `node --test test/local-peers.test.js test/agent.test.js`: 30/30 pass.
+        - Orchestrator reran the same build and focused validations before commit with passing results.
+    - [x] Commit this completed task according to the per-task commit policy.
+
+    **Deferrals:**
+    - *Route revocation during active stream*: The current behavior (revocation removes routes from the registry but does not interrupt active lease streams) is intentional — active requests complete normally, new routing fails with `missing-guest`. Changing this belongs in Phase 3 (Federation/Keep-Alive) where idle-lease and waiting-stream lifecycle semantics are addressed. The existing gap test at `test/broker-routing.test.js` line 2466 continues to characterize this behavior.
+    - *Broker abort → Guest handler 'error' event*: NGHTTP2_CANCEL propagation to the Guest handler's request stream (`IncomingMessage`/`MinimalIncomingMessage`) requires Guest-side changes — either at the H2 stream level (detecting `rstCode !== NO_ERROR` in `dispatchLeasedRequest`) or in the `MinimalIncomingMessage` wrapper. This is part of Task 2 ("Harden Node Guest and Broker streaming surfaces"). The existing gap test at line 2560 continues to characterize the gap.
+    - *Federated abort propagation*: The federation-stream paths (`routeH2BrokerRequestOverFederationStream`, `routeLocalRequestOverFederationStream`) already use the `cleanupCancellation()` pattern and correct error propagation. Federation-specific abort propagation changes belong in Phase 3.
 - [ ] Task: Harden Node Guest and Broker streaming surfaces
     - [ ] Improve Node Broker `request()` streaming behavior, including large bodies and abort/cancel handling.
     - [ ] Improve Node Guest minimal HTTP shim behavior for streamed request and response bodies where needed.
