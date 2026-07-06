@@ -156,7 +156,13 @@
          - `npm run lint`: initially reported formatting-only issues in touched test/source files; after `biome check --write`, `npm run lint` passes and `node --test test/agent.test.js test/dispatcher.test.js` still passes 23/23.
      - [x] Commit this completed task according to the per-task commit policy.
          - Committed by orchestrator after review, formatting, lint, and validation.
-- [ ] Task: Conductor - Phase Checkpoint 'Core Node HTTP Streaming and Abort Propagation' (Protocol in workflow.md)
+- [x] Task: Conductor - Phase Checkpoint 'Core Node HTTP Streaming and Abort Propagation' (Protocol in workflow.md)
+    - Phase 2 completed on branch `conductor/streaming_improvements` with Host, Node Guest/Broker, Agent, and Dispatcher/fetch streaming cleanup and abort-propagation improvements committed.
+    - Common-library review/deduplication: existing `@signicode/verser-common` envelope, stream-reader, body normalization, header, and `VerserError` helpers were reviewed across all Phase 2 tasks. No new protocol-neutral helper was needed; the implemented cleanup, controller, H2 RST, and socket behavior is Node/Host-runtime-specific.
+    - Validation: `npm run build --workspace=@signicode/verser2-host` passed; `npm run build --workspace=@signicode/verser2-guest-node` passed; focused tests passed (`test/broker-routing.test.js` 47/47, `test/agent.test.js test/dispatcher.test.js` 23/23); broader Phase 2 regression `node --test test/agent.test.js test/dispatcher.test.js test/broker-routing.test.js test/guest-node.test.js test/end-to-end.test.js test/host-upstreams.test.js test/local-peers.test.js` passed 155/155; `npm run lint` passed after formatting.
+    - Coverage: production behavior changed in Host and Node transport surfaces; focused success, abort, cancellation, redirect replay, large-body, and regression tests were added/updated for the changed behavior.
+    - Review: Oracle Phase 2 review reported no blocking findings and approved beginning Phase 3. Non-blocking recommendations: some abort tests still use short fixed sleeps and Agent abort tests could later add stronger Guest-side close/error observations.
+    - Phase checkpoint commits: Host lease cleanup `fa852ba`, Node lease cancellation `9371d28`, Agent/Dispatcher cleanup `1fdc185`.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 
