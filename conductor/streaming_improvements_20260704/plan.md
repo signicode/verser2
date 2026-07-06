@@ -2,11 +2,11 @@
 
 ## Phase 1: Track Setup, Design Baseline, and Roadmap Pruning
 
-- [ ] Task: Create implementation branch and PR review surface
-    - [ ] Capture the current branch as the PR base branch.
-    - [ ] Create the implementation branch with name `conductor/streaming_improvements_20260704` or a sanitized equivalent.
-    - [ ] Perform all implementation work on this branch, making commits according to the resolved commit frequency policy: per task.
-    - [ ] Open or update a draft PR targeting the captured base branch when the Branching Policy requires PR visibility or finalization.
+- [x] Task: Create implementation branch and PR review surface
+    - [x] Capture the current branch as the PR base branch: `main`.
+    - [x] Create the implementation branch with name `conductor/streaming_improvements_20260704` or a sanitized equivalent: `conductor/streaming_improvements`.
+    - [x] Perform all implementation work on this branch, making commits according to the resolved commit frequency policy: per task.
+    - [~] Open or update a draft PR targeting the captured base branch when the Branching Policy requires PR visibility or finalization.
 - [ ] Task: Establish streaming source inventory and design baseline
     - [ ] Read package codemaps for `verser-common`, `verser2-host`, `verser2-guest-node`, `verser2-guest-bun`, and `verser2-guest-python` before implementation.
     - [ ] Inspect current Host lease-stream routing, local peer streaming, Node Broker/Agent/Dispatcher/fetch paths, Bun wrapper paths, Python ASGI streaming paths, common envelope/body/stream-reader helpers, and existing tests.
