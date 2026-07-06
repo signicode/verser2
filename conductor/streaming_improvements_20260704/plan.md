@@ -18,12 +18,20 @@
     Chunked encoding / semantic streaming note: in this codebase "streaming" means writing HTTP request/response body bytes incrementally and forwarding them as raw bytes over HTTP/2 DATA frames, with practical write-boundary preservation where runtimes expose it, not preserving literal HTTP/1 `Transfer-Encoding: chunked` framing across the HTTP/2 transport. The Verser envelope header separates metadata from the body; after metadata is consumed, the body is an opaque byte stream. Node lease/federation paths use stream `pipe()` and Python uses explicit `send_data()`, so HTTP/2 flow control and runtime buffering may merge writes. The Node Broker socket `ChunkedBodyDecoder` decodes incoming HTTP/1 chunked client bodies before forwarding decoded bytes; it does not re-encode chunks for the lease stream.
 
     Common-library reuse decision: continue using `@signicode/verser-common` for protocol-neutral envelope, stream-reader, header, and structured error helpers (`encodeVerserEnvelope`, `createVerserEnvelopeParser`, `readVerserEnvelopeFromStream`, `readLeaseRequestMetadataFromStream`, `readLeaseResponseMetadataFromStream`, `VerserError`, and header sanitization/validation). Flow-control acknowledgement, stream body dispatch, chunked decoding, redirect replay, and cancellation remain runtime/package-specific unless repeated cross-package behavior emerges; Python `protocol.py` remains a parallel wire-format implementation that must stay compatible with common envelope changes.
-- [ ] Task: Prune roadmap and documentation scope claims
-    - [ ] Update `ROADMAP.md`, README/docs, package READMEs, codemaps, and Conductor product/tech-stack docs as needed to remove CONNECT tunneling and generic L4 forwarding as future roadmap targets.
-    - [ ] Remove Python Host and Python fetch/Agent/Dispatcher helpers from roadmap/future claims while keeping Python ASGI Guest/Broker scope.
-    - [ ] Keep HTTP/3, trailers, informational responses, and gateway/auth policy out of scope unless existing docs already describe them accurately as unsupported.
-    - [ ] Validate docs with the narrowest relevant docs/package checks.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Prune roadmap and documentation scope claims
+    - [x] Update `ROADMAP.md`, README/docs, package READMEs, codemaps, and Conductor product/tech-stack docs as needed to remove CONNECT tunneling and generic L4 forwarding as future roadmap targets.
+        - ROADMAP.md: Removed P2.3 block (generic stream-like connectivity) as future roadmap work.
+        - conductor/product.md: Removed "Python Host behavior" from the MVP limitations list; kept HTTP/3, browser/Rust/Go/Java guests, advanced Agent behavior, Broker per-request authorization, auth/authz systems, WebSocket forwarding for Bun, and public gateway policy as future track work. Added explicit "Python Host is not implemented and is not on the current roadmap."
+        - README/docs/package READMEs/codemaps: No changes needed for the CONNECT/L4 removal scope at this time.
+    - [x] Remove Python Host and Python fetch/Agent/Dispatcher helpers from roadmap/future claims while keeping Python ASGI Guest/Broker scope.
+        - AGENTS.md: Reworded usage-boundary sentence to state "Python Host is not implemented and is not on the current roadmap. Browser, Rust, Go, and Java guests remain roadmap work unless a future development track changes that."
+        - conductor/product.md: Updated MVP limitations — removed "Python Host behavior" from the future-track list, added separate "Python Host is not implemented and is not on the current roadmap." sentence. The "Incremental language expansion" principle already describes browser/Rust/Go/Java as roadmap.
+    - [x] Keep HTTP/3, trailers, informational responses, and gateway/auth policy out of scope unless existing docs already describe them accurately as unsupported.
+        - No changes needed; existing ROADMAP.md P2.1 (HTTP/3), P2.2 (WebSocket), and P1/P2 gateway items already describe these as unsupported or future work.
+    - [x] Validate docs with the narrowest relevant docs/package checks.
+        - Ran `node --test test/docs.test.js test/python-guest-documentation.test.js` — all 9 tests passed (no build needed; tests only use core Node modules). Re-ran after orchestrator wording adjustment with the same passing result.
+    - [x] Commit this completed task according to the per-task commit policy.
+        - Committed by orchestrator after review of delegated changes.
 - [ ] Task: Write streaming characterization tests before behavior changes
     - [ ] Add or identify tests for large streaming request and response bodies without full-body buffering.
     - [ ] Add or identify tests for slow producer/consumer backpressure behavior.

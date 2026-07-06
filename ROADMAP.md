@@ -39,10 +39,6 @@ Future gateway-oriented tracks, in priority order:
 - P2.2: WebSocket/HTTP upgrade forwarding is not implemented. A future transport
   track should specify upgrade semantics, routing policy, and runtime adapter
   behavior before implementation.
-- P2.3: Simple generic stream-like connectivity is not implemented. A future
-  transport track should specify stream semantics, routing policy, and runtime
-  adapter behavior before implementation.
-
 ## Priority 3
 
 ### Runtime expansion

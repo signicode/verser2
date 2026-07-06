@@ -19,7 +19,7 @@
 - `@signicode/verser2-guest-python` — Python ASGI Guest and async Broker APIs.
 
 ## Usage boundaries
-- Do not describe HTTP/3, browser, Rust, Go, Java, or Python Host behavior as implemented; they remain roadmap work unless a future development track changes that.
+- Do not describe HTTP/3, browser, Rust, Go, Java, or Python Host behavior as implemented. Python Host is not implemented and is not on the current roadmap. Browser, Rust, Go, and Java guests remain roadmap work unless a future development track changes that.
 - Do not imply that `verser2` is a complete public gateway. Applications remain responsible for authentication, authorization, and routing policy.
 - Keep Host/Guest/Broker terminology precise in examples and documentation.
 
