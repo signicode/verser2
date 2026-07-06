@@ -272,10 +272,7 @@ export class Http2VerserBroker implements VerserBroker {
         // stream and reject the pending promise if no response arrived.
         stream.once('close', () => {
           cleanupBodyPipe();
-          if (
-            stream.rstCode !== undefined &&
-            stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR
-          ) {
+          if (stream.rstCode !== undefined && stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR) {
             reject(
               createVerserError('stream-failure', 'Stream was reset by remote peer', {
                 targetId: request.targetId,

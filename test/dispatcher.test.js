@@ -330,7 +330,9 @@ test('Broker Dispatcher streams large response bodies with controlled backpressu
 
 test('Broker Dispatcher fetch cancel during streamed POST response propagates to Guest-side request stream', async () => {
   let requestEndResolve;
-  const requestEnded = new Promise((resolve) => { requestEndResolve = resolve; });
+  const requestEnded = new Promise((resolve) => {
+    requestEndResolve = resolve;
+  });
   let requestEndedBeforeCancel = false;
 
   const route = await createConnectedRoute(
@@ -348,8 +350,12 @@ test('Broker Dispatcher fetch cancel during streamed POST response propagates to
       // Track end/close — with a streaming request body that never ends on
       // its own, neither event fires until the remote response cancellation
       // (reader.cancel()) destroys the lease and the pipe completes.
-      request.once('end', () => { requestEndResolve(); });
-      request.once('close', () => { requestEndResolve(); });
+      request.once('end', () => {
+        requestEndResolve();
+      });
+      request.once('close', () => {
+        requestEndResolve();
+      });
     },
     { brokerId: 'broker-dispatcher-cancel-post', guestId: 'guest-dispatcher-cancel-post' },
   );
@@ -376,11 +382,16 @@ test('Broker Dispatcher fetch cancel during streamed POST response propagates to
     // racing a short timeout; if the promise already resolved it means
     // the stream ended for reasons other than our cancel.
     await Promise.race([
-      requestEnded.then(() => { requestEndedBeforeCancel = true; }),
+      requestEnded.then(() => {
+        requestEndedBeforeCancel = true;
+      }),
       new Promise((resolve) => setTimeout(resolve, 30)),
     ]);
-    assert.equal(requestEndedBeforeCancel, false,
-      'Guest request stream ended before reader.cancel() — test design invalid');
+    assert.equal(
+      requestEndedBeforeCancel,
+      false,
+      'Guest request stream ended before reader.cancel() — test design invalid',
+    );
 
     // Cancel the reader — this sends RST_STREAM back through the Host,
     // which destroys the Guest lease stream.  The pipe in
@@ -391,9 +402,78 @@ test('Broker Dispatcher fetch cancel during streamed POST response propagates to
     await Promise.race([
       requestEnded,
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Guest request stream did not end after fetch reader cancel')), 150),
+        setTimeout(
+          () => reject(new Error('Guest request stream did not end after fetch reader cancel')),
+          150,
+        ),
       ),
     ]);
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher propagates abort signal during request body upload', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-abort-upload.local.test',
+    (request, response) => {
+      request.on('data', () => {});
+      request.on('end', () => response.end('ok'));
+    },
+    { brokerId: 'broker-dispatcher-abort-upload', guestId: 'guest-dispatcher-abort-upload' },
+  );
+
+  const body = new PassThrough();
+  try {
+    const controller = new AbortController();
+    const responsePromise = fetch('http://dispatcher-abort-upload.local.test/abort-upload', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+      signal: controller.signal,
+      dispatcher: route.broker.createDispatcher(),
+    });
+
+    // Write some body data
+    body.write(Buffer.from('starting-body-data'));
+    // Give the body pipe a moment to start flowing, then abort
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+
+    await assert.rejects(() => responsePromise, /abort/i);
+  } finally {
+    body.destroy();
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher streams large request body through fetch', async () => {
+  const largeBody = Buffer.alloc(256 * 1024, 'L');
+  let receivedSize = 0;
+
+  const route = await createConnectedRoute(
+    'dispatcher-large-upload.local.test',
+    (request, response) => {
+      request.on('data', (chunk) => {
+        receivedSize += Buffer.from(chunk).length;
+      });
+      request.on('end', () => {
+        response.end(String(receivedSize));
+      });
+    },
+    { brokerId: 'broker-dispatcher-large-upload', guestId: 'guest-dispatcher-large-upload' },
+  );
+
+  try {
+    const response = await fetch('http://dispatcher-large-upload.local.test/large-upload', {
+      method: 'POST',
+      body: largeBody,
+      dispatcher: route.broker.createDispatcher(),
+    });
+
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.equal(Number(text), largeBody.length);
   } finally {
     await closeRoute(route);
   }

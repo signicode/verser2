@@ -1748,7 +1748,9 @@ test('Upstream disconnect during an active federated request fails the Broker re
     });
 
     let requestHeldResolve;
-    const requestHeld = new Promise((resolve) => { requestHeldResolve = resolve; });
+    const requestHeld = new Promise((resolve) => {
+      requestHeldResolve = resolve;
+    });
     await runner.attachLocalGuest({
       guestId: 'guest-federated-disconnect',
       routedDomains: ['federated-disconnect.verser.test'],
@@ -1761,7 +1763,10 @@ test('Upstream disconnect during an active federated request fails the Broker re
 
     await assertEventually(() =>
       assert.equal(
-        manager.getFederatedRouteCandidates('guest-federated-disconnect', 'federated-disconnect.verser.test').length,
+        manager.getFederatedRouteCandidates(
+          'guest-federated-disconnect',
+          'federated-disconnect.verser.test',
+        ).length,
         1,
       ),
     );
@@ -1833,7 +1838,8 @@ test('Federated forwarding does NOT propagate mid-stream Broker abort as an expl
 
     await assertEventually(() =>
       assert.equal(
-        manager.getFederatedRouteCandidates('guest-federated-abort', 'federated-abort.verser.test').length,
+        manager.getFederatedRouteCandidates('guest-federated-abort', 'federated-abort.verser.test')
+          .length,
         1,
       ),
     );
@@ -1859,13 +1865,24 @@ test('Federated forwarding does NOT propagate mid-stream Broker abort as an expl
       await Promise.race([
         requestClosed,
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Guest request stream was not closed after Broker abort through federation')), 1500),
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'Guest request stream was not closed after Broker abort through federation',
+                ),
+              ),
+            1500,
+          ),
         ),
       ]);
 
       // The stream closes but no error event fires — characterizes the gap
-      assert.equal(guestRequestError, undefined,
-        'Expected no error event — Broker abort does not propagate as Guest request error through federation (known gap)');
+      assert.equal(
+        guestRequestError,
+        undefined,
+        'Expected no error event — Broker abort does not propagate as Guest request error through federation (known gap)',
+      );
     } finally {
       rawBrokerSession.destroy();
     }
@@ -1899,7 +1916,10 @@ test('Federated request completes or fails cleanly when upstream Host closes dur
 
     await assertEventually(() =>
       assert.equal(
-        manager.getFederatedRouteCandidates('guest-federated-waiter', 'federated-waiter.verser.test').length,
+        manager.getFederatedRouteCandidates(
+          'guest-federated-waiter',
+          'federated-waiter.verser.test',
+        ).length,
         1,
       ),
     );

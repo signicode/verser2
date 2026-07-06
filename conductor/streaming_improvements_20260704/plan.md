@@ -127,12 +127,35 @@
          - Existing gap restored: "Federated forwarding does NOT propagate mid-stream Broker abort as an explicit error to downstream Guest" — federation-local-guest path requires separate work in Phase 3 (AbortController/signal propagation in `routeLocalRequestDispatch`).
      - [x] Commit this completed task according to the per-task commit policy.
          - Committed by orchestrator after review and validation.
-- [ ] Task: Harden Agent and Dispatcher/fetch streaming surfaces
-    - [ ] Improve Agent request body streaming, response streaming, chunked upload handling, and abort signal propagation where feasible.
-    - [ ] Improve Dispatcher/fetch streaming and abort behavior while preserving Undici-compatible semantics.
-    - [ ] Update tests for large bodies, aborts, slow consumers, and redirect replay boundaries.
-    - [ ] Run focused `test/agent.test.js` and `test/dispatcher.test.js` validation.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Harden Agent and Dispatcher/fetch streaming surfaces
+     - [x] Review existing `@signicode/verser-common` helpers before implementation; do not duplicate protocol-neutral logic.
+         - Common helpers in `@signicode/verser-common` (`envelope.ts`, `stream-readers.ts`, `body.ts`, `errors.ts`) were reviewed. The existing `normalizeBrokerRequestBody`, `createVerserError`, and `VerserError` surface is sufficient. No new common helpers were needed.
+         - The Node `toBrokerRequestBody` in `utils.ts` parallels `normalizeBrokerRequestBody` from common but adds controller-tracking (`emitBodySent`, `emitRequestSent`). This is Node-dispatcher-specific and not protocol-neutral — no deduplication is warranted.
+         - Reuse decision: no common-library extraction needed. The `stream-failure` VerserError code already exists and is used for stream-level failures.
+     - [x] Improve Agent request body streaming, response streaming, chunked upload handling, and abort signal propagation where feasible.
+         - `broker-socket.ts`: Added `responseBody` field to track the in-flight Broker response body stream for cleanup on socket destroy. Updated `_destroy()` to destroy both `bodyStream` (request body) and `responseBody` with the error on abort, or end/destroy on normal cleanup. Previously `_destroy` only called `bodyStream?.end()` leaving the response body uncleaned, which could keep data flowing through the pipe after the client socket was destroyed.
+         - `broker-socket.ts` `forwardRequest()`: Now stores `response.body` reference for cleanup.
+         - The existing `_write` → `consumeRequestBytes` → `forwardRequestOnce` path already streams request body bytes as they arrive (chunked uploads via `ChunkedBodyDecoder`, plain bodies via `PassThrough`). No additional streaming changes were needed for the basic path.
+     - [x] Improve Dispatcher/fetch streaming and abort behavior while preserving Undici-compatible semantics.
+         - `dispatch-controller.ts`: Added `requestBody` field and `attachRequestBody()` method. Updated `abort()` to destroy both `requestBody` and `responseBody` streams on abort, so mid-upload aborts stop sending request data upstream and mid-response aborts stop consuming downstream data.
+         - `broker-dispatcher.ts`: Calls `controller.attachRequestBody(body)` when the body is a `Readable` stream, enabling the controller to destroy it on abort.
+     - [x] Update tests for large bodies, aborts, slow consumers, and redirect replay boundaries.
+         - `test/agent.test.js`:
+             - Added `Broker Agent cleans up when client aborts during body upload` — destroys agent `http.request()` mid-upload, verifies clean error without hangs.
+             - Added `Broker Agent cleans up when client aborts during response streaming` — destroys request mid-response, verifies clean error.
+             - Added `Broker Agent streams large request bodies through leased routing` — 256KB body through Agent, verifies all bytes received.
+             - Added `Broker Agent does not follow internal redirect when request body exceeds replay buffer` — 256-byte body with 128-byte replay buffer, verifies original 308 response is returned unchanged.
+         - `test/dispatcher.test.js`:
+             - Added `Broker Dispatcher propagates abort signal during request body upload` — AbortController abort during PassThrough body upload, verifies fetch rejects with abort error.
+             - Added `Broker Dispatcher streams large request body through fetch` — 256KB body through fetch dispatcher, verifies all bytes received.
+     - [x] Run focused `test/agent.test.js` and `test/dispatcher.test.js` validation, plus build for `@signicode/verser2-guest-node`.
+         - Build: `npm run build --workspace=@signicode/verser2-guest-node` passes.
+         - Host regression build: `npm run build --workspace=@signicode/verser2-host` passes.
+         - `node --test test/agent.test.js test/dispatcher.test.js`: 23/23 pass.
+         - Full regression `node --test test/agent.test.js test/dispatcher.test.js test/broker-routing.test.js test/guest-node.test.js test/end-to-end.test.js test/host-upstreams.test.js test/local-peers.test.js`: 155/155 pass.
+         - `npm run lint`: initially reported formatting-only issues in touched test/source files; after `biome check --write`, `npm run lint` passes and `node --test test/agent.test.js test/dispatcher.test.js` still passes 23/23.
+     - [x] Commit this completed task according to the per-task commit policy.
+         - Committed by orchestrator after review, formatting, lint, and validation.
 - [ ] Task: Conductor - Phase Checkpoint 'Core Node HTTP Streaming and Abort Propagation' (Protocol in workflow.md)
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity

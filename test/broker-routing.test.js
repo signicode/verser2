@@ -2446,7 +2446,10 @@ test('broker.request delivers response headers and body before request body ends
     const response = await Promise.race([
       responsePromise,
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('half-open response was not delivered before request body end')), 200),
+        setTimeout(
+          () => reject(new Error('half-open response was not delivered before request body end')),
+          200,
+        ),
       ),
     ]);
     assert.equal(response.statusCode, 200);
@@ -2472,9 +2475,13 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
 
   try {
     let postRevokeDataResolve;
-    const postRevokeData = new Promise((resolve) => { postRevokeDataResolve = resolve; });
+    const postRevokeData = new Promise((resolve) => {
+      postRevokeDataResolve = resolve;
+    });
     let preRevokeDataResolve;
-    const preRevokeData = new Promise((resolve) => { preRevokeDataResolve = resolve; });
+    const preRevokeData = new Promise((resolve) => {
+      preRevokeDataResolve = resolve;
+    });
     let seenRevocation = false;
 
     guest.attach((request, response) => {
@@ -2507,7 +2514,9 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
 
     // Set up the rejection handler eagerly to avoid unhandled rejection
     const requestErrorPromise = requestPromise.then(
-      () => { throw new Error('request should have failed'); },
+      () => {
+        throw new Error('request should have failed');
+      },
       (error) => error,
     );
 
@@ -2538,7 +2547,15 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
     await Promise.race([
       postRevokeData,
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('post-revocation data was not received — revocation may have cancelled the stream')), 100),
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                'post-revocation data was not received — revocation may have cancelled the stream',
+              ),
+            ),
+          100,
+        ),
       ),
     ]);
 
@@ -2567,7 +2584,9 @@ test('Broker request abort propagates as an error event to Guest handler request
   try {
     let requestError;
     let requestErrorResolve;
-    const requestErrorEvent = new Promise((resolve) => { requestErrorResolve = resolve; });
+    const requestErrorEvent = new Promise((resolve) => {
+      requestErrorResolve = resolve;
+    });
     const requestClosed = new Promise((resolve) => {
       guest.attach((request, response) => {
         request.resume();
@@ -2604,7 +2623,10 @@ test('Broker request abort propagates as an error event to Guest handler request
       await Promise.race([
         requestClosed,
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Guest request stream was not closed after Broker abort')), 1000),
+          setTimeout(
+            () => reject(new Error('Guest request stream was not closed after Broker abort')),
+            1000,
+          ),
         ),
       ]);
 
@@ -2617,8 +2639,11 @@ test('Broker request abort propagates as an error event to Guest handler request
       ]);
 
       // The request SHOULD receive an explicit error event with stream-failure code
-      assert.notEqual(requestError, undefined,
-        'Expected error event — Broker abort should propagate as Guest request error');
+      assert.notEqual(
+        requestError,
+        undefined,
+        'Expected error event — Broker abort should propagate as Guest request error',
+      );
       assert.equal(requestError.code, 'stream-failure');
       assert.match(requestError.message, /cancelled|cancel/i);
     } finally {

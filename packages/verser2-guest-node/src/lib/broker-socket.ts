@@ -1,5 +1,6 @@
 import type * as http from 'node:http';
 import { Duplex, PassThrough, Writable } from 'node:stream';
+import type { Readable } from 'node:stream';
 
 import { createVerserError } from '@signicode/verser-common';
 import { ChunkedBodyDecoder } from './chunked-body-decoder';
@@ -46,6 +47,9 @@ export class VerserBrokerSocket extends Duplex {
   private forwardingStarted = false;
 
   private pendingResponseWriteCallback?: () => void;
+
+  /** The response body stream from the Broker request, tracked for cleanup on socket destroy. */
+  private responseBody?: Readable;
 
   public constructor(
     broker: BrokerRequestRouter,
@@ -106,7 +110,13 @@ export class VerserBrokerSocket extends Duplex {
   }
 
   public override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
-    this.bodyStream?.end();
+    if (error !== null) {
+      this.bodyStream?.destroy(error);
+      this.responseBody?.destroy(error);
+    } else {
+      this.bodyStream?.end();
+      this.responseBody?.destroy();
+    }
     this.pendingResponseWriteCallback?.();
     this.pendingResponseWriteCallback = undefined;
     callback(error);
@@ -159,6 +169,7 @@ export class VerserBrokerSocket extends Duplex {
         on(event: 'error', handler: (error: Error) => void): void;
       };
     };
+    this.responseBody = response.body as unknown as Readable;
     this.push(
       serializeHttpResponseHead({ statusCode: response.statusCode, headers: response.headers }),
     );

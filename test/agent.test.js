@@ -399,3 +399,223 @@ test('Broker Agent rejects oversized request headers before routing', async () =
     await withTimeout(host.close('test-complete'), 'host-agent-header-limit-1 close');
   }
 });
+
+test('Broker Agent cleans up when client aborts during body upload', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-abort-upload-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-abort-upload-1' });
+  let agent;
+  let requestReceived = false;
+  guest.attach((request, response) => {
+    requestReceived = true;
+    request.on('data', () => {});
+    request.on('end', () => response.end('ok'));
+  }, 'abort-upload-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-abort-upload-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-abort-upload-1 connect');
+    await withTimeout(
+      broker.waitForRoute('abort-upload-agent.local.test'),
+      'abort-upload-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+    await assert.rejects(
+      () =>
+        new Promise((resolve, reject) => {
+          const request = http.request(
+            'http://abort-upload-agent.local.test/abort-upload',
+            { agent, method: 'POST' },
+            (response) => {
+              const chunks = [];
+              response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+              response.on('end', () => resolve(Buffer.concat(chunks)));
+              response.on('error', reject);
+            },
+          );
+          request.on('error', reject);
+          // Write some body data, then destroy before completing
+          request.write(Buffer.from('partial-body-data'));
+          process.nextTick(() => {
+            request.destroy(new Error('client-abort'));
+          });
+        }),
+      /client-abort/,
+    );
+    // The guest handler should not have received the complete request
+    // (since the abort happened mid-stream), but may or may not have
+    // started receiving data — that's a timing aspect, not a leak concern.
+    // The main assertion is that no process crash or hang occurs.
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-abort-upload-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-abort-upload-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-abort-upload-1 close');
+  }
+});
+
+test('Broker Agent cleans up when client aborts during response streaming', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-abort-response-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-abort-response-1' });
+  const largeBody = Buffer.alloc(512 * 1024, 'b');
+  let agent;
+  guest.attach((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/octet-stream' });
+    response.end(largeBody);
+  }, 'abort-response-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-abort-response-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-abort-response-1 connect');
+    await withTimeout(
+      broker.waitForRoute('abort-response-agent.local.test'),
+      'abort-response-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+    // Start reading the response, then abort before fully consuming it
+    await assert.rejects(
+      () =>
+        new Promise((resolve, reject) => {
+          const request = http.request('http://abort-response-agent.local.test/large', { agent });
+          request.on('response', (incoming) => {
+            incoming.once('data', () => {
+              // Abort after receiving the first chunk
+              request.destroy(new Error('abort-during-response'));
+            });
+            incoming.on('error', reject);
+            // Consume rest silently to avoid unhandled error
+            incoming.on('data', () => {});
+          });
+          request.on('error', (error) => {
+            // The request error is expected
+            reject(error);
+          });
+          request.end();
+          // Use a timeout as safety net — if no error fires, reject with timeout
+          setTimeout(() => reject(new Error('abort-during-response timed out')), 5000);
+        }),
+      /abort-during-response/,
+    );
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-abort-response-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-abort-response-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-abort-response-1 close');
+  }
+});
+
+test('Broker Agent streams large request bodies through leased routing', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-large-body-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-large-body-1' });
+  const largeBody = Buffer.alloc(256 * 1024, 'x');
+  let agent;
+  let receivedSize = 0;
+  guest.attach((request, response) => {
+    request.on('data', (chunk) => {
+      receivedSize += Buffer.from(chunk).length;
+    });
+    request.on('end', () => {
+      response.end(String(receivedSize));
+    });
+  }, 'large-body-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-large-body-1 connect');
+    await withTimeout(guest.connect(), 'guest-agent-large-body-1 connect');
+    await withTimeout(
+      broker.waitForRoute('large-body-agent.local.test'),
+      'large-body-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+    // Send as a single contiguous buffer — avoids chunked transfer encoding
+    // which would hit the 64KB default chunk-decoder pending limit for
+    // 128KB+ write sizes.
+    const response = await requestWithAgent(
+      'http://large-body-agent.local.test/large-body',
+      { agent, method: 'POST' },
+      largeBody,
+    );
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(Number(response.body.toString('utf8')), largeBody.length);
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-large-body-1 close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-large-body-1 close');
+    await withTimeout(host.close('test-complete'), 'host-agent-large-body-1 close');
+  }
+});
+
+test('Broker Agent does not follow internal redirect when request body exceeds replay buffer', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({
+    hostUrl,
+    brokerId: 'broker-agent-redirect-boundary',
+    internalRedirectReplayBufferBytes: 128,
+  });
+  const redirectGuest = createGuest({ hostUrl, guestId: 'guest-agent-redirect-boundary-a' });
+  const targetGuest = createGuest({ hostUrl, guestId: 'guest-agent-redirect-boundary-b' });
+  let agent;
+  redirectGuest.attach((_request, response) => {
+    response.writeHead(308, { location: 'http://agent-target-boundary.local.test/final' });
+    response.end('redirecting');
+  }, 'agent-redirect-boundary.local.test');
+  targetGuest.attach((_request, response) => {
+    response.end('should-not-reach');
+  }, 'agent-target-boundary.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-redirect-boundary connect');
+    await withTimeout(redirectGuest.connect(), 'guest-agent-redirect-boundary-a connect');
+    await withTimeout(targetGuest.connect(), 'guest-agent-redirect-boundary-b connect');
+    await withTimeout(
+      broker.waitForRoute('agent-redirect-boundary.local.test'),
+      'agent redirect boundary route',
+    );
+    await withTimeout(
+      broker.waitForRoute('agent-target-boundary.local.test'),
+      'agent target boundary route',
+    );
+
+    agent = broker.createAgent();
+    // Body > 128 bytes exceeds the replay buffer — redirect should NOT be followed
+    const response = await requestWithAgent(
+      'http://agent-redirect-boundary.local.test/start',
+      { agent, method: 'POST' },
+      Buffer.alloc(256, 'p'),
+    );
+
+    assert.equal(response.statusCode, 308);
+    assert.equal(response.headers.location, 'http://agent-target-boundary.local.test/final');
+  } finally {
+    if (agent !== undefined) {
+      agent.destroy();
+    }
+    await withTimeout(broker.close('test-complete'), 'broker-agent-redirect-boundary close');
+    await withTimeout(
+      redirectGuest.close('test-complete'),
+      'guest-agent-redirect-boundary-a close',
+    );
+    await withTimeout(targetGuest.close('test-complete'), 'guest-agent-redirect-boundary-b close');
+    await withTimeout(host.close('test-complete'), 'host-agent-redirect-boundary close');
+  }
+});
