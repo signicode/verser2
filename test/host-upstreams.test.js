@@ -40,6 +40,26 @@ function hostUrl(host) {
   return `https://localhost:${host.address.port}`;
 }
 
+// Warm up TLS/HTTP2/federation infrastructure so individual tests don't pay
+// the one-time initialization cost of TLS contexts, HTTP/2 sessions, and
+// federation link state.
+test.before(async () => {
+  const upstream = createVerserHost({ hostId: 'warmup-host-manager', tls: tlsOptions() });
+  const downstream = createVerserHost({ hostId: 'warmup-host-runner', tls: tlsOptions() });
+  await upstream.start();
+  try {
+    const handle = await downstream.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(upstream),
+      tls: { ca: trusted.certificate },
+    });
+    await handle.close('warmup');
+  } finally {
+    await downstream.close();
+    await upstream.close();
+  }
+});
+
 test('Host connects outbound to an upstream Host and closes the link', async () => {
   const upstream = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const downstream = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });

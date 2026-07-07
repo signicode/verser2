@@ -68,6 +68,30 @@ async function closeRoute(route) {
   await withTimeout(route.host.close('test-complete'), 'host close');
 }
 
+// Warm up TLS/HTTP2/Undici infrastructure so individual tests don't pay
+// the one-time initialization cost of TLS contexts, HTTP/2 sessions, and
+// Undici dispatcher internals.
+test.before(async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'warmup-broker' });
+  const guest = createGuest({ hostUrl, guestId: 'warmup-guest' });
+  guest.attach((_request, response) => response.end('warmup'), 'warmup.local.test');
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('warmup.local.test');
+    const dispatcher = broker.createDispatcher();
+    const response = await fetch('http://warmup.local.test/warmup', { dispatcher });
+    await response.text();
+  } finally {
+    await broker.close('warmup');
+    await guest.close('warmup');
+    await host.close('warmup');
+  }
+});
+
 test('Broker exposes an Undici Dispatcher that routes fetch by advertised hostname', async () => {
   const route = await createConnectedRoute(
     'dispatcher.local.test',

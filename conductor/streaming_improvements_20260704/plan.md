@@ -185,7 +185,11 @@
             - `Broker Agent cleans up when client aborts during response streaming`: replaced `Buffer.alloc(512KB)` retained in guest closure with streaming write/drain flow control (64KB chunks, no full-body retention); safety `setTimeout` reference now stored and cleared on abort/error paths via `clearTimeout` in every rejection path.
             - Added `test.before` warmup hook that creates and tears down a Host/Broker/Guest to absorb one-time TLS/HTTP2 infrastructure initialization cost (~1.24 MB heap+external), so no individual test pays this baseline.
             - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker exposes an Agent that routes matching hostnames through Verser2|Broker Agent cleans up when client aborts during response streaming" test/agent.test.js` — 2/2 pass; `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 test/agent.test.js` — 11/11 pass; `npm run lint` — clean.
-
+        - Dispatcher and upstream warmup hooks:
+            - `test/dispatcher.test.js`: added `test.before` warmup that creates a Host/Broker/Guest, connects them, creates a dispatcher, and issues a fetch call to warm up Undici internals, TLS, and HTTP/2 session state before the first guarded test.
+            - `test/host-upstreams.test.js`: added `test.before` warmup that creates two Hosts (upstream + downstream), opens and closes a federation link to warm up TLS, HTTP/2, and federation link state before the first guarded test.
+            - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker exposes an Undici Dispatcher that routes fetch by advertised hostname" test/dispatcher.test.js` — 1/1 pass; `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Host connects outbound to an upstream Host and closes the link" test/host-upstreams.test.js` — 1/1 pass; `npm run lint` — clean.
+ 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 
 - [ ] Task: Harden federated/upstream streaming behavior
