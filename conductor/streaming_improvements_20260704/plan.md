@@ -189,7 +189,11 @@
             - `test/dispatcher.test.js`: added `test.before` warmup that creates a Host/Broker/Guest, connects them, creates a dispatcher, and issues a fetch call to warm up Undici internals, TLS, and HTTP/2 session state before the first guarded test.
             - `test/host-upstreams.test.js`: added `test.before` warmup that creates two Hosts (upstream + downstream), opens and closes a federation link to warm up TLS, HTTP/2, and federation link state before the first guarded test.
             - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker exposes an Undici Dispatcher that routes fetch by advertised hostname" test/dispatcher.test.js` — 1/1 pass; `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Host connects outbound to an upstream Host and closes the link" test/host-upstreams.test.js` — 1/1 pass; `npm run lint` — clean.
- 
+        - Second manual-verification wave at 512 KiB guarded memory allowance:
+            - Ran full bounded suite: `npm run test:bounded -- --memory-leak-bytes 524288`.
+            - Result: build and staging completed; Node test run executed 350 tests with 344 passing, 4 skipped, and 2 failing.
+            - Guarded memory failures above 512 KiB: `Broker Agent resumes streamed responses after client-side backpressure` grew 588,086 bytes; `Receiving Host observes inbound federation link disconnects` grew 900,179 bytes.
+
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 
 - [ ] Task: Harden federated/upstream streaming behavior
