@@ -180,6 +180,11 @@
         - Result: build and staging completed; Node test run executed 350 tests with 341 passing, 4 skipped, and 5 failing.
         - Guarded memory failures above 1 MiB: `Broker exposes an Agent that routes matching hostnames through Verser2` grew 1,281,934 bytes; `Broker Agent cleans up when client aborts during response streaming` grew 1,329,620 bytes; `Broker exposes an Undici Dispatcher that routes fetch by advertised hostname` grew 1,590,103 bytes; `Host connects outbound to an upstream Host and closes the link` grew 1,071,134 bytes.
         - Non-memory failure: `bounded test runner preserves full validation flow with default heap limits` expected the previous `testArgs = ['--test']`; updated `test/workspace.test.js` to assert `--expose-gc`, `--test-concurrency=1`, memory guard env vars, and 1 MiB default.
+        - Agent test resource leak fixes:
+            - `requestWithAgent` helper: timeout now cleared on response `end`, response `error`, and request `error` paths; `response.destroy()` + `request.destroy()` called after resolve/reject to trigger immediate socket/stream cleanup; `const` used instead of TDZ-prone `let`.
+            - `Broker Agent cleans up when client aborts during response streaming`: replaced `Buffer.alloc(512KB)` retained in guest closure with streaming write/drain flow control (64KB chunks, no full-body retention); safety `setTimeout` reference now stored and cleared on abort/error paths via `clearTimeout` in every rejection path.
+            - Added `test.before` warmup hook that creates and tears down a Host/Broker/Guest to absorb one-time TLS/HTTP2 infrastructure initialization cost (~1.24 MB heap+external), so no individual test pays this baseline.
+            - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker exposes an Agent that routes matching hostnames through Verser2|Broker Agent cleans up when client aborts during response streaming" test/agent.test.js` — 2/2 pass; `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=1048576 node --expose-gc --test --test-concurrency=1 test/agent.test.js` — 11/11 pass; `npm run lint` — clean.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 

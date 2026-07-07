@@ -24,20 +24,32 @@ function requestWithAgent(url, options, body) {
   return new Promise((resolve, reject) => {
     const request = http.request(url, options, (response) => {
       const chunks = [];
-      clearTimeout(timeout);
       response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
       response.on('end', () => {
+        clearTimeout(timeout);
         resolve({
           statusCode: response.statusCode,
           headers: response.headers,
           body: Buffer.concat(chunks),
         });
+        // Destroy request and response to trigger socket and stream cleanup
+        response.destroy();
+        request.destroy();
       });
-      response.on('error', reject);
+      response.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+        response.destroy();
+        request.destroy();
+      });
     });
     const timeout = setTimeout(() => {
       request.destroy(new Error(`test request timeout for ${url}`));
     }, 5000);
+    // Clear timeout on first response data to prevent dangling timer
+    request.on('response', (response) => {
+      response.once('data', () => clearTimeout(timeout));
+    });
     request.on('error', (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -85,6 +97,24 @@ function createGuest(options) {
   });
 }
 
+// Warm up TLS/HTTP2 infrastructure so individual tests don't pay the one-time
+// initialization cost of TLS contexts, HTTP/2 session state, and OpenSSL caches.
+test.before(async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'warmup-broker' });
+  const guest = createGuest({ hostUrl, guestId: 'warmup-guest' });
+  try {
+    await broker.connect();
+    await guest.connect();
+  } finally {
+    await broker.close('warmup');
+    await guest.close('warmup');
+    await host.close('warmup');
+  }
+});
+
 test('Broker exposes an Agent that routes matching hostnames through Verser2', async () => {
   const host = createHost({ port: 0 });
   await host.start();
@@ -125,6 +155,8 @@ test('Broker exposes an Agent that routes matching hostnames through Verser2', a
     await withTimeout(broker.close('test-complete'), 'broker-agent-1 close');
     await withTimeout(guest.close('test-complete'), 'guest-agent-1 close');
     await withTimeout(host.close('test-complete'), 'host-agent-1 close');
+    // Flush pending process.nextTick callbacks (e.g., sink final destroy)
+    await new Promise((resolve) => process.nextTick(resolve));
   }
 });
 
@@ -465,11 +497,27 @@ test('Broker Agent cleans up when client aborts during response streaming', asyn
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'broker-agent-abort-response-1' });
   const guest = createGuest({ hostUrl, guestId: 'guest-agent-abort-response-1' });
-  const largeBody = Buffer.alloc(512 * 1024, 'b');
   let agent;
   guest.attach((_request, response) => {
     response.writeHead(200, { 'content-type': 'application/octet-stream' });
-    response.end(largeBody);
+    // Stream generated body with write/drain flow control — no buffer retention
+    const totalSize = 512 * 1024;
+    const chunkSize = 64 * 1024;
+    let written = 0;
+    function writeNext() {
+      if (written >= totalSize) {
+        response.end();
+        return;
+      }
+      const chunk = Buffer.alloc(chunkSize, 'b');
+      written += chunkSize;
+      if (!response.write(chunk)) {
+        response.once('drain', writeNext);
+      } else {
+        setImmediate(writeNext);
+      }
+    }
+    writeNext();
   }, 'abort-response-agent.local.test');
 
   try {
@@ -485,23 +533,30 @@ test('Broker Agent cleans up when client aborts during response streaming', asyn
     await assert.rejects(
       () =>
         new Promise((resolve, reject) => {
+          const timeout = setTimeout(
+            () => reject(new Error('abort-during-response timed out')),
+            5000,
+          );
           const request = http.request('http://abort-response-agent.local.test/large', { agent });
           request.on('response', (incoming) => {
             incoming.once('data', () => {
+              clearTimeout(timeout);
               // Abort after receiving the first chunk
               request.destroy(new Error('abort-during-response'));
             });
-            incoming.on('error', reject);
+            incoming.on('error', (error) => {
+              clearTimeout(timeout);
+              reject(error);
+            });
             // Consume rest silently to avoid unhandled error
             incoming.on('data', () => {});
           });
           request.on('error', (error) => {
+            clearTimeout(timeout);
             // The request error is expected
             reject(error);
           });
           request.end();
-          // Use a timeout as safety net — if no error fires, reject with timeout
-          setTimeout(() => reject(new Error('abort-during-response timed out')), 5000);
         }),
       /abort-during-response/,
     );
