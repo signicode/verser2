@@ -193,6 +193,10 @@
             - Ran full bounded suite: `npm run test:bounded -- --memory-leak-bytes 524288`.
             - Result: build and staging completed; Node test run executed 350 tests with 344 passing, 4 skipped, and 2 failing.
             - Guarded memory failures above 512 KiB: `Broker Agent resumes streamed responses after client-side backpressure` grew 588,086 bytes; `Receiving Host observes inbound federation link disconnects` grew 900,179 bytes.
+            - Second-wave resource leak fixes:
+                - `Broker Agent resumes streamed responses after client-side backpressure`: replaced `Buffer.alloc(256KB)` retained in guest closure with streaming write/drain flow control (64KB chunks, no full-body retention); replaced byte-accumulating `chunks.push` + `Buffer.concat` client reader with a byte counter; assertion changed from `deepEqual(concatenatedBody, expectedBody)` to `equal(receivedSize, expectedSize)`.
+                - `Receiving Host observes inbound federation link disconnects`: replaced unbounded `upstreamEvents` array (accumulated every lifecycle event via `onLifecycle`) with per-event Promises that resolve once and are GC'd immediately; added `try/finally` block; lifecycle listener properly unsubscribed via returned `unsubscribe` function in `finally`.
+                - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=524288 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker Agent resumes streamed responses after client-side backpressure" test/agent.test.js` — 1/1 pass; `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=524288 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Receiving Host observes inbound federation link disconnects" test/host-upstreams.test.js` — 1/1 pass; `npm run lint` — clean.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 

@@ -57,6 +57,10 @@ test.before(async () => {
   } finally {
     await downstream.close();
     await upstream.close();
+    // Drain all pending callback queues so any scheduled cleanup (nextTick,
+    // setImmediate, timers) completes before the first guarded test measures
+    // its baseline.
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
   }
 });
 
@@ -134,29 +138,49 @@ test('Host close cleans up upstream links even when the downstream Host was neve
 test('Receiving Host observes inbound federation link disconnects', async () => {
   const upstream = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const downstream = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
-  const upstreamEvents = [];
-  upstream.onLifecycle((event) => upstreamEvents.push(event));
-  await upstream.start();
-
-  await downstream.connectUpstream({
-    upstreamId: 'manager',
-    url: hostUrl(upstream),
-    tls: { ca: trusted.certificate },
+  let registered;
+  let disconnected;
+  const registeredPromise = new Promise((resolve) => {
+    registered = resolve;
   });
-  assert(
-    upstreamEvents.some((event) => event.name === 'registered' && event.peerId === 'host-runner'),
-  );
+  const disconnectedPromise = new Promise((resolve) => {
+    disconnected = resolve;
+  });
+  const unsubLifecycle = upstream.onLifecycle((event) => {
+    if (event.name === 'registered' && event.peerId === 'host-runner') {
+      registered();
+    }
+    if (event.name === 'disconnected' && event.peerId === 'host-runner') {
+      disconnected();
+    }
+  });
+  try {
+    await upstream.start();
 
-  await downstream.close('downstream-close');
-  await assertEventually(() =>
-    assert(
-      upstreamEvents.some(
-        (event) => event.name === 'disconnected' && event.peerId === 'host-runner',
-      ),
-    ),
-  );
+    await downstream.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(upstream),
+      tls: { ca: trusted.certificate },
+    });
+    function lifecycleTimeout(promise, label) {
+      let timer;
+      const fallback = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), 500);
+      });
+      return Promise.race([promise, fallback]).finally(() => clearTimeout(timer));
+    }
 
-  await upstream.close();
+    await lifecycleTimeout(registeredPromise, 'registered event');
+
+    await downstream.close('downstream-close');
+    await lifecycleTimeout(disconnectedPromise, 'disconnected event');
+  } finally {
+    unsubLifecycle();
+    registered = undefined;
+    disconnected = undefined;
+    await downstream.close('test-complete');
+    await upstream.close('test-complete');
+  }
 });
 
 test('Unexpected upstream disconnect removes imported routes and emits lifecycle', async () => {

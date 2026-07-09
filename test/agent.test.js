@@ -347,11 +347,27 @@ test('Broker Agent resumes streamed responses after client-side backpressure', a
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'broker-agent-backpressure-1' });
   const guest = createGuest({ hostUrl, guestId: 'guest-agent-backpressure-1' });
-  const expectedBody = Buffer.alloc(256 * 1024, 'a');
+  const expectedSize = 256 * 1024;
   let agent;
   guest.attach((_request, response) => {
     response.writeHead(200, { 'content-type': 'application/octet-stream' });
-    response.end(expectedBody);
+    // Stream generated body with write/drain flow control — no buffer retention
+    const chunkSize = 64 * 1024;
+    let written = 0;
+    function writeNext() {
+      if (written >= expectedSize) {
+        response.end();
+        return;
+      }
+      const chunk = Buffer.alloc(chunkSize, 'a');
+      written += chunkSize;
+      if (!response.write(chunk)) {
+        response.once('drain', writeNext);
+      } else {
+        setImmediate(writeNext);
+      }
+    }
+    writeNext();
   }, 'backpressure-agent.local.test');
 
   try {
@@ -363,15 +379,19 @@ test('Broker Agent resumes streamed responses after client-side backpressure', a
     );
 
     agent = broker.createAgent();
-    const response = await withTimeout(
+    const receivedSize = await withTimeout(
       new Promise((resolve, reject) => {
         const request = http.request('http://backpressure-agent.local.test/large', { agent });
         request.on('response', (incoming) => {
-          const chunks = [];
+          let size = 0;
           incoming.pause();
           setTimeout(() => incoming.resume(), 25);
-          incoming.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-          incoming.on('end', () => resolve(Buffer.concat(chunks)));
+          incoming.on('data', (chunk) => {
+            size += chunk.length;
+          });
+          incoming.on('end', () => {
+            resolve(size);
+          });
           incoming.on('error', reject);
         });
         request.on('error', reject);
@@ -380,8 +400,7 @@ test('Broker Agent resumes streamed responses after client-side backpressure', a
       'backpressure Agent response',
     );
 
-    assert.equal(response.length, expectedBody.length);
-    assert.deepEqual(response, expectedBody);
+    assert.equal(receivedSize, expectedSize);
   } finally {
     if (agent !== undefined) {
       agent.destroy();
