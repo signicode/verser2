@@ -1292,6 +1292,11 @@ test('Federated route revocation propagates lifecycle events from downstream to 
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
   let broker;
+  let unsubscribeRouteChanges;
+  let removedEventResolve;
+  const removedEvent = new Promise((resolve) => {
+    removedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1302,9 +1307,17 @@ test('Federated route revocation propagates lifecycle events from downstream to 
 
     // Attach a local Broker to the manager BEFORE the Guest so we can
     // observe lifecycle events that arrive through federation.
-    const managerEvents = [];
     broker = await manager.attachLocalBroker({ brokerId: 'broker-revoke-manager' });
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'removed' &&
+        event.targetId === 'guest-revoke-federated' &&
+        event.domain === 'revoke-federated.verser.test' &&
+        event.reason === 'revoked'
+      ) {
+        removedEventResolve(event);
+      }
+    });
 
     const guest = await runner.attachLocalGuest({
       guestId: 'guest-revoke-federated',
@@ -1327,18 +1340,16 @@ test('Federated route revocation propagates lifecycle events from downstream to 
     const result = guest.revokeRoutes(['revoke-federated.verser.test']);
     assert.deepEqual(result.revoked, ['revoke-federated.verser.test']);
 
-    // Verify the manager's Broker observes the removed event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'removed' &&
-            e.targetId === 'guest-revoke-federated' &&
-            e.domain === 'revoke-federated.verser.test' &&
-            e.reason === 'revoked',
-        ),
-      ),
-    );
+    // Verify the manager's Broker observes the removed event using a
+    // bounded promise that resolves exactly once, not an accumulating array.
+    let removalTimer;
+    const removalTimeout = new Promise((_, reject) => {
+      removalTimer = setTimeout(
+        () => reject(new Error('removed route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([removedEvent, removalTimeout]).finally(() => clearTimeout(removalTimer));
 
     // Verify the route is no longer available on the manager
     assert.deepEqual(
@@ -1346,6 +1357,8 @@ test('Federated route revocation propagates lifecycle events from downstream to 
       [],
     );
   } finally {
+    unsubscribeRouteChanges?.();
+    removedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
