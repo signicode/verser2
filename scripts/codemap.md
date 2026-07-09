@@ -53,7 +53,7 @@ copy-package-license.js
 ## Integration
 
 - **Root package.json** — All scripts are wired as npm scripts: `build`, `test`, `stage:packages`, `package:version-policy`, `test:package-consumers`, `test:package-tarballs`, `lint`.
-- **npm test chain** — `npm test` runs `build && stage:packages && node --test test/*.test.js`. The stage step must succeed before tests that validate staged artifacts.
+- **npm test chain** — `npm test` runs `npm run test:bounded`, which builds, stages packages, then runs `node --test test/*.test.js` with bounded memory settings and guarded per-test memory-growth checks. The stage step must succeed before tests that validate staged artifacts.
 - **CI workflow** — `.github/workflows/package-publish.yml` calls stage, version-policy, consumer checks, and tarball tests in sequence during validation and publish jobs.
 - **Staging directory** — `dist/packages/` is consumed by `test/package-publish-readiness.test.js` (staged artifact assertions), `test-package-consumers.js` (staging and tarball source modes), and `test-package-tarballs.js`.
 - **Python package** — The Python package (`verser2-guest-python`) is included in the explicit package list for staging, consumer validation, and tarball testing. Its `dist/index.js` bridge is built by `scripts/build.mjs` inside the package directory.

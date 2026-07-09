@@ -30,11 +30,13 @@ npm run test:coverage
 npm run lint
 ```
 
-`npm test` builds all packages, stages publish-ready packages under
-`dist/packages`, then runs the Node source test suite. The default source suite
-skips redundant package-consumer matrix wrappers and pack dry-runs that are
-covered by the explicit package-validation commands below; this keeps ordinary
-test iteration focused while preserving package validation as a first-class path.
+`npm test` runs `npm run test:bounded`. It builds all packages, stages
+publish-ready packages under `dist/packages`, then runs the Node source test
+suite with bounded memory settings and guarded per-test memory-growth checks.
+The default source suite skips redundant package-consumer matrix wrappers and
+pack dry-runs that are covered by the explicit package-validation commands
+below; this keeps ordinary test iteration focused while preserving package
+validation as a first-class path.
 
 `npm run test:bounded` preserves the same full validation flow while running the
 Node-based build, staging, and test commands with a default 512 MiB V8 old-space
@@ -43,6 +45,13 @@ when diagnosing memory growth, validating suspected OOM fixes, or running the
 full suite on memory-constrained developer machines. It intentionally avoids a
 low virtual-memory cap because Node and npm wrappers may reserve more address
 space than they actively use.
+
+Default repository tests must remain compatible with the bounded runner. New or
+changed tests should pass with the default bounded heap and the guarded per-test
+growth threshold. If a test needs a larger per-test growth allowance, document
+the bounded infrastructure cost in the test or track notes and set an explicit
+`memoryLeakBytes` option on the guarded test instead of raising the global
+threshold.
 
 Run a focused repository test file after building and staging when package
 artifacts are needed:
@@ -98,14 +107,15 @@ HTTP/2 sessions:
 - Streaming suites should import `test/support/guarded-test.cjs` instead of raw
   `node:test`. The bounded runner enables this guard with `--expose-gc` and fails
   a guarded test when post-GC memory growth exceeds the configured per-test
-  threshold, defaulting to 1 MiB.
+  threshold, defaulting to 1 MiB. Individual guarded tests may use
+  `{ memoryLeakBytes: <bytes> }` only for documented, bounded runtime
+  infrastructure costs.
 
 Use `npm run test:bounded -- --memory-leak-bytes <bytes> -- test/<name>.test.js`
-to run guarded focused tests with a different leak threshold. Keep thresholds in
-the tens of kilobytes unless a test has a documented, bounded, and reviewed
-runtime allocation reason. The streaming-improvements track will tighten this
-allowance in review waves toward a 256 KiB target after existing tests are made
-fully flow-controlled.
+to run guarded focused tests with a different global leak threshold. Prefer the
+256 KiB review target for streaming/resource-sensitive tests. Tests that require
+512 KiB must have a specific, reviewed infrastructure reason and should use a
+per-test `memoryLeakBytes` allowance rather than weakening the whole suite.
 
 ## Package staging
 

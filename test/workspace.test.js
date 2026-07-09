@@ -17,10 +17,7 @@ test('root package declares npm workspace commands', () => {
     packageManifest.scripts.build,
     'npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-guest-js-common && npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run build --workspace=@signicode/verser2-guest-bun && npm run build --workspace=@signicode/verser2-guest-python',
   );
-  assert.equal(
-    packageManifest.scripts.test,
-    'npm run build && npm run stage:packages && node --test test/*.test.js',
-  );
+  assert.equal(packageManifest.scripts.test, 'npm run test:bounded');
   assert.equal(packageManifest.scripts['test:bounded'], 'node ./scripts/run-bounded-tests.js');
   assert.equal(
     packageManifest.scripts['test:bounded:coverage'],
