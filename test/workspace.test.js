@@ -51,6 +51,21 @@ test('bounded test runner preserves full validation flow with default heap limit
   assert.match(runnerSource, /runCommand\(process\.execPath, testArgs/);
 });
 
+test('guarded test wrapper supports per-test memory allowances', () => {
+  const guardedTestPath = path.join(rootDirectory, 'test/support/guarded-test.cjs');
+
+  assert.ok(fs.existsSync(guardedTestPath), 'Expected test/support/guarded-test.cjs to exist.');
+
+  const guardedTestSource = fs.readFileSync(guardedTestPath, 'utf8');
+
+  assert.match(
+    guardedTestSource,
+    /memoryLeakBytes\s*\?\?\s*process\.env\.VERSER_TEST_MEMORY_LEAK_BYTES/,
+  );
+  assert.match(guardedTestSource, /const \{ memoryLeakBytes, \.\.\.nodeTestOptions \} = options/);
+  assert.match(guardedTestSource, /nodeTest\.test\(name, nodeTestOptions/);
+});
+
 test('root TypeScript configuration targets strict CommonJS ES2019 declarations', () => {
   const tsconfig = readJson('tsconfig.json');
 

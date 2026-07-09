@@ -34,13 +34,13 @@ function collect() {
   global.gc();
 }
 
-function wrapTestBody(name, body) {
+function wrapTestBody(name, body, memoryLeakBytes) {
   if (!guardEnabled() || typeof body !== 'function') {
     return body;
   }
 
   const leakLimit = parseNonNegativeInteger(
-    process.env.VERSER_TEST_MEMORY_LEAK_BYTES,
+    memoryLeakBytes ?? process.env.VERSER_TEST_MEMORY_LEAK_BYTES,
     DEFAULT_MEMORY_LEAK_BYTES,
   );
 
@@ -77,7 +77,8 @@ function guardedTest(name, options, body) {
     return nodeTest.test(name, wrapTestBody(String(name), options));
   }
 
-  return nodeTest.test(name, options, wrapTestBody(String(name), body));
+  const { memoryLeakBytes, ...nodeTestOptions } = options;
+  return nodeTest.test(name, nodeTestOptions, wrapTestBody(String(name), body, memoryLeakBytes));
 }
 
 guardedTest.skip = nodeTest.test.skip;

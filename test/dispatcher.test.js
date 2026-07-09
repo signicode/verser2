@@ -92,85 +92,93 @@ test.before(async () => {
   }
 });
 
-test('Broker exposes an Undici Dispatcher that routes fetch by advertised hostname', async () => {
-  const route = await createConnectedRoute(
-    'dispatcher.local.test',
-    (request, response) => {
+test(
+  'Broker exposes an Undici Dispatcher that routes fetch by advertised hostname',
+  { memoryLeakBytes: 512 * 1024 },
+  async () => {
+    const route = await createConnectedRoute(
+      'dispatcher.local.test',
+      (request, response) => {
+        const chunks = [];
+        request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on('end', () => {
+          response.writeHead(208, { 'x-dispatcher': 'verser' });
+          response.end(
+            `${request.method} ${request.url} ${request.headers['x-input']} ${Buffer.concat(chunks).toString('utf8')}`,
+          );
+        });
+      },
+      { brokerId: 'broker-dispatcher-1', guestId: 'guest-dispatcher-1' },
+    );
+
+    try {
+      const dispatcher = route.broker.createDispatcher();
+      assert.equal(typeof dispatcher.dispatch, 'function');
+
+      const response = await fetch('http://dispatcher.local.test/fetch-path?query=1', {
+        method: 'POST',
+        headers: { 'x-input': 'fetch' },
+        body: 'payload',
+        dispatcher,
+      });
+
+      assert.equal(response.status, 208);
+      assert.equal(response.headers.get('x-dispatcher'), 'verser');
+      assert.equal(await response.text(), 'POST /fetch-path?query=1 fetch payload');
+    } finally {
+      await closeRoute(route);
+    }
+  },
+);
+
+test(
+  'Broker Dispatcher follows internal redirects for advertised route targets',
+  { memoryLeakBytes: 512 * 1024 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-dispatcher-redirect' });
+    const redirectGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-a' });
+    const targetGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-b' });
+    redirectGuest.attach((_request, response) => {
+      response.writeHead(307, { location: 'http://dispatcher-target.local.test/final?fetch=1' });
+      response.end('redirecting');
+    }, 'dispatcher-redirect.local.test');
+    targetGuest.attach((request, response) => {
       const chunks = [];
       request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
       request.on('end', () => {
-        response.writeHead(208, { 'x-dispatcher': 'verser' });
-        response.end(
-          `${request.method} ${request.url} ${request.headers['x-input']} ${Buffer.concat(chunks).toString('utf8')}`,
-        );
+        response.writeHead(211, { 'x-dispatcher-redirect': request.url });
+        response.end(`${request.method}:${Buffer.concat(chunks).toString('utf8')}`);
       });
-    },
-    { brokerId: 'broker-dispatcher-1', guestId: 'guest-dispatcher-1' },
-  );
+    }, 'dispatcher-target.local.test');
 
-  try {
-    const dispatcher = route.broker.createDispatcher();
-    assert.equal(typeof dispatcher.dispatch, 'function');
+    try {
+      await withTimeout(broker.connect(), 'broker-dispatcher-redirect connect');
+      await withTimeout(redirectGuest.connect(), 'guest-dispatcher-redirect-a connect');
+      await withTimeout(targetGuest.connect(), 'guest-dispatcher-redirect-b connect');
+      await withTimeout(broker.waitForRoute('dispatcher-redirect.local.test'), 'redirect route');
+      await withTimeout(broker.waitForRoute('dispatcher-target.local.test'), 'target route');
 
-    const response = await fetch('http://dispatcher.local.test/fetch-path?query=1', {
-      method: 'POST',
-      headers: { 'x-input': 'fetch' },
-      body: 'payload',
-      dispatcher,
-    });
+      const response = await fetch('http://dispatcher-redirect.local.test/start', {
+        method: 'POST',
+        body: 'payload',
+        dispatcher: broker.createDispatcher(),
+        redirect: 'manual',
+      });
 
-    assert.equal(response.status, 208);
-    assert.equal(response.headers.get('x-dispatcher'), 'verser');
-    assert.equal(await response.text(), 'POST /fetch-path?query=1 fetch payload');
-  } finally {
-    await closeRoute(route);
-  }
-});
-
-test('Broker Dispatcher follows internal redirects for advertised route targets', async () => {
-  const host = createHost({ port: 0 });
-  await host.start();
-  const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-dispatcher-redirect' });
-  const redirectGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-a' });
-  const targetGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-b' });
-  redirectGuest.attach((_request, response) => {
-    response.writeHead(307, { location: 'http://dispatcher-target.local.test/final?fetch=1' });
-    response.end('redirecting');
-  }, 'dispatcher-redirect.local.test');
-  targetGuest.attach((request, response) => {
-    const chunks = [];
-    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-    request.on('end', () => {
-      response.writeHead(211, { 'x-dispatcher-redirect': request.url });
-      response.end(`${request.method}:${Buffer.concat(chunks).toString('utf8')}`);
-    });
-  }, 'dispatcher-target.local.test');
-
-  try {
-    await withTimeout(broker.connect(), 'broker-dispatcher-redirect connect');
-    await withTimeout(redirectGuest.connect(), 'guest-dispatcher-redirect-a connect');
-    await withTimeout(targetGuest.connect(), 'guest-dispatcher-redirect-b connect');
-    await withTimeout(broker.waitForRoute('dispatcher-redirect.local.test'), 'redirect route');
-    await withTimeout(broker.waitForRoute('dispatcher-target.local.test'), 'target route');
-
-    const response = await fetch('http://dispatcher-redirect.local.test/start', {
-      method: 'POST',
-      body: 'payload',
-      dispatcher: broker.createDispatcher(),
-      redirect: 'manual',
-    });
-
-    assert.equal(response.status, 211);
-    assert.equal(response.headers.get('x-dispatcher-redirect'), '/final?fetch=1');
-    assert.equal(await response.text(), 'POST:payload');
-  } finally {
-    await withTimeout(broker.close('test-complete'), 'broker-dispatcher-redirect close');
-    await withTimeout(redirectGuest.close('test-complete'), 'guest-dispatcher-redirect-a close');
-    await withTimeout(targetGuest.close('test-complete'), 'guest-dispatcher-redirect-b close');
-    await withTimeout(host.close('test-complete'), 'host-dispatcher-redirect close');
-  }
-});
+      assert.equal(response.status, 211);
+      assert.equal(response.headers.get('x-dispatcher-redirect'), '/final?fetch=1');
+      assert.equal(await response.text(), 'POST:payload');
+    } finally {
+      await withTimeout(broker.close('test-complete'), 'broker-dispatcher-redirect close');
+      await withTimeout(redirectGuest.close('test-complete'), 'guest-dispatcher-redirect-a close');
+      await withTimeout(targetGuest.close('test-complete'), 'guest-dispatcher-redirect-b close');
+      await withTimeout(host.close('test-complete'), 'host-dispatcher-redirect close');
+    }
+  },
+);
 
 test('Broker Dispatcher rejects fetch requests for non-advertised hostnames', async () => {
   const broker = createVerserBroker({

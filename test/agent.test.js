@@ -115,99 +115,107 @@ test.before(async () => {
   }
 });
 
-test('Broker exposes an Agent that routes matching hostnames through Verser2', async () => {
-  const host = createHost({ port: 0 });
-  await host.start();
-  const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-1' });
-  const guest = createGuest({ hostUrl, guestId: 'guest-agent-1' });
-  let agent;
-  guest.attach((request, response) => {
-    const chunks = [];
-    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-    request.on('end', () => {
-      response.writeHead(207, { 'x-agent': 'verser' });
-      response.end(`${request.method} ${request.url} ${Buffer.concat(chunks).toString('utf8')}`);
-    });
-  }, 'agent.local.test');
+test(
+  'Broker exposes an Agent that routes matching hostnames through Verser2',
+  { memoryLeakBytes: 512 * 1024 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-agent-1' });
+    const guest = createGuest({ hostUrl, guestId: 'guest-agent-1' });
+    let agent;
+    guest.attach((request, response) => {
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => {
+        response.writeHead(207, { 'x-agent': 'verser' });
+        response.end(`${request.method} ${request.url} ${Buffer.concat(chunks).toString('utf8')}`);
+      });
+    }, 'agent.local.test');
 
-  try {
-    await withTimeout(broker.connect(), 'broker-agent-1 connect');
-    await withTimeout(guest.connect(), 'guest-agent-1 connect');
-    await withTimeout(broker.waitForRoute('agent.local.test'), 'agent.local.test route');
+    try {
+      await withTimeout(broker.connect(), 'broker-agent-1 connect');
+      await withTimeout(guest.connect(), 'guest-agent-1 connect');
+      await withTimeout(broker.waitForRoute('agent.local.test'), 'agent.local.test route');
 
-    agent = broker.createAgent();
-    assert.equal(agent.protocol, 'http:');
+      agent = broker.createAgent();
+      assert.equal(agent.protocol, 'http:');
 
-    const response = await requestWithAgent(
-      'http://agent.local.test/agent-path',
-      { agent, method: 'POST', headers: { 'x-input': 'agent' } },
-      'payload',
-    );
+      const response = await requestWithAgent(
+        'http://agent.local.test/agent-path',
+        { agent, method: 'POST', headers: { 'x-input': 'agent' } },
+        'payload',
+      );
 
-    assert.equal(response.statusCode, 207);
-    assert.equal(response.headers['x-agent'], 'verser');
-    assert.deepEqual(response.body, Buffer.from('POST /agent-path payload'));
-  } finally {
-    if (agent !== undefined) {
-      agent.destroy();
+      assert.equal(response.statusCode, 207);
+      assert.equal(response.headers['x-agent'], 'verser');
+      assert.deepEqual(response.body, Buffer.from('POST /agent-path payload'));
+    } finally {
+      if (agent !== undefined) {
+        agent.destroy();
+      }
+      await withTimeout(broker.close('test-complete'), 'broker-agent-1 close');
+      await withTimeout(guest.close('test-complete'), 'guest-agent-1 close');
+      await withTimeout(host.close('test-complete'), 'host-agent-1 close');
+      // Flush pending process.nextTick callbacks (e.g., sink final destroy)
+      await new Promise((resolve) => process.nextTick(resolve));
     }
-    await withTimeout(broker.close('test-complete'), 'broker-agent-1 close');
-    await withTimeout(guest.close('test-complete'), 'guest-agent-1 close');
-    await withTimeout(host.close('test-complete'), 'host-agent-1 close');
-    // Flush pending process.nextTick callbacks (e.g., sink final destroy)
-    await new Promise((resolve) => process.nextTick(resolve));
-  }
-});
+  },
+);
 
-test('Broker Agent follows internal redirects for advertised route targets', async () => {
-  const host = createHost({ port: 0 });
-  await host.start();
-  const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-redirect' });
-  const redirectGuest = createGuest({ hostUrl, guestId: 'guest-agent-redirect-a' });
-  const targetGuest = createGuest({ hostUrl, guestId: 'guest-agent-redirect-b' });
-  let agent;
-  redirectGuest.attach((_request, response) => {
-    response.writeHead(308, { location: 'http://agent-target.local.test/final' });
-    response.end('redirecting');
-  }, 'agent-redirect.local.test');
-  targetGuest.attach((request, response) => {
-    const chunks = [];
-    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-    request.on('end', () => {
-      response.writeHead(212, { 'x-agent-redirect': request.url });
-      response.end(`${request.method}:${Buffer.concat(chunks).toString('utf8')}`);
-    });
-  }, 'agent-target.local.test');
+test(
+  'Broker Agent follows internal redirects for advertised route targets',
+  { memoryLeakBytes: 512 * 1024 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-agent-redirect' });
+    const redirectGuest = createGuest({ hostUrl, guestId: 'guest-agent-redirect-a' });
+    const targetGuest = createGuest({ hostUrl, guestId: 'guest-agent-redirect-b' });
+    let agent;
+    redirectGuest.attach((_request, response) => {
+      response.writeHead(308, { location: 'http://agent-target.local.test/final' });
+      response.end('redirecting');
+    }, 'agent-redirect.local.test');
+    targetGuest.attach((request, response) => {
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => {
+        response.writeHead(212, { 'x-agent-redirect': request.url });
+        response.end(`${request.method}:${Buffer.concat(chunks).toString('utf8')}`);
+      });
+    }, 'agent-target.local.test');
 
-  try {
-    await withTimeout(broker.connect(), 'broker-agent-redirect connect');
-    await withTimeout(redirectGuest.connect(), 'guest-agent-redirect-a connect');
-    await withTimeout(targetGuest.connect(), 'guest-agent-redirect-b connect');
-    await withTimeout(broker.waitForRoute('agent-redirect.local.test'), 'agent redirect route');
-    await withTimeout(broker.waitForRoute('agent-target.local.test'), 'agent target route');
+    try {
+      await withTimeout(broker.connect(), 'broker-agent-redirect connect');
+      await withTimeout(redirectGuest.connect(), 'guest-agent-redirect-a connect');
+      await withTimeout(targetGuest.connect(), 'guest-agent-redirect-b connect');
+      await withTimeout(broker.waitForRoute('agent-redirect.local.test'), 'agent redirect route');
+      await withTimeout(broker.waitForRoute('agent-target.local.test'), 'agent target route');
 
-    agent = broker.createAgent();
-    const response = await requestWithAgent(
-      'http://agent-redirect.local.test/start',
-      { agent, method: 'PUT' },
-      'payload',
-    );
+      agent = broker.createAgent();
+      const response = await requestWithAgent(
+        'http://agent-redirect.local.test/start',
+        { agent, method: 'PUT' },
+        'payload',
+      );
 
-    assert.equal(response.statusCode, 212);
-    assert.equal(response.headers['x-agent-redirect'], '/final');
-    assert.deepEqual(response.body, Buffer.from('PUT:payload'));
-  } finally {
-    if (agent !== undefined) {
-      agent.destroy();
+      assert.equal(response.statusCode, 212);
+      assert.equal(response.headers['x-agent-redirect'], '/final');
+      assert.deepEqual(response.body, Buffer.from('PUT:payload'));
+    } finally {
+      if (agent !== undefined) {
+        agent.destroy();
+      }
+      await withTimeout(broker.close('test-complete'), 'broker-agent-redirect close');
+      await withTimeout(redirectGuest.close('test-complete'), 'guest-agent-redirect-a close');
+      await withTimeout(targetGuest.close('test-complete'), 'guest-agent-redirect-b close');
+      await withTimeout(host.close('test-complete'), 'host-agent-redirect close');
     }
-    await withTimeout(broker.close('test-complete'), 'broker-agent-redirect close');
-    await withTimeout(redirectGuest.close('test-complete'), 'guest-agent-redirect-a close');
-    await withTimeout(targetGuest.close('test-complete'), 'guest-agent-redirect-b close');
-    await withTimeout(host.close('test-complete'), 'host-agent-redirect close');
-  }
-});
+  },
+);
 
 test('Broker Agent routes advertised domains without DNS resolution and rejects non-matching hosts', async () => {
   const host = createHost({ port: 0 });
