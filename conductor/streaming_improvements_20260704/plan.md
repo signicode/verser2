@@ -201,6 +201,10 @@
             - Remaining failure: `Federated route revocation propagates lifecycle events from downstream to upstream Host` grew 802,087 bytes.
             - Third-wave fix: replaced unbounded `managerEvents` array (`broker.onRouteChange` pushing every event) with a per-event Promise that resolves on the matching `type=removed, reason=revoked` event; listener unsubscribed via `onRouteChange`'s returned unsubscribe function in `finally`.
             - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=524288 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Federated route revocation propagates lifecycle events from downstream to upstream Host" test/host-upstreams.test.js` — 1/1 pass; `npm run lint` — clean.
+            - Fourth-wave bounded rerun: `npm run test:bounded -- --memory-leak-bytes 524288` — 350 tests, 345 passed, 4 skipped, 1 failed.
+            - Remaining failure: `Federated route degraded/disconnected state propagates through federation` grew 769,662 bytes.
+            - Fourth-wave fix: replaced unbounded `managerEvents` arrays in three adjacent tests (degraded, restoration, removal) with per-event Promises unsubscribed in `finally`, matching the same pattern as the previous lifecycle-event fixes. The degraded test was the reported failure; the restoration and removal tests were preemptively fixed since they shared the same leak pattern.
+            - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=524288 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Federated route degraded/disconnected state propagates through federation" test/host-upstreams.test.js` — 1/1 pass; `npm run lint` — clean.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 

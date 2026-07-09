@@ -1369,6 +1369,11 @@ test('Federated route degraded/disconnected state propagates through federation'
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
   let broker;
+  let unsubscribeRouteChanges;
+  let degradedEventResolve;
+  const degradedEvent = new Promise((resolve) => {
+    degradedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1395,24 +1400,29 @@ test('Federated route degraded/disconnected state propagates through federation'
 
     // Attach local Broker to manager to observe lifecycle events
     broker = await manager.attachLocalBroker({ brokerId: 'broker-degrade-manager' });
-    const managerEvents = [];
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'degraded' &&
+        event.targetId === 'guest-degrade-federated' &&
+        event.domain === 'degrade-federated.verser.test' &&
+        event.reason === 'disconnected'
+      ) {
+        degradedEventResolve(event);
+      }
+    });
 
     // Disconnect the Guest (close)
     await guest.close();
 
     // Verify the manager's Broker receives a 'degraded' event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'degraded' &&
-            e.targetId === 'guest-degrade-federated' &&
-            e.domain === 'degrade-federated.verser.test' &&
-            e.reason === 'disconnected',
-        ),
-      ),
-    );
+    let degradedTimer;
+    const degradedTimeout = new Promise((_, reject) => {
+      degradedTimer = setTimeout(
+        () => reject(new Error('degraded route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([degradedEvent, degradedTimeout]).finally(() => clearTimeout(degradedTimer));
 
     // Verify the route is removed from the manager's active candidates
     // (The route goes degraded on the runner; the full federated snapshot removes it)
@@ -1426,6 +1436,8 @@ test('Federated route degraded/disconnected state propagates through federation'
       ),
     );
   } finally {
+    unsubscribeRouteChanges?.();
+    degradedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
@@ -1440,6 +1452,15 @@ test('Federated route restoration before timeout propagates through federation',
     degradedRouteTimeoutMs: 2000,
   });
   let broker;
+  let unsubscribeRouteChanges;
+  let degradedEventResolve;
+  let changedEventResolve;
+  const degradedEvent = new Promise((resolve) => {
+    degradedEventResolve = resolve;
+  });
+  const changedEvent = new Promise((resolve) => {
+    changedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1449,9 +1470,25 @@ test('Federated route restoration before timeout propagates through federation',
     });
 
     // Attach Broker before Guest disconnection to catch lifecycle events
-    const managerEvents = [];
     broker = await manager.attachLocalBroker({ brokerId: 'broker-restore-manager' });
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'degraded' &&
+        event.targetId === 'guest-restore-federated' &&
+        event.domain === 'restore-federated.verser.test' &&
+        event.reason === 'disconnected'
+      ) {
+        degradedEventResolve(event);
+      }
+      if (
+        event.type === 'changed' &&
+        event.targetId === 'guest-restore-federated' &&
+        event.domain === 'restore-federated.verser.test' &&
+        event.reason === 'restored'
+      ) {
+        changedEventResolve(event);
+      }
+    });
 
     const guest = await runner.attachLocalGuest({
       guestId: 'guest-restore-federated',
@@ -1473,17 +1510,14 @@ test('Federated route restoration before timeout propagates through federation',
     await guest.close();
 
     // Verify degraded event propagates
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'degraded' &&
-            e.targetId === 'guest-restore-federated' &&
-            e.domain === 'restore-federated.verser.test' &&
-            e.reason === 'disconnected',
-        ),
-      ),
-    );
+    let degradedTimer;
+    const degradedTimeout = new Promise((_, reject) => {
+      degradedTimer = setTimeout(
+        () => reject(new Error('degraded route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([degradedEvent, degradedTimeout]).finally(() => clearTimeout(degradedTimer));
 
     // Reconnect the Guest with same peerId and domain BEFORE the timeout
     const restoredGuest = await runner.attachLocalGuest({
@@ -1493,17 +1527,14 @@ test('Federated route restoration before timeout propagates through federation',
     });
 
     // Verify the manager's Broker receives a 'changed' (restored) event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'changed' &&
-            e.targetId === 'guest-restore-federated' &&
-            e.domain === 'restore-federated.verser.test' &&
-            e.reason === 'restored',
-        ),
-      ),
-    );
+    let changedTimer;
+    const changedTimeout = new Promise((_, reject) => {
+      changedTimer = setTimeout(
+        () => reject(new Error('changed route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([changedEvent, changedTimeout]).finally(() => clearTimeout(changedTimer));
 
     // Verify the route is available again on the manager
     await assertEventually(() =>
@@ -1518,6 +1549,9 @@ test('Federated route restoration before timeout propagates through federation',
 
     await restoredGuest.close();
   } finally {
+    unsubscribeRouteChanges?.();
+    degradedEventResolve = undefined;
+    changedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
@@ -1532,6 +1566,15 @@ test('Federated route full removal after timeout propagates through federation',
     degradedRouteTimeoutMs: 100,
   });
   let broker;
+  let unsubscribeRouteChanges;
+  let degradedEventResolve;
+  let removedEventResolve;
+  const degradedEvent = new Promise((resolve) => {
+    degradedEventResolve = resolve;
+  });
+  const removedEvent = new Promise((resolve) => {
+    removedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1558,39 +1601,49 @@ test('Federated route full removal after timeout propagates through federation',
 
     // Attach Broker to observe lifecycle events
     broker = await manager.attachLocalBroker({ brokerId: 'broker-timeout-manager' });
-    const managerEvents = [];
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'degraded' &&
+        event.targetId === 'guest-timeout-federated' &&
+        event.domain === 'timeout-federated.verser.test'
+      ) {
+        degradedEventResolve(event);
+      }
+      if (
+        event.type === 'removed' &&
+        event.targetId === 'guest-timeout-federated' &&
+        event.domain === 'timeout-federated.verser.test' &&
+        event.reason === 'timeout'
+      ) {
+        removedEventResolve(event);
+      }
+    });
 
     // Disconnect the Guest
     await guest.close();
 
     // Verify degraded event propagates
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'degraded' &&
-            e.targetId === 'guest-timeout-federated' &&
-            e.domain === 'timeout-federated.verser.test',
-        ),
-      ),
-    );
+    let degradedTimer;
+    const degradedTimeout = new Promise((_, reject) => {
+      degradedTimer = setTimeout(
+        () => reject(new Error('degraded route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([degradedEvent, degradedTimeout]).finally(() => clearTimeout(degradedTimer));
 
     // Wait for the degraded route timeout to expire
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Verify the manager's Broker receives a 'removed' (timeout) event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'removed' &&
-            e.targetId === 'guest-timeout-federated' &&
-            e.domain === 'timeout-federated.verser.test' &&
-            e.reason === 'timeout',
-        ),
-      ),
-    );
+    let removedTimer;
+    const removedTimeout = new Promise((_, reject) => {
+      removedTimer = setTimeout(
+        () => reject(new Error('removed route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([removedEvent, removedTimeout]).finally(() => clearTimeout(removedTimer));
 
     // Verify the route is gone from the manager's candidates
     assert.deepEqual(
@@ -1601,6 +1654,9 @@ test('Federated route full removal after timeout propagates through federation',
       [],
     );
   } finally {
+    unsubscribeRouteChanges?.();
+    degradedEventResolve = undefined;
+    removedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
