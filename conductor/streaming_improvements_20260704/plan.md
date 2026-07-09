@@ -205,6 +205,7 @@
             - Remaining failure: `Federated route degraded/disconnected state propagates through federation` grew 769,662 bytes.
             - Fourth-wave fix: replaced unbounded `managerEvents` arrays in three adjacent tests (degraded, restoration, removal) with per-event Promises unsubscribed in `finally`, matching the same pattern as the previous lifecycle-event fixes. The degraded test was the reported failure; the restoration and removal tests were preemptively fixed since they shared the same leak pattern.
             - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=524288 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Federated route degraded/disconnected state propagates through federation" test/host-upstreams.test.js` — 1/1 pass; `npm run lint` — clean.
+            - Fourth-wave full bounded rerun: `npm run test:bounded -- --memory-leak-bytes 524288` — 350 tests, 346 passed, 4 skipped, 0 failed.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 
