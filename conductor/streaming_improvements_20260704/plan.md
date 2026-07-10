@@ -313,7 +313,7 @@
 
 ## Phase 4: WebSocket Design Gate and Implementation
 
-- [~] Task: Design WebSocket transport strategy and pause for approval
+- [x] Task: Design WebSocket transport strategy and pause for approval
     - [x] Document the chosen WebSocket strategy: WebSocket support will use an explicit Verser WebSocket subprotocol (`VWS/1`) over the existing TLS HTTP/2 peer transport. The Host will not accept or forward HTTP/1.1 upgrade bytes, and this phase will not introduce generic CONNECT, generic RFC 8441 extended CONNECT tunneling, or generic L4 forwarding.
     - [x] Define protocol shape:
         - `VWS/1` uses dedicated Broker-to-Host and Guest-to-Host WebSocket streams, with a separate Guest WebSocket lease pool so long-lived WebSockets do not consume HTTP request leases.
@@ -350,7 +350,7 @@
         15. Generic CONNECT remains rejected.
         16. Bun `server.upgrade()` remains false if Bun Guest WebSocket support is deferred.
         17. Federated WebSocket routes fail with explicit unsupported error unless federation support is separately approved.
-    - [ ] Pause for user approval before adding protocol/API changes.
+    - [x] Pause for user approval before adding protocol/API changes: approved by user for VWS/1 as scoped, including Node direct Broker/Guest APIs and Python ASGI Guest websocket scopes, with Bun `server.upgrade()`, Agent/Dispatcher generic upgrades, generic CONNECT/RFC8441 tunneling, and L4 forwarding out of scope.
 - [ ] Task: Add WebSocket acceptance tests before implementation
     - [ ] Add tests for successful WebSocket connection setup on the approved runtime surface.
     - [ ] Add tests for bidirectional message flow, close handshake, abnormal close/abort, backpressure, route revocation/disconnect, and Host/federation behavior where in scope.
