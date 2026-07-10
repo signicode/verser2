@@ -313,12 +313,44 @@
 
 ## Phase 4: WebSocket Design Gate and Implementation
 
-- [ ] Task: Design WebSocket transport strategy and pause for approval
-    - [ ] Document the chosen WebSocket strategy: HTTP/1.1 upgrade handling, HTTP/2 RFC 8441 extended CONNECT constraints, or another explicit Verser protocol approach.
-    - [ ] Define supported runtime surfaces for this track: Node, Bun, and/or Python ASGI websocket scopes.
-    - [ ] Define full-duplex lifecycle, close codes/reasons, ping/pong behavior, abort/cancel mapping, backpressure, limits, timeouts, and route lifecycle behavior.
-    - [ ] Explicitly confirm that generic CONNECT tunneling and generic L4 forwarding remain out of scope.
-    - [ ] Pause for user approval before implementing WebSocket protocol/API changes.
+- [~] Task: Design WebSocket transport strategy and pause for approval
+    - [x] Document the chosen WebSocket strategy: WebSocket support will use an explicit Verser WebSocket subprotocol (`VWS/1`) over the existing TLS HTTP/2 peer transport. The Host will not accept or forward HTTP/1.1 upgrade bytes, and this phase will not introduce generic CONNECT, generic RFC 8441 extended CONNECT tunneling, or generic L4 forwarding.
+    - [x] Define protocol shape:
+        - `VWS/1` uses dedicated Broker-to-Host and Guest-to-Host WebSocket streams, with a separate Guest WebSocket lease pool so long-lived WebSockets do not consume HTTP request leases.
+        - After route resolution, the Host forwards an explicit `OPEN` control frame to the selected Guest. Guest accept/reject is represented by `ACCEPT`/`ERROR` control frames.
+        - Once accepted, both directions exchange framed `TEXT`, `BINARY`, `PING`, `PONG`, `CLOSE`, and `ERROR` messages over HTTP/2 DATA. Message boundaries are preserved by VWS framing; HTTP/2 flow control provides transport backpressure, and runtime adapters must expose bounded send/receive behavior.
+    - [x] Define supported runtime surfaces for this track:
+        - Node Broker direct WebSocket API plus Node Guest explicit WebSocket handler API.
+        - Python ASGI Guest websocket scopes if approved.
+        - Bun Guest `server.upgrade()` remains unsupported unless separately approved. Bun Broker may expose/wrap the Node direct WebSocket API only if it remains a bounded wrapper change.
+        - Node Dispatcher/Agent generic upgrade handling remains unsupported.
+    - [x] Define lifecycle semantics:
+        - Broker open resolves only after Guest accept; Guest reject before accept rejects the Broker open with a structured error; handshake timeout closes both streams with `timeout`.
+        - `TEXT` and `BINARY` preserve WebSocket message boundaries; send operations must observe HTTP/2/runtime backpressure; inbound queues must be bounded by message count/bytes.
+        - Normal close sends `CLOSE(code, reason)`, defaulting to `1000`. Invalid app-sent close codes are rejected; abnormal transport loss is reported locally as `1006` and is not sent on wire.
+        - `PING` is auto-ponged. Node may expose ping/pong APIs; ASGI does not need to expose ping/pong unless separately approved.
+        - Broker/Guest aborts, disconnects, Host close, and stream resets deterministically clean up both sides. Oversized messages close with `1009` where possible.
+        - Route revocation blocks new WebSocket opens but does not terminate already-active WebSockets; Guest disconnect terminates active WebSockets abnormally.
+    - [x] Explicitly confirm out of scope: generic HTTP `CONNECT`, generic RFC 8441 extended CONNECT tunneling, generic L4 forwarding, transparent raw TCP/socket forwarding, browser-side Verser client, HTTP/3/QUIC, trailers/informational responses, Agent/Dispatcher arbitrary upgrade support, Bun `server.upgrade()` parity unless approved, and Python Host/fetch/Agent/Dispatcher helpers.
+    - [x] Acceptance tests to add before implementation:
+        1. Node Broker opens WebSocket to Node Guest and negotiates subprotocol.
+        2. Bidirectional text and binary messages preserve message boundaries.
+        3. Concurrent full-duplex send from both sides.
+        4. Backpressure: slow receiver does not cause unbounded buffering.
+        5. Normal close code/reason delivered both ways.
+        6. Abnormal close: Broker abort maps to Guest disconnect/local `1006`.
+        7. Guest disconnect maps to Broker abnormal close/`stream-failure`.
+        8. Ping receives pong automatically.
+        9. Oversized message closes with `1009`.
+        10. Invalid close codes are rejected.
+        11. Route revocation blocks new opens but does not kill active WebSocket.
+        12. Host close cleans active WebSocket streams/leases.
+        13. Python ASGI Guest receives `websocket.connect`, accepts, exchanges messages, and closes if Python ASGI scope is approved.
+        14. Dispatcher upgrade remains rejected.
+        15. Generic CONNECT remains rejected.
+        16. Bun `server.upgrade()` remains false if Bun Guest WebSocket support is deferred.
+        17. Federated WebSocket routes fail with explicit unsupported error unless federation support is separately approved.
+    - [ ] Pause for user approval before adding protocol/API changes.
 - [ ] Task: Add WebSocket acceptance tests before implementation
     - [ ] Add tests for successful WebSocket connection setup on the approved runtime surface.
     - [ ] Add tests for bidirectional message flow, close handshake, abnormal close/abort, backpressure, route revocation/disconnect, and Host/federation behavior where in scope.
