@@ -5,8 +5,8 @@ internally by :class:`verser2_guest_python.guest.VerserGuest` to convert
 Verser envelope metadata into ASGI 3 scope dictionaries and to drive the ASGI
 application lifecycle.
 
-ASGI 3 scope
-    The scope dict follows the ASGI 3.0 specification
+ASGI 3 HTTP scope
+    The HTTP scope dict follows the ASGI 3.0 specification
     (``asgi.version == "3.0"``, ``asgi.spec_version == "2.5"``)::
 
         {
@@ -26,6 +26,28 @@ ASGI 3 scope
 
     The ``receive`` callable yields ``http.request`` events, and the ``send``
     callable accepts ``http.response.start`` and ``http.response.body`` events.
+
+ASGI 3 WebSocket scope
+    The WebSocket scope dict follows the ASGI 3.0 specification
+    (``asgi.version == "3.0"``, ``asgi.spec_version == "2.5"``)::
+
+        {
+            "type": "websocket",
+            "asgi": {"version": "3.0", "spec_version": "2.5"},
+            "scheme": "ws",
+            "path": "<URL-decoded path>",
+            "query_string": "<query string as bytes>",
+            "headers": [(b"name", b"value"), ...],
+            "client": None,
+            "server": None,
+            "root_path": "",
+            "subprotocols": ["<subprotocol>", ...],
+            "extensions": None,
+        }
+
+    The ``receive`` callable yields ``websocket.connect``, ``websocket.receive``,
+    and ``websocket.disconnect`` events.  The ``send`` callable accepts
+    ``websocket.accept``, ``websocket.send``, and ``websocket.close`` events.
 """
 
 from __future__ import annotations
@@ -37,7 +59,14 @@ from urllib.parse import quote, unquote, urlsplit
 from .protocol import normalize_headers, sanitize_http2_response_headers
 
 
-ASGIApp = Callable[[dict[str, Any], Callable[[], Awaitable[dict[str, Any]]], Callable[[dict[str, Any]], Awaitable[None]]], Awaitable[None]]
+ASGIApp = Callable[
+    [
+        dict[str, Any],
+        Callable[[], Awaitable[dict[str, Any]]],
+        Callable[[dict[str, Any]], Awaitable[None]],
+    ],
+    Awaitable[None],
+]
 """Type alias for an ASGI 3 application callable.
 
 Signature: ``async def app(scope, receive, send)``.
@@ -88,6 +117,114 @@ class DispatchResponse:
     headers: dict[str, str] | None = None
     body: bytes = b""
     error: dict[str, Any] | None = None
+
+
+def build_websocket_scope(
+    metadata: dict[str, Any], body: bytes = b""
+) -> dict[str, Any]:
+    """Build an ASGI 3 ``websocket`` scope dict from Verser envelope metadata.
+
+    Parameters
+    ----------
+    metadata : dict
+        Envelope metadata containing at least ``path`` and optionally
+        ``headers``.  The path may include a query string which will be
+        split into ``path`` and ``query_string``.
+    body : bytes
+        Initial body data (reserved for future use; not yet reflected in
+        the scope).
+
+    Returns
+    -------
+    dict
+        ASGI 3 websocket scope dictionary.
+    """
+    split = urlsplit(str(metadata.get("path") or "/"))
+    path = unquote(split.path or "/")
+    headers = [
+        (name.encode("ascii", "ignore"), value.encode("utf-8"))
+        for name, value in normalize_headers(metadata.get("headers")).items()
+    ]
+    # Extract subprotocols from the sec-websocket-protocol header.
+    subprotocols: list[str] = []
+    for name, value in headers:
+        if name.lower() == b"sec-websocket-protocol":
+            subprotocols = [s.strip() for s in value.decode("utf-8").split(",")]
+            break
+    return {
+        "type": "websocket",
+        "asgi": {"version": "3.0", "spec_version": "2.5"},
+        "scheme": "ws",
+        "path": path,
+        "query_string": split.query.encode("ascii"),
+        "headers": headers,
+        "client": None,
+        "server": None,
+        "root_path": "",
+        "subprotocols": subprotocols,
+        "extensions": None,
+    }
+
+
+async def dispatch_asgi_websocket(
+    app: ASGIApp,
+    guest_id: str,
+    metadata: dict[str, Any],
+) -> None:
+    """Drive a minimal ASGI websocket lifecycle for testing.
+
+    This function builds a websocket scope from *metadata*, then drives
+    the ASGI app through a connect → receive-text → receive-binary →
+    disconnect sequence.
+
+    The ``receive`` callable yields exactly four events:
+
+    1. ``websocket.connect``
+    2. ``websocket.receive`` with ``text`` = ``"hello"``
+    3. ``websocket.receive`` with ``bytes`` = ``b"\\x00\\xff\\x7f"``
+    4. ``websocket.disconnect`` with ``code`` = ``1000``
+
+    The ``send`` callable accepts ``websocket.accept``, ``websocket.send``,
+    and ``websocket.close`` events without raising.
+
+    If the app raises an exception it propagates; callers should handle it.
+
+    Parameters
+    ----------
+    app : ASGIApp
+        The ASGI 3 application callable.
+    guest_id : str
+        Guest identifier (used in error context; currently passed through
+        for future error-reporting integration).
+    metadata : dict
+        Request envelope metadata.
+    """
+    scope = build_websocket_scope(metadata)
+    events: list[dict[str, Any]] = [
+        {"type": "websocket.connect"},
+        {"type": "websocket.receive", "text": "hello"},
+        {"type": "websocket.receive", "bytes": b"\x00\xff\x7f"},
+        {"type": "websocket.disconnect", "code": 1000},
+    ]
+    event_index = 0
+
+    async def receive() -> dict[str, Any]:
+        nonlocal event_index
+        if event_index >= len(events):
+            return {"type": "websocket.disconnect", "code": 1000}
+        event = events[event_index]
+        event_index += 1
+        return event
+
+    async def send(event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        if event_type not in ("websocket.accept", "websocket.send", "websocket.close"):
+            raise ValueError(f"Unknown websocket event type: {event_type!r}")
+
+    try:
+        await app(scope, receive, send)
+    except Exception:
+        raise
 
 
 def build_http_scope(metadata: dict[str, Any]) -> dict[str, Any]:

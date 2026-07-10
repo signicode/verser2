@@ -365,12 +365,37 @@
         - `node --test --test-name-pattern="upgrade" test/dispatcher.test.js` — 1/1 pass (regression guard confirms Dispatcher rejects upgrades today).
         - `uv run --project packages/verser2-guest-python python -m unittest discover -s /home/michal/verser2/packages/verser2-guest-python/tests -p "test_websocket_asgi.py" -v` — 0/2 pass; both fail with `ImportError: cannot import name 'build_websocket_scope' from 'verser2_guest_python.asgi'` (function does not exist).
         - `npm run lint` — passes.
-- [ ] Task: Implement approved WebSocket support
-    - [ ] Implement only the approved WebSocket runtime surfaces and protocol/API changes.
-    - [ ] Preserve existing HTTP request/response behavior and avoid introducing generic tunnel behavior.
-    - [ ] Update Node/Bun/Python adapters according to the approved design.
-    - [ ] Run focused WebSocket validation and affected package builds.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Implement approved WebSocket support (P1 fixes applied)
+    - [x] Python ASGI Guest websocket scope (`build_websocket_scope`) and lifecycle helper (`dispatch_asgi_websocket`).
+    - [x] Node Guest attachWebSocket, Broker openWebSocket, and VWS/1 lease/stream wiring.
+    - [x] Implement only the approved WebSocket runtime surfaces and protocol/API changes.
+    - [x] Preserve existing HTTP request/response behavior and avoid introducing generic tunnel behavior.
+    - [x] Update Node/Bun/Python adapters according to the approved design.
+    - [x] P1 fixes applied:
+        - Fix 1: WebSocket lease streams are session-bound (`peer.session === stream.session`),
+          WS leases cleared on peer disconnect (`clearWsIdleLeases` in `removeSessionPeers`
+          and `detachLocalPeer`).
+        - Fix 2: Host WS opens validate route/domain through route registry (`getCandidates`);
+          revoked, degraded, missing, and federated routes are rejected.
+        - Fix 3: Guest `attachWebSocket` handler receives open metadata `(domain, path, protocol)`
+          and `ws` instance; returns accept options, `false`/`null` to reject, or a promise.
+          `sendAccept` is deferred until handler decision.
+        - Fix 4: `VerserWebSocket.send()` returns `Promise<void>` with drain-based backpressure.
+          `bridgeWebSocketStreams` pauses source on `write() === false`, resumes on `drain`,
+          and cleans up all listeners.
+        - Fix 5: Bounded frame/message parsing with `VWS_MAX_FRAME_BYTES` (1 MiB).
+          `readVwsLine` enforces max bytes; `VerserWebSocket` rejects oversized frames with
+          `close(1009)`; `send()` checks payload size before encoding.
+        - Fix 6: `readVwsLine` preserves bytes after first newline via `stream.unshift()`,
+          preventing data loss when switching to bridge/framed parser.
+    - [x] Run focused WebSocket validation and affected package builds.
+        - Build: common, host, guest-node all pass.
+        - `node --test test/websocket.test.js`: 6/6 pass (subprotocol, bidirectional,
+          close, rejection, oversized frame, route revocation).
+        - `node --test --test-name-pattern="upgrade" test/dispatcher.test.js`: 1/1 pass.
+        - `node --test test/packages.test.js`: 6/6 pass.
+        - `npm run lint`: clean.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Conductor - Phase Checkpoint 'WebSocket Design Gate and Implementation' (Protocol in workflow.md)
 
 ## Phase 5: Documentation, Review, and Final Validation

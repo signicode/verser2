@@ -45,7 +45,16 @@ export type {
   VerserNodeGuestLifecycleEvent,
   /** Options for creating a Node Guest. */
   VerserNodeGuestOptions,
+  /** WebSocket request options for broker.webSocket(). */
+  VerserBrokerWebSocketRequest,
+  /** VWS/1 WebSocket handler type for guest.attachWebSocket(). */
+  VerserWebSocketHandler,
+  /** Result returned by a WebSocket handler to accept or reject. */
+  VerserWebSocketAcceptResult,
 } from './lib/types';
+
+export { VerserWebSocket } from './lib/verser-websocket';
+export type { VerserWebSocketSendOptions } from './lib/verser-websocket';
 
 import { Http2VerserBroker } from './lib/http2-verser-broker';
 import { Http2VerserNodeGuest } from './lib/http2-verser-node-guest';

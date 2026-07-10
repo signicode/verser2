@@ -2,6 +2,8 @@ import type * as http from 'node:http';
 import type { Readable } from 'node:stream';
 import type { Dispatcher, fetch as undiciFetch } from 'undici';
 
+import type { VerserWebSocket } from './verser-websocket';
+
 import type {
   RoutedDomainRegistration,
   RoutedRequestEnvelope,
@@ -210,6 +212,17 @@ export interface VerserBroker {
    * @returns A function to unsubscribe the listener.
    */
   onRouteChange(listener: (event: VerserBrokerRouteChangeEvent) => void): () => void;
+
+  /**
+   * Opens a VWS/1 WebSocket connection to the target Guest through the Host.
+   *
+   * Resolves with a {@link VerserWebSocket} instance after the VWS/1 handshake
+   * completes (the Guest accepted the connection).
+   *
+   * @param options - WebSocket target, domain, optional protocol/path.
+   * @returns A promise that resolves to a ready-to-use WebSocket.
+   */
+  webSocket(options: VerserBrokerWebSocketRequest): Promise<VerserWebSocket>;
 }
 
 /**
@@ -269,6 +282,20 @@ export interface VerserNodeGuest {
    * @throws {VerserError} If the Guest is not connected, or if the request fails.
    */
   revokeRoutes(domains: readonly string[]): Promise<VerserGuestRevocationResponse>;
+
+  /**
+   * Attaches a VWS/1 WebSocket handler for the given domain.
+   *
+   * The handler receives a {@link VerserWebSocket} instance on each incoming
+   * WebSocket connection. The route domain is advertised during registration.
+   * Must be called **before** {@link connect} so the domain is included in
+   * the route advertisement.
+   *
+   * @param handler - Callback invoked with a WebSocket for each new connection.
+   * @param domain - Optional route domain (defaults to the Guest ID).
+   * @returns `this` for chaining.
+   */
+  attachWebSocket(handler: VerserWebSocketHandler, domain?: string): this;
 }
 
 /**
@@ -341,4 +368,70 @@ export interface VerserBrokerRouteChangeEvent {
   readonly reason?: VerserRouteLifecycleEvent['reason'];
   /** Optional generation/session metadata. */
   readonly generation?: VerserRouteLifecycleEvent['generation'];
+}
+
+/**
+ * Result returned by a {@link VerserWebSocketHandler} to accept or reject
+ * an incoming VWS/1 WebSocket connection.
+ *
+ * - Return `undefined` or `{ protocol?: string }` to accept (default).
+ * - Return `false` or `null` to reject the connection.
+ *
+ * @public
+ */
+export type VerserWebSocketAcceptResult = { readonly protocol?: string } | false | null;
+
+/**
+ * Handler signature for {@link VerserNodeGuest.attachWebSocket}.
+ *
+ * Receives the open metadata (domain, path, protocol) and a
+ * {@link VerserWebSocket} instance. The handler may return an accept result
+ * (subprotocol options), `false`/`null` to reject, or a promise resolving
+ * to either. When the handler does not return (undefined), the connection
+ * is accepted with the requested protocol.
+ *
+ * The handler may set up event listeners on the WebSocket before accepting.
+ * Messages sent before accept are queued and delivered after accept.
+ *
+ * @param open - Connection metadata (domain, path, requested protocol).
+ * @param ws - The WebSocket instance (accept/reject is pending).
+ * @returns An accept result, rejection, or a promise thereof.
+ *
+ * @example
+ * ```ts
+ * // Auto-accept echo handler
+ * guest.attachWebSocket((_open, ws) => {
+ *   ws.on('message', (data, { type }) => ws.send(data, { type }));
+ * });
+ *
+ * // Reject connections without a specific protocol
+ * guest.attachWebSocket((open, ws) => {
+ *   if (open.protocol !== 'vws.base64') return false;
+ *   return { protocol: 'vws.base64' };
+ * });
+ * ```
+ *
+ * @public
+ */
+export type VerserWebSocketHandler = (
+  open: { domain: string; path: string; protocol: string },
+  ws: VerserWebSocket,
+) => VerserWebSocketAcceptResult | Promise<VerserWebSocketAcceptResult> | undefined;
+
+/**
+ * Options for {@link VerserBroker.webSocket}.
+ *
+ * @public
+ */
+export interface VerserBrokerWebSocketRequest {
+  /** Target Guest peer ID. */
+  readonly targetId: string;
+  /** Target route domain. */
+  readonly domain: string;
+  /** Optional request path. */
+  readonly path?: string;
+  /** Optional VWS sub-protocol to negotiate. */
+  readonly protocol?: string;
+  /** Optional request headers (reserved for future use). */
+  readonly headers?: Record<string, string>;
 }

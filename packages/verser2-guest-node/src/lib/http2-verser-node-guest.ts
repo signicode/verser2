@@ -6,6 +6,7 @@ import type { Readable } from 'node:stream';
 import {
   VERSER_GUEST_REVOCATION_PATH,
   VERSER_LIFECYCLE_EVENTS,
+  VWS_MAX_FRAME_BYTES,
   createGuestId,
   createGuestRevocationRequest,
   createGuestRevocationResponse,
@@ -17,6 +18,7 @@ import {
   normalizeClientTlsOptions,
   readLeaseRequestMetadataFromStream,
   readNdjsonLines,
+  readVwsLine,
   validateVerserHeaders,
 } from '@signicode/verser-common';
 import { toVerserError } from './error-utils';
@@ -29,7 +31,10 @@ import type {
   VerserNodeGuestDispatchResponse,
   VerserNodeGuestLifecycleEvent,
   VerserNodeGuestOptions,
+  VerserWebSocketAcceptResult,
+  VerserWebSocketHandler,
 } from './types';
+import { VerserWebSocket } from './verser-websocket';
 
 type GuestLeaseState = 'opening' | 'waiting' | 'active';
 type GuestRevocationResponse = ReturnType<typeof createGuestRevocationResponse>;
@@ -60,6 +65,12 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
 
   private attachedDomain?: string;
 
+  private wsHandler?: VerserWebSocketHandler;
+
+  private wsDomain?: string;
+
+  private readonly wsLeaseStreams = new Set<http2.ClientHttp2Stream>();
+
   public constructor(options: VerserNodeGuestOptions) {
     this.options = options;
     createGuestId(options.guestId);
@@ -85,6 +96,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     session.on('close', () => {
       this.session = undefined;
       this.leaseStreams.clear();
+      this.wsLeaseStreams.clear();
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected });
     });
 
@@ -93,6 +105,13 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     await this.register();
     this.openControlStream(session);
     this.maintainLeasePool();
+    this.maintainWsLeasePool();
+  }
+
+  public attachWebSocket(handler: VerserWebSocketHandler, domain?: string): this {
+    this.wsHandler = handler;
+    this.wsDomain = domain ?? this.options.guestId;
+    return this;
   }
 
   public async close(reason = 'guest-close'): Promise<void> {
@@ -104,6 +123,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     this.closing = true;
     this.controlStream?.close();
     this.closeLeaseStreams();
+    this.closeWsLeaseStreams();
     session.close();
     await once(session, 'close');
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.closed, reason });
@@ -526,10 +546,138 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
   }
 
   private getRoutedDomains(): readonly string[] {
+    const domains: string[] = [];
     if (this.attachedDomain !== undefined) {
-      return [this.attachedDomain];
+      domains.push(this.attachedDomain);
+    }
+    if (this.wsDomain !== undefined && !domains.includes(this.wsDomain)) {
+      domains.push(this.wsDomain);
+    }
+    if (domains.length > 0) {
+      return domains;
+    }
+    return this.options.routedDomains ?? [];
+  }
+
+  // ---------------------------------------------------------------------------
+  // WebSocket lease streams
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Maintains one idle WebSocket lease stream when a WS handler is attached.
+   */
+  private maintainWsLeasePool(): void {
+    if (this.wsHandler === undefined || this.closing) {
+      return;
+    }
+    const session = this.session;
+    if (session === undefined || session.closed || session.destroyed) {
+      return;
+    }
+    // Keep one idle WS lease at all times
+    if (this.wsLeaseStreams.size === 0) {
+      this.openWsLeaseStream(session);
+    }
+  }
+
+  /**
+   * Opens a WebSocket lease stream to `/verser/guest/websocket-lease`.
+   */
+  private openWsLeaseStream(session: http2.ClientHttp2Session): void {
+    const stream = session.request({
+      ':method': 'POST',
+      ':path': '/verser/guest/websocket-lease',
+      'x-verser-peer-id': this.options.guestId,
+    });
+    this.wsLeaseStreams.add(stream);
+
+    stream.once('response', (headers) => {
+      if (Number(headers[':status']) !== 200) {
+        this.wsLeaseStreams.delete(stream);
+        stream.close();
+        return;
+      }
+      // Stream accepted — now read the VWS open frame
+      this.handleWsLeaseStream(stream).catch((error: unknown) => {
+        if (this.closing) {
+          return;
+        }
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.error,
+          error: toVerserError(error),
+        });
+        this.wsLeaseStreams.delete(stream);
+        stream.close();
+        this.maintainWsLeasePool();
+      });
+    });
+
+    stream.on('close', () => {
+      this.wsLeaseStreams.delete(stream);
+      if (!this.closing) {
+        this.maintainWsLeasePool();
+      }
+    });
+
+    stream.on('error', (error) => {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+    });
+  }
+
+  /**
+   * Reads the VWS/1 open frame from a WS lease stream, creates a
+   * WebSocket, calls the handler to decide accept/reject, and sends
+   * the appropriate response (accept or error).
+   */
+  private async handleWsLeaseStream(stream: http2.ClientHttp2Stream): Promise<void> {
+    // Read one VWS line — the open frame (uses shared bounded parser, fix 5/6)
+    const openLine = await readVwsLine(stream, VWS_MAX_FRAME_BYTES);
+    const openFrame: Record<string, unknown> = JSON.parse(openLine);
+    if (openFrame.type !== 'open') {
+      throw createVerserError(
+        'protocol-error',
+        `Expected VWS open frame, got ${String(openFrame.type)}`,
+      );
     }
 
-    return this.options.routedDomains ?? [];
+    const domain = String(openFrame.domain ?? '');
+    const path = String(openFrame.path ?? '/');
+    const requestedProtocol = String(openFrame.protocol ?? '');
+
+    // Create the WebSocket (no accept sent yet)
+    const ws = new VerserWebSocket(stream, requestedProtocol);
+
+    // Call the handler to decide accept/reject
+    const handler = this.wsHandler;
+    let acceptResult: VerserWebSocketAcceptResult | undefined;
+    if (handler !== undefined) {
+      acceptResult =
+        (await handler({ domain, path, protocol: requestedProtocol }, ws)) ?? undefined;
+    }
+
+    // Accept or reject based on handler decision
+    if (acceptResult === false || acceptResult === null) {
+      // Reject: send error frame, close the stream
+      stream.write(`${JSON.stringify({ type: 'error', message: 'Connection rejected' })}\n`);
+      stream.close();
+      return;
+    }
+
+    // Accept
+    const acceptProtocol =
+      acceptResult !== undefined && typeof acceptResult === 'object' && 'protocol' in acceptResult
+        ? (acceptResult as { protocol?: string }).protocol
+        : requestedProtocol;
+    ws.sendAccept(acceptProtocol);
+  }
+
+  /**
+   * Closes all WebSocket lease streams.
+   */
+  private closeWsLeaseStreams(): void {
+    for (const stream of this.wsLeaseStreams) {
+      stream.close();
+    }
+    this.wsLeaseStreams.clear();
   }
 }
