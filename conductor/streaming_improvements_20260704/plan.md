@@ -254,12 +254,33 @@
         - `node --test test/bun-guest-integration.test.js`: passes (2/2; Bun available in this environment).
         - `npm run lint`: passes.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Harden Python ASGI HTTP streaming parity
-    - [ ] Improve Python ASGI HTTP request/response streaming behavior where needed, without adding Python Host/fetch/Agent/Dispatcher APIs.
-    - [ ] Add or update Python ASGI tests for large streaming responses, async iterable request bodies, disconnect/abort behavior, and backpressure/lifecycle cleanup where practical.
-    - [ ] Keep ASGI websocket support deferred to the WebSocket phase design decision inside this track.
-    - [ ] Run Python package tests and relevant Node/Python integration tests.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Harden Python ASGI HTTP streaming parity
+    - [x] Improve Python ASGI HTTP request/response streaming behavior without adding Python Host/fetch/Agent/Dispatcher APIs.
+        - `packages/verser2-guest-python/src/verser2_guest_python/guest.py`:
+            - `_dispatch_leased_request_stream`: Added `h2.events.StreamReset` handling that unblocks ASGI `receive()` by queueing a terminal `http.request` event, cancels the app task if still running, and returns cleanly instead of hanging on `request_events.get()`.
+            - Added `except asyncio.CancelledError` to `run_app()` to handle cancellation from stream reset without propagating the exception.
+            - `send()` and `run_app()`: After `await app_task`, `CancelledError` is caught and dispatch returns cleanly. A `stream_reset` flag guards the post-app auto-end-stream path so no double-ending occurs if the app already ended the stream before reset.
+            - `StreamEnded` handler: guarded `request_events.put_nowait()` with `if app_task is None or not app_task.done()` to avoid queueing events after the app has already finished.
+            - `DataReceived` handler (post-metadata): guarded `request_events.put_nowait()` with the same done-check to avoid queueing body data after the app finished.
+            - `_read_loop`: wrapped in try/except that calls `_fail_pending_streams()` on connection close or unexpected error, matching the broker's pattern. Added `_fail_pending_streams()` method that puts a `RuntimeError` in every pending event queue to unblock waiters.
+            - Connection-error path fix: Instead of raising `Exception` events from `_fail_pending_streams` immediately (which left the app_task pending), the handler now queues a terminal event, cancels `app_task`, `await`s cleanup, and then raises. A `connection_error` flag is used to drive this cleanup after the event loop exits.
+            - Discarded DATA ack: When `DataReceived` arrives after `app_task.done()`, the current code now acknowledges the flow-controlled length via `asyncio.create_task` so H2 flow control credit is returned even though the body data is discarded.
+    - [x] Add or update Python ASGI tests for streaming and reset behavior.
+        - `packages/verser2-guest-python/tests/test_asgi_guest.py`:
+            - `LeaseStreamResetTest.test_stream_reset_during_dispatch_unblocks_and_returns_cleanly`: StreamReset after app start unblocks receive and completes within timeout.
+            - `LeaseStreamResetTest.test_stream_reset_before_app_start_returns_cleanly`: StreamReset before any data arrives returns cleanly without RuntimeError.
+            - `LeaseStreamResetTest.test_fail_pending_streams_unblocks_dispatch`: Connection-close RuntimeError in event queue propagates through dispatch and is raised. Uses `app_exited` event set in a `finally` block to prove the app task was cleaned up (not left pending).
+            - `LeasedStreamingTest.test_data_received_after_early_finish_is_acknowledged`: App finishes early, extra DataReceived events are ack-discarded. Verifies via `conn.acknowledged` count and total bytes acked.
+            - `LeasedStreamingTest.test_lease_dispatch_streams_large_response_in_chunks`: 16 × 4 KiB response chunks verified via send count and last-chunk end-stream flag.
+            - `LeasedStreamingTest.test_lease_dispatch_streams_large_request_body_in_chunks`: 12 × 8 KiB request body chunks through ASGI receive, verified via byte counter.
+            - `LeasedStreamingTest.test_app_early_finish_does_not_hang`: App finishes after consuming one event, more body data arrives, StreamEnded arrives — no hang, app only consumed 1 event.
+    - [x] Keep ASGI websocket support deferred to the WebSocket phase design decision inside this track.
+    - [x] Run Python package tests and relevant Node/Python integration tests.
+        - Python unit tests: `uv run --project packages/verser2-guest-python python -m unittest discover -s packages/verser2-guest-python/tests` — 85/85 pass (78 existing + 7 new).
+        - Node/Python integration test: `node --test test/python-guest-integration.test.js` — passed.
+        - Python package build: `npm run build --workspace=@signicode/verser2-guest-python` — passed.
+        - Lint: `npm run lint` — passed.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Conductor - Phase Checkpoint 'Federation, Keep-Alive, Bun, and Python ASGI Parity' (Protocol in workflow.md)
 
 ## Phase 4: WebSocket Design Gate and Implementation

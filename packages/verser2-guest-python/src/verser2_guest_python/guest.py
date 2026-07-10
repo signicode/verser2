@@ -461,6 +461,8 @@ class VerserGuest:
         app_task: asyncio.Task[None] | None = None
         response_started = False
         response_ended = False
+        stream_reset = False
+        connection_error: Exception | None = None
 
         async def receive() -> dict[str, Any]:
             event = await request_events.get()
@@ -506,6 +508,9 @@ class VerserGuest:
             assert metadata is not None
             try:
                 await self.app(build_http_scope(metadata), receive, send)
+            except asyncio.CancelledError:
+                # Stream reset cancelled dispatch — clean exit, no further sends.
+                return
             except Exception as error:  # noqa: BLE001 - app exceptions become protocol errors.
                 if response_started:
                     if not response_ended:
@@ -571,6 +576,26 @@ class VerserGuest:
 
         while True:
             event = await self._events[stream_id].get()
+            # Connection-level errors from _fail_pending_streams — cancel
+            # the app task and propagate after cleanup.
+            if isinstance(event, Exception):
+                connection_error = event
+                request_events.put_nowait(
+                    {"type": "http.request", "body": b"", "more_body": False}
+                )
+                if app_task is not None and not app_task.done():
+                    app_task.cancel()
+                break
+            # Stream reset (e.g. remote cancellation) — unblock receive()
+            # and cancel the app dispatch cleanly rather than hanging.
+            if isinstance(event, h2.events.StreamReset):
+                stream_reset = True
+                request_events.put_nowait(
+                    {"type": "http.request", "body": b"", "more_body": False}
+                )
+                if app_task is not None and not app_task.done():
+                    app_task.cancel()
+                break
             if isinstance(event, h2.events.DataReceived):
                 if metadata is None:
                     pending_metadata_flow_controlled_length += int(
@@ -579,24 +604,58 @@ class VerserGuest:
                     buffer += event.data
                     try_start_app()
                 else:
-                    request_events.put_nowait(
-                        {
-                            "type": "http.request",
-                            "body": event.data,
-                            "more_body": True,
-                            "_flow_controlled_length": event.flow_controlled_length,
-                        }
-                    )
+                    # Guard: don't queue body data if app already finished
+                    if app_task is None or not app_task.done():
+                        request_events.put_nowait(
+                            {
+                                "type": "http.request",
+                                "body": event.data,
+                                "more_body": True,
+                                "_flow_controlled_length": event.flow_controlled_length,
+                            }
+                        )
+                    else:
+                        # App already finished — discard body but ack flow
+                        # control credit so the sender does not stall.
+                        asyncio.create_task(
+                            self._acknowledge_received_data(
+                                stream_id, int(event.flow_controlled_length)
+                            )
+                        )
             if isinstance(event, h2.events.StreamEnded):
                 try_start_app()
-                request_events.put_nowait(
-                    {"type": "http.request", "body": b"", "more_body": False}
-                )
+                # Guard: don't queue final event if app already done/cancelled
+                if app_task is None or not app_task.done():
+                    request_events.put_nowait(
+                        {"type": "http.request", "body": b"", "more_body": False}
+                    )
                 break
 
+        if connection_error is not None:
+            # Connection/read-loop failure — cancel and clean up app task,
+            # then propagate the error so the lease stream is torn down.
+            if app_task is not None:
+                try:
+                    await app_task
+                except asyncio.CancelledError:
+                    pass
+            raise connection_error
+
         if app_task is None:
+            if stream_reset:
+                return  # Stream reset before app started — clean exit
             raise RuntimeError("Lease stream ended before request metadata arrived")
-        await app_task
+
+        try:
+            await app_task
+        except asyncio.CancelledError:
+            # App was cancelled due to stream reset — clean exit.
+            return
+
+        # Stream was reset but app finished before the cancellation took effect
+        # (or app_task was already done when StreamReset arrived).
+        if stream_reset:
+            return
 
     async def _send_headers(
         self,
@@ -643,17 +702,28 @@ class VerserGuest:
         reader = self._reader
         if reader is None:
             return
-        while not self._closed:
-            data = await reader.read(65535)
-            if not data:
-                return
-            async with self._io_lock:
-                events = self._require_conn().receive_data(data)
-                for event in events:
-                    stream_id = getattr(event, "stream_id", None)
-                    if stream_id in self._events:
-                        self._events[stream_id].put_nowait(event)
-                await self._flush_unlocked()
+        try:
+            while not self._closed:
+                data = await reader.read(65535)
+                if not data:
+                    self._fail_pending_streams(RuntimeError("Guest connection closed"))
+                    return
+                async with self._io_lock:
+                    events = self._require_conn().receive_data(data)
+                    for event in events:
+                        stream_id = getattr(event, "stream_id", None)
+                        if stream_id in self._events:
+                            self._events[stream_id].put_nowait(event)
+                    await self._flush_unlocked()
+        except Exception as exc:
+            self._fail_pending_streams(
+                RuntimeError(f"Guest connection read loop failed: {exc}")
+            )
+
+    def _fail_pending_streams(self, error: Exception) -> None:
+        """Put *error* into every pending event queue to unblock waiters."""
+        for queue in list(self._events.values()):
+            queue.put_nowait(error)
 
     async def _acknowledge_received_data(
         self, stream_id: int, flow_controlled_length: int
