@@ -46,6 +46,8 @@ export type {
   VerserBunGuestRequestHandler,
 } from './lib/types';
 
+import { Readable } from 'node:stream';
+
 import { resolveRouteForUrl } from '@signicode/verser-common';
 import type {
   VerserBroker,
@@ -147,16 +149,23 @@ export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
         throw new Error(`No Verser route advertised for host ${requestUrl.hostname}`);
       }
 
-      const requestBodyBuffer = await request.arrayBuffer();
+      const reqBodyStream = request.body;
       const hasBody =
-        requestBodyBuffer.byteLength > 0 && request.method !== 'GET' && request.method !== 'HEAD';
+        reqBodyStream !== null && request.method !== 'GET' && request.method !== 'HEAD';
+
+      let reqBody: readonly Buffer[] | Readable | undefined;
+      if (hasBody) {
+        // Convert the Web ReadableStream to a Node Readable for streaming
+        // instead of eagerly buffering with arrayBuffer().
+        reqBody = Readable.from(reqBodyStream);
+      }
 
       const response = await nodeBroker.request({
         targetId: route.targetId,
         method: request.method,
         path: `${requestUrl.pathname}${requestUrl.search}`,
         headers: Object.fromEntries(request.headers.entries()),
-        body: hasBody ? [Buffer.from(requestBodyBuffer)] : undefined,
+        body: reqBody,
       });
 
       const body = response.body;

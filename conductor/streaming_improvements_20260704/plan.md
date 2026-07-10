@@ -235,12 +235,25 @@
         - Not yet implemented (pending future track).
     - [x] Run `npm run build --workspace=@signicode/verser2-host` — passes.
     - [x] Validation: `node --test --test-concurrency=1 --test-name-pattern="Host close fails pending federated request stream waiters" test/host-upstreams.test.js` — 1/1 pass. `node --test --test-concurrency=1 test/host-upstreams.test.js` — 37 tests, 37 pass, 0 fail. `node --test --test-name-pattern="Broker abort" test/broker-routing.test.js` — 1/1 pass. `npm run lint` — clean.
-- [ ] Task: Update Bun wrapper parity
-    - [ ] Confirm Bun Guest/Broker wrappers inherit the improved Node transport streaming behavior.
-    - [ ] Update Bun tests and docs for supported streaming behavior.
-    - [ ] Preserve Bun WebSocket support decisions for the dedicated WebSocket phase.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-guest-bun` and focused Bun tests.
-    - [ ] Commit this completed task according to the per-task commit policy.
+- [x] Task: Update Bun wrapper parity
+    - [x] Confirm Bun Guest/Broker wrappers inherit the improved Node transport streaming behavior.
+        - Bun Guest delegates to Node Guest transport — inherits Phase 2 `stream-failure` abort propagation.
+        - Bun Broker `createVerserBroker` delegates to `createVerserNodeBroker` — inherits Node Broker streaming fixes.
+    - [x] Fix response body writing backpressure: `writeResponseBody` now observes `response.write()` return value; on `false`, waits for `drain` before reading the next Web stream chunk. Falls back (proceeds immediately) when the response object lacks `on`/`off` drain support (e.g., mocks).
+    - [x] Fix request body conversion: `streamRequestBody` now applies pause/resume backpressure based on `pull()` and `desiredSize`; pauses the Node source when the Web consumer buffer is full, resumes on pull. Adds `cancel()` that destroys the Node source and removes event listeners.
+    - [x] Fix `createFetch()` body handling: replaced eager `request.arrayBuffer()` buffering with `Readable.from(request.body)`, streaming the Web `ReadableStream` body to the Node Broker as a Node `Readable`. Preserves no-body behavior and response streaming.
+    - [x] Preserve existing API behavior and error semantics — no WebSocket changes.
+    - [x] Update Bun tests:
+        - Added `response writer waits for drain before consuming next Web stream chunk` — verifies backpressure-driven drain wait.
+        - Added `request body stream pauses Node source when consumer buffer is full and resumes on pull` — verifies pause/resume flow.
+        - Added `request body stream cancel destroys the Node source and removes listeners` — verifies cleanup.
+        - `createFetch()` streaming body is covered by the existing integration test (`test/bun-guest-integration.test.js`) which routes through `createVerserBroker`. A standalone unit test requires a running Host and is not practical in the adapter unit test suite.
+    - [x] Run `npm run build --workspace=@signicode/verser2-guest-bun` and focused Bun tests.
+        - Build: passes.
+        - `npm run test --workspace=@signicode/verser2-guest-bun`: passes (all Bun adapter tests).
+        - `node --test test/bun-guest-integration.test.js`: passes (2/2; Bun available in this environment).
+        - `npm run lint`: passes.
+    - [x] Commit this completed task according to the per-task commit policy.
 - [ ] Task: Harden Python ASGI HTTP streaming parity
     - [ ] Improve Python ASGI HTTP request/response streaming behavior where needed, without adding Python Host/fetch/Agent/Dispatcher APIs.
     - [ ] Add or update Python ASGI tests for large streaming responses, async iterable request bodies, disconnect/abort behavior, and backpressure/lifecycle cleanup where practical.

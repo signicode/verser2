@@ -12,6 +12,10 @@ export interface NodeStyleRequest {
   readonly url: string;
   readonly headers: Record<string, string>;
   on(event: string | symbol, handler: (...args: readonly [unknown]) => void): unknown;
+  pause?(): void;
+  resume?(): void;
+  destroy?(error?: Error): void;
+  removeAllListeners?(event?: string | symbol): unknown;
 }
 
 export interface NodeStyleResponse {
@@ -19,6 +23,8 @@ export interface NodeStyleResponse {
   writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): unknown;
   write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
   end(chunk?: string | Buffer, encoding?: BufferEncoding): unknown;
+  on?(event: 'drain', handler: () => void): unknown;
+  off?(event: 'drain', handler: () => void): unknown;
 }
 
 const getErrorMessage = (error: unknown): string => {
@@ -73,36 +79,55 @@ const resolveResponse = (value: unknown): Promise<Response> => {
   return Promise.reject(new TypeError(DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE));
 };
 
-const streamRequestBody = (request: NodeStyleRequest): ReadableStream<Uint8Array> => {
+const toBuffer = (chunk: unknown): Buffer | undefined => {
+  if (typeof chunk === 'string') return Buffer.from(chunk);
+  if (chunk instanceof Buffer) return chunk;
+  if (chunk instanceof Uint8Array) return Buffer.from(chunk);
+  if (chunk instanceof ArrayBuffer) return Buffer.from(chunk);
+  if (chunk !== undefined) return Buffer.from(String(chunk));
+  return undefined;
+};
+
+export const streamRequestBody = (request: NodeStyleRequest): ReadableStream<Uint8Array> => {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       request.on('data', (chunk: unknown) => {
-        if (typeof chunk === 'string') {
-          controller.enqueue(Buffer.from(chunk));
-          return;
-        }
+        const buf = toBuffer(chunk);
+        if (buf === undefined) return;
 
-        if (chunk instanceof Buffer) {
-          controller.enqueue(chunk);
-          return;
-        }
+        try {
+          controller.enqueue(buf);
 
-        if (chunk instanceof Uint8Array) {
-          controller.enqueue(chunk);
-          return;
-        }
-
-        if (chunk instanceof ArrayBuffer) {
-          controller.enqueue(new Uint8Array(chunk));
-          return;
-        }
-
-        if (chunk !== undefined) {
-          controller.enqueue(Buffer.from(String(chunk)));
+          // Pause the Node source when the Web consumer's buffer is full
+          if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+            request.pause?.();
+          }
+        } catch {
+          request.destroy?.();
         }
       });
-      request.on('end', () => controller.close());
-      request.on('error', (error: unknown) => controller.error(error));
+      request.on('end', () => {
+        try {
+          controller.close();
+        } catch {
+          /* ignore if already errored/closed */
+        }
+      });
+      request.on('error', (error: unknown) => {
+        try {
+          controller.error(error);
+        } catch {
+          /* ignore if already errored/closed */
+        }
+      });
+    },
+    pull() {
+      // Consumer has consumed data; resume the Node source for more
+      request.resume?.();
+    },
+    cancel(reason) {
+      request.destroy?.(reason instanceof Error ? reason : undefined);
+      request.removeAllListeners?.();
     },
   });
 };
@@ -253,7 +278,20 @@ const writeResponseBody = async (
         response.end();
         return;
       }
-      response.write(Buffer.from(value));
+      const canContinue = response.write(Buffer.from(value));
+      if (!canContinue) {
+        await new Promise<void>((resolve) => {
+          const onDrain = () => {
+            response.off?.('drain', onDrain);
+            resolve();
+          };
+          response.on?.('drain', onDrain);
+          // If no drain support (mock without on/off), proceed anyway
+          if (response.on === undefined) {
+            resolve();
+          }
+        });
+      }
     }
   } finally {
     reader.releaseLock();

@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { createVerserBroker, createVerserBunGuest } from '../src/index';
-import { createNodeStyleHandler, dispatchVerserBunRequestInternal } from '../src/lib/adapter';
+import {
+  createNodeStyleHandler,
+  dispatchVerserBunRequestInternal,
+  streamRequestBody,
+} from '../src/lib/adapter';
+import type { NodeStyleRequest, NodeStyleResponse } from '../src/lib/adapter';
 
 type StreamEventHandler = (chunk?: unknown) => void;
 
@@ -524,5 +529,188 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     expect(resolved).toBe(true);
     expect(wroteStatus).toBe(200);
     expect(observedBody).toBe(expectedBody);
+  });
+
+  test('response writer waits for drain before consuming next Web stream chunk', async () => {
+    const streamChunkEncoder = new TextEncoder();
+    const receivedChunks: Buffer[] = [];
+    let writeCallIndex = 0;
+    let drainHandler: (() => void) | undefined;
+    let resolved = false;
+    let done!: () => void;
+    const donePromise = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+
+    const responseWriter = {
+      statusCode: 0,
+      writeHead() {
+        return undefined;
+      },
+      write(chunk: string | Buffer) {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        receivedChunks.push(buf);
+        writeCallIndex++;
+        // Return false on first write to trigger drain wait
+        return writeCallIndex !== 1;
+      },
+      end(chunk?: string | Buffer) {
+        if (chunk !== undefined) {
+          receivedChunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+        resolved = true;
+        done();
+      },
+      on(event: 'drain', handler: () => void) {
+        drainHandler = handler;
+        return undefined;
+      },
+      off() {
+        return undefined;
+      },
+    };
+
+    const nodeHandler = createNodeStyleHandler('drain.test', {
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(streamChunkEncoder.encode('first'));
+              queueMicrotask(() => {
+                controller.enqueue(streamChunkEncoder.encode('second'));
+                controller.close();
+              });
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    nodeHandler(
+      {
+        method: 'GET',
+        url: '/',
+        headers: {},
+        on() {
+          return undefined;
+        },
+      },
+      responseWriter as unknown as NodeStyleResponse,
+    );
+
+    // Allow first read/write cycle to complete
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+
+    // Only first chunk should have been written (write returned false => drain wait)
+    expect(receivedChunks).toHaveLength(1);
+    expect(receivedChunks[0]).toEqual(Buffer.from('first'));
+
+    // Fire drain to unblock the write loop; second chunk is consumed and written
+    drainHandler?.();
+
+    await donePromise;
+
+    expect(resolved).toBe(true);
+    expect(receivedChunks).toHaveLength(2);
+    expect(receivedChunks[1]).toEqual(Buffer.from('second'));
+  });
+
+  test('request body stream pauses Node source when consumer buffer is full and resumes on pull', async () => {
+    const streamChunkEncoder = new TextEncoder();
+    let pauseCallCount = 0;
+    let resumeCallCount = 0;
+    const dataHandlers: Array<(chunk: unknown) => void> = [];
+    let endHandler: (() => void) | undefined;
+
+    const mockRequest = {
+      method: 'POST',
+      url: '/body-backpressure',
+      headers: { 'content-type': 'text/plain' },
+      on(event: string, handler: (...args: readonly [unknown]) => void) {
+        if (event === 'data') {
+          dataHandlers.push(handler as (chunk: unknown) => void);
+        }
+        if (event === 'end') {
+          endHandler = handler as () => void;
+        }
+        return undefined;
+      },
+      pause() {
+        pauseCallCount++;
+      },
+      resume() {
+        resumeCallCount++;
+      },
+    };
+
+    const bodyStream = streamRequestBody(mockRequest as unknown as NodeStyleRequest);
+    const reader = bodyStream.getReader();
+
+    // Fire first data event — should be enqueued, then pause called (desiredSize <= 0)
+    dataHandlers[0]?.(streamChunkEncoder.encode('chunk-a'));
+    expect(pauseCallCount).toBe(1);
+
+    // Read the first chunk — pull() fires, resume() is called
+    const result1 = await reader.read();
+    expect(result1.done).toBe(false);
+    const value1 = result1.value;
+    expect(value1).toBeDefined();
+    if (value1 !== undefined) {
+      expect(Buffer.from(value1).toString()).toBe('chunk-a');
+    }
+    expect(resumeCallCount).toBe(1);
+
+    // Fire second data event while consumer buffer has room
+    dataHandlers[0]?.(streamChunkEncoder.encode('chunk-b'));
+
+    // Read the second chunk
+    const result2 = await reader.read();
+    expect(result2.done).toBe(false);
+    const value2 = result2.value;
+    expect(value2).toBeDefined();
+    if (value2 !== undefined) {
+      expect(Buffer.from(value2).toString()).toBe('chunk-b');
+    }
+
+    // End the stream
+    endHandler?.();
+
+    const result3 = await reader.read();
+    expect(result3.done).toBe(true);
+
+    // pause() was called again after re-enqueueing if desiredSize <= 0
+    expect(pauseCallCount).toBeGreaterThanOrEqual(2);
+    reader.releaseLock();
+  });
+
+  test('request body stream cancel destroys the Node source and removes listeners', async () => {
+    let destroyed = false;
+    let removedListeners = false;
+
+    const mockRequest = {
+      method: 'POST',
+      url: '/body-cancel',
+      headers: {},
+      on() {
+        return undefined;
+      },
+      pause() {},
+      resume() {},
+      destroy() {
+        destroyed = true;
+      },
+      removeAllListeners() {
+        removedListeners = true;
+      },
+    };
+
+    const bodyStream = streamRequestBody(mockRequest as unknown as NodeStyleRequest);
+    const reader = bodyStream.getReader();
+    await reader.cancel('test-cancel');
+
+    expect(destroyed).toBe(true);
+    expect(removedListeners).toBe(true);
   });
 });
