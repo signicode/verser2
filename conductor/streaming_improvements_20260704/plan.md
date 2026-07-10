@@ -163,7 +163,7 @@
     - Coverage: production behavior changed in Host and Node transport surfaces; focused success, abort, cancellation, redirect replay, large-body, and regression tests were added/updated for the changed behavior.
     - Review: Oracle Phase 2 review reported no blocking findings and approved beginning Phase 3. Non-blocking recommendations: some abort tests still use short fixed sleeps and Agent abort tests could later add stronger Guest-side close/error observations.
     - Phase checkpoint commits: Host lease cleanup `fa852ba`, Node lease cancellation `9371d28`, Agent/Dispatcher cleanup `1fdc185`.
-- [~] Task: Streaming test resource guardrails
+- [x] Task: Streaming test resource guardrails
     - [x] Codify generated-body streaming test rules in `docs/development.md` and `AGENTS.development.md`: generated bodies must be stream-processed, must not be retained for inspection, writers must observe `write()`/`drain`, readers must implement pause/resume semantics, and all streams/sessions/timers need deterministic cleanup.
     - [x] Add `test/support/guarded-test.cjs`, a guarded `node:test` wrapper for streaming suites that measures post-GC memory growth per test when `VERSER_TEST_MEMORY_GUARD=1`.
     - [x] Wire `scripts/run-bounded-tests.js` to run Node tests with `--expose-gc`, `--test-concurrency=1`, and a default guarded per-test memory-growth threshold. Initial threshold was 64 KiB; first manual-verification wave raises it to 1 MiB while existing tests are cleaned up toward a 256 KiB target.
@@ -174,7 +174,7 @@
         - Ran `npm run lint` — passed.
     - [x] Commit this guardrail task according to the per-task commit policy.
         - Committed by orchestrator after review.
-    - [~] First manual-verification wave at 1 MiB guarded memory allowance.
+    - [x] First manual-verification wave at 1 MiB guarded memory allowance.
         - Raised default guarded threshold in `test/support/guarded-test.cjs` and `scripts/run-bounded-tests.js` from 64 KiB to 1 MiB (`1048576` bytes), and updated `docs/development.md` to describe the temporary first-wave allowance and 256 KiB target.
         - Ran full bounded suite: `npm run test:bounded -- --memory-leak-bytes 1048576`.
         - Result: build and staging completed; Node test run executed 350 tests with 341 passing, 4 skipped, and 5 failing.
@@ -217,6 +217,7 @@
             - Targeted validation: `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=262144 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker exposes an Agent that routes matching hostnames through Verser2|Broker Agent follows internal redirects for advertised route targets" test/agent.test.js` — 2/2 pass; `VERSER_TEST_MEMORY_GUARD=1 VERSER_TEST_MEMORY_LEAK_BYTES=262144 node --expose-gc --test --test-concurrency=1 --test-name-pattern="Broker exposes an Undici Dispatcher that routes fetch by advertised hostname|Broker Dispatcher follows internal redirects for advertised route targets" test/dispatcher.test.js` — 2/2 pass; `node --test test/workspace.test.js` — 5/5 pass; `npm run lint` — clean.
             - Fifth-wave full bounded rerun: `npm run test:bounded -- --memory-leak-bytes 262144` — 351 tests, 347 passed, 4 skipped, 0 failed.
             - Default test command update: changed root `npm test` to call `npm run test:bounded` so the documented default validation path always uses bounded heap settings, `--expose-gc`, serial Node tests, and guarded memory-growth checks. Updated development/package-publishing/Conductor docs and workspace tests to describe the bounded default and memory allowance requirements. Validation: `node --test test/workspace.test.js` — 5/5 pass; `npm run lint` — clean; `npm test` — 351 tests, 347 passed, 4 skipped, 0 failed.
+            - Phase approval: user approved the streaming test resource guardrails/default bounded test phase after the fifth-wave 256 KiB bounded run and default `npm test` validation passed.
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 
