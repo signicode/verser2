@@ -92,7 +92,11 @@ test('Bidirectional TEXT and BINARY messages preserve message boundaries', async
   const guest = createGuest({ hostUrl, guestId: 'ws-guest-msgbound' });
 
   try {
-    guest.attachWebSocket((_ws) => {}, 'ws-msgbound.local.test');
+    guest.attachWebSocket((ws) => {
+      ws.on('message', (data, { type }) => {
+        ws.send(data, { type });
+      });
+    }, 'ws-msgbound.local.test');
 
     await broker.connect();
     await guest.connect();
