@@ -1051,6 +1051,125 @@ class LeaseStreamResetTest(unittest.TestCase):
         asyncio.run(run())
 
 
+class PendingStreamFailureTest(unittest.TestCase):
+    """Tests for _collect_response_body and _wait_for_success_response
+    handling of Exception and StreamReset events."""
+
+    def test_collect_response_body_raises_on_connection_error(self) -> None:
+        """Exception from _fail_pending_streams propagates through _collect_response_body."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="collect-exc"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            # Put an Exception event into the queue
+            guest._events[1].put_nowait(RuntimeError("connection lost"))
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._collect_response_body(1)
+            self.assertIn("connection lost", str(ctx.exception))
+
+        asyncio.run(run())
+
+    def test_collect_response_body_raises_on_stream_reset(self) -> None:
+        """StreamReset propagates through _collect_response_body as RuntimeError."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="collect-reset"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(
+                h2.events.StreamReset(stream_id=1, error_code=0)
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._collect_response_body(1)
+            self.assertIn("reset", str(ctx.exception).lower())
+
+        asyncio.run(run())
+
+    def test_wait_for_success_response_raises_on_connection_error(self) -> None:
+        """Exception from _fail_pending_streams propagates through _wait_for_success_response."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="wait-exc"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(RuntimeError("connection gone"))
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._wait_for_success_response(1)
+            self.assertIn("connection gone", str(ctx.exception))
+
+        asyncio.run(run())
+
+    def test_wait_for_success_response_raises_on_stream_reset(self) -> None:
+        """StreamReset propagates through _wait_for_success_response as RuntimeError."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="wait-reset"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(
+                h2.events.StreamReset(stream_id=1, error_code=0)
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._wait_for_success_response(1)
+            self.assertIn("reset", str(ctx.exception).lower())
+
+        asyncio.run(run())
+
+    def test_collect_response_body_normal_path_unchanged(self) -> None:
+        """Normal DataReceived + StreamEnded still works after exception handling."""
+
+        async def run() -> bytes:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="collect-normal"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(
+                h2.events.DataReceived(
+                    stream_id=1, data=b"hello", flow_controlled_length=5
+                )
+            )
+            guest._events[1].put_nowait(h2.events.StreamEnded(stream_id=1))
+            return await guest._collect_response_body(1)
+
+        result = asyncio.run(run())
+        self.assertEqual(result, b"hello")
+
+    def test_wait_for_success_response_normal_path_unchanged(self) -> None:
+        """Normal 200 ResponseReceived still works after exception handling."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="wait-normal"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            from unittest.mock import MagicMock
+
+            mock_response = MagicMock(spec=h2.events.ResponseReceived)
+            mock_response.headers = [(":status", "200")]
+            mock_response.stream_id = 1
+            guest._events[1].put_nowait(mock_response)
+            await guest._wait_for_success_response(1)
+
+        asyncio.run(run())
+
+
 class LeasedStreamingTest(unittest.TestCase):
     """Tests for streaming request/response bodies through lease dispatch."""
 
@@ -1312,8 +1431,7 @@ class LeasedStreamingTest(unittest.TestCase):
             )
             await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
             await asyncio.wait_for(task, timeout=5)
-            # Let discard-ack tasks complete
-            await asyncio.sleep(0.01)
+            # ACKs are now inline, so conn.acknowledged is populated before task completes
             return conn.acknowledged
 
         acknowledged = asyncio.run(run())

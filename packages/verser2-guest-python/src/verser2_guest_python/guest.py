@@ -566,10 +566,13 @@ class VerserGuest:
                     }
                 )
             elif pending_metadata_flow_controlled_length:
-                asyncio.create_task(
+                task = asyncio.create_task(
                     self._acknowledge_received_data(
                         stream_id, pending_metadata_flow_controlled_length
                     )
+                )
+                task.add_done_callback(
+                    lambda t: t.exception() if not t.cancelled() else None
                 )
             pending_metadata_flow_controlled_length = 0
             app_task = asyncio.create_task(run_app())
@@ -617,10 +620,9 @@ class VerserGuest:
                     else:
                         # App already finished — discard body but ack flow
                         # control credit so the sender does not stall.
-                        asyncio.create_task(
-                            self._acknowledge_received_data(
-                                stream_id, int(event.flow_controlled_length)
-                            )
+                        # Await inline to avoid unobserved fire-and-forget tasks.
+                        await self._acknowledge_received_data(
+                            stream_id, int(event.flow_controlled_length)
                         )
             if isinstance(event, h2.events.StreamEnded):
                 try_start_app()
@@ -682,6 +684,12 @@ class VerserGuest:
         chunks: list[bytes] = []
         while True:
             event = await self._events[stream_id].get()
+            if isinstance(event, Exception):
+                raise event
+            if isinstance(event, h2.events.StreamReset):
+                raise RuntimeError(
+                    f"Stream {stream_id} was reset before response completed"
+                )
             if isinstance(event, h2.events.DataReceived):
                 chunks.append(event.data)
             if isinstance(event, h2.events.StreamEnded):
@@ -690,6 +698,12 @@ class VerserGuest:
     async def _wait_for_success_response(self, stream_id: int) -> None:
         while True:
             event = await self._events[stream_id].get()
+            if isinstance(event, Exception):
+                raise event
+            if isinstance(event, h2.events.StreamReset):
+                raise RuntimeError(
+                    f"Lease stream {stream_id} was reset before success response"
+                )
             if isinstance(event, h2.events.ResponseReceived):
                 status = dict(event.headers).get(":status")
                 if status != "200":

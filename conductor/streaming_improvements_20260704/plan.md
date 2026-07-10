@@ -225,7 +225,7 @@
     - [~] Improve Host-to-Host federated request/response streaming abort propagation and structured error preservation.
         - `packages/verser2-host/src/lib/federation.ts`: changed `controller.abort()` to `controller.abort(makeStreamFailure())` so the AbortController signal carries a `VerserError` with code `stream-failure` and rstCode context. Added a `close` handler that aborts local dispatch when the federated request stream closes before local response settlement, including graceful close races where the peer can no longer receive a response. Uses `localSettled` guard to prevent double abort. Cleans up stream listeners on normal response completion and error paths.
         - `packages/verser2-host/src/lib/broker-routing.ts`: propagated `request.signal?.reason` through the two-controller AbortController chain so the structured error reaches the local dispatch.
-        - `packages/verser2-host/src/lib/local-peers.ts`: local request abort listeners use `request.signal.reason` if it is an Error (federation path), otherwise fall back to `createDisconnectedError(request)`. No direct `emit('error')`.
+        - `packages/verser2-host/src/lib/local-peers.ts`: local request abort listeners preserve federated structured `stream-failure` `VerserError` reasons, otherwise fall back to `createDisconnectedError(request)` for direct/non-federated aborts. No direct `emit('error')`.
         - The `stream-failure` error propagates through the AbortSignal reason and dispatch rejection paths, but the guest request PassThrough may already have ended via the body pipe when `localRequest.destroy(error)` is called, so a guest handler `'error'` event is not guaranteed. The in-process abort propagation test was removed as infeasible without `emit('error')`. A characterization comment documents the limitation. The waiter test (below) verifies the close-time waiter rejection path.
     - [ ] Add tests for mid-stream Broker abort across federated forwarding — deferred. The `stream-failure` AbortSignal reason reaches the dispatch promise rejection but cannot be delivered as an 'error' event on the already-ended guest PassThrough without `emit('error')`. A safe delivery mechanism for post-pipe-end errors requires further design.
     - [x] Add tests for upstream disconnect, waiting stream cleanup, and no leaked waiters/leases.
@@ -281,7 +281,35 @@
         - Python package build: `npm run build --workspace=@signicode/verser2-guest-python` — passed.
         - Lint: `npm run lint` — passed.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Conductor - Phase Checkpoint 'Federation, Keep-Alive, Bun, and Python ASGI Parity' (Protocol in workflow.md)
+- [x] Task: Oracle review fixes for Phase 3 findings
+    - [x] Fix Python pending-stream failure cleanup:
+        - `_collect_response_body()` and `_wait_for_success_response()` now handle `Exception` events (directly raised) and `StreamReset` events (wrapped as `RuntimeError`) instead of hanging.
+        - Added 6 new Python unit tests covering connection-error, stream-reset, and normal paths for both methods.
+    - [x] Fix Local H2 cancel body error mapping:
+        - `isHttp2CancelError()` now also matches known numeric HTTP/2 reset codes and Node's `ERR_HTTP2_STREAM_ERROR` string code without broad message substring matching.
+        - `failRequestStream` preserves `VerserError` instances instead of always wrapping as `stream-failure`, so H2 cancel errors routed through `createRequestAbortError` keep their `disconnected-target` code.
+        - Added 3 new tests in `test/local-peers.test.js`: numeric NGHTTP2_CANCEL → disconnected-target, ERR_HTTP2_STREAM_ERROR → disconnected-target, ordinary body error → stream-failure.
+    - [x] Fix Bun request body cancel over-cleans listeners:
+        - `streamRequestBody` now stores `data`, `end`, and `error` handler refs and removes only those via `off()` on cancel, not `removeAllListeners()`.
+        - Updated `NodeStyleRequest` interface to include `off`.
+        - Updated test to verify specific listener removal (data, end, error).
+    - [x] Fix Bun response backpressure hang on close/error before drain:
+        - `writeResponseBody` now resolves/rejects on `close`, `finish`, or `error` events in addition to `drain`, preventing hanging when the response stream ends before drain fires.
+        - `NodeStyleResponse` interface widened to accept any event string.
+        - Added test: close-before-drain resolves without hanging.
+    - [x] Fix Python discarded-DATA ACK fire-and-forget:
+        - Changed `asyncio.create_task` to inline `await` for the post-app-done discard ACK path, avoiding unobserved task errors.
+        - Added exception suppression callback on the pending-metadata ACK task (which runs before app start and cannot be awaited inline from a synchronous helper).
+        - Updated existing ACK test to remove the `asyncio.sleep(0.01)` workaround.
+    - [x] Run focused validation (see validation section below).
+- [x] Task: Conductor - Phase Checkpoint 'Federation, Keep-Alive, Bun, and Python ASGI Parity' (Protocol in workflow.md)
+    - [x] Phase validation: `npm run build --workspace=@signicode/verser2-host`; `npm run build --workspace=@signicode/verser2-guest-bun`; `npm run build --workspace=@signicode/verser2-guest-python`; `node --test --test-concurrency=1 test/host-upstreams.test.js` — 37/37 pass; `node --test test/local-peers.test.js` — pass; `npm run test --workspace=@signicode/verser2-guest-bun` — 20/20 pass; `node --test test/bun-guest-integration.test.js` — 2/2 pass; `uv run --project packages/verser2-guest-python python -m unittest discover -s packages/verser2-guest-python/tests` — 91/91 pass; `node --test test/python-guest-integration.test.js` — 1/1 pass; `npm run lint` — clean; `npm run test:bounded` — 354 tests, 350 passed, 4 skipped, 0 failed.
+    - [x] Oracle review findings addressed with bounded changes and tests.
+    - **Deferrals/Carry-forward:**
+        - *Keep-alive/liveness* for idle leases and upstream waiting sockets/streams: not yet implemented. The existing gap characterizations remain valid. A future track should address idle-lease timeout, waiter cleanup on stream close, and upstream link health probes.
+        - *Explicit Guest request error delivery across federation*: The `stream-failure` AbortSignal reason reaches the dispatch promise rejection but cannot be reliably delivered as an `'error'` event on the already-ended Guest PassThrough without an `emit('error')` mechanism. A safe delivery mechanism for post-pipe-end errors requires further design and is deferred.
+        - *Route revocation during active stream*: Revocation removes routes from the registry but does not interrupt active lease streams. This is intentional for the current phase; a future track may add soft-drain semantics.
+        - *Idle lease keep-alive/waiter cleanup*: Request-stream waiter failure on inbound stream close is deferred (it breaks normal replenishment). A dedicated keep-alive track should address this holistically.
 
 ## Phase 4: WebSocket Design Gate and Implementation
 

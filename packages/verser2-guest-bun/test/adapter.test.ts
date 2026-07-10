@@ -535,7 +535,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     const streamChunkEncoder = new TextEncoder();
     const receivedChunks: Buffer[] = [];
     let writeCallIndex = 0;
-    let drainHandler: (() => void) | undefined;
+    const handlers = new Map<string, (...args: unknown[]) => void>();
     let resolved = false;
     let done!: () => void;
     const donePromise = new Promise<void>((resolve) => {
@@ -561,11 +561,12 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
         resolved = true;
         done();
       },
-      on(event: 'drain', handler: () => void) {
-        drainHandler = handler;
+      on(event: string, handler: (...args: unknown[]) => void) {
+        handlers.set(event, handler);
         return undefined;
       },
-      off() {
+      off(event: string) {
+        handlers.delete(event);
         return undefined;
       },
     };
@@ -608,6 +609,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     expect(receivedChunks[0]).toEqual(Buffer.from('first'));
 
     // Fire drain to unblock the write loop; second chunk is consumed and written
+    const drainHandler = handlers.get('drain');
     drainHandler?.();
 
     await donePromise;
@@ -615,6 +617,180 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     expect(resolved).toBe(true);
     expect(receivedChunks).toHaveLength(2);
     expect(receivedChunks[1]).toEqual(Buffer.from('second'));
+  });
+
+  test('response writer stops reading after close fires during backpressure wait (no second write)', async () => {
+    const streamChunkEncoder = new TextEncoder();
+    const receivedChunks: Buffer[] = [];
+    let writeCallIndex = 0;
+    let endCalled = false;
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+
+    const responseWriter = {
+      statusCode: 0,
+      writeHead() {
+        return undefined;
+      },
+      write(chunk: string | Buffer) {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        receivedChunks.push(buf);
+        writeCallIndex++;
+        // Return false on first write to trigger drain wait
+        return writeCallIndex !== 1;
+      },
+      end(chunk?: string | Buffer) {
+        endCalled = true;
+        if (chunk !== undefined) {
+          receivedChunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+      },
+      on(event: string, handler: (...args: unknown[]) => void) {
+        handlers.set(event, handler);
+        return undefined;
+      },
+      off(event: string) {
+        handlers.delete(event);
+        return undefined;
+      },
+    };
+
+    const nodeHandler = createNodeStyleHandler('close-before-drain-2.test', {
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              // Two chunks: first triggers backpressure, second must NOT be written
+              controller.enqueue(streamChunkEncoder.encode('first'));
+              controller.enqueue(streamChunkEncoder.encode('second'));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    nodeHandler(
+      {
+        method: 'GET',
+        url: '/',
+        headers: {},
+        on() {
+          return undefined;
+        },
+      },
+      responseWriter as unknown as NodeStyleResponse,
+    );
+
+    // Allow first read/write cycle to complete (backpressure wait should be active)
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+
+    // Only first chunk should have been written (write returned false => drain wait)
+    expect(receivedChunks).toHaveLength(1);
+    expect(receivedChunks[0]).toEqual(Buffer.from('first'));
+
+    // Fire close instead of drain — writer must stop, no second write
+    const closeHandler = handlers.get('close');
+    closeHandler?.();
+    closeHandler?.(); // idempotent: second call is no-op
+
+    // writeResponseBody returns synchronously in microtask after close resolves.
+    // Wait a macrotask so all pending microtasks drain and the IIFE completes.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
+
+    // end() must NOT have been called (sink was closed externally)
+    expect(endCalled).toBe(false);
+    // Only the first chunk should ever have been written
+    expect(receivedChunks).toHaveLength(1);
+    expect(receivedChunks[0]).toEqual(Buffer.from('first'));
+  });
+
+  test('response writer stops reading after finish fires during backpressure wait (no second write)', async () => {
+    const streamChunkEncoder = new TextEncoder();
+    const receivedChunks: Buffer[] = [];
+    let writeCallIndex = 0;
+    let endCalled = false;
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+
+    const responseWriter = {
+      statusCode: 0,
+      writeHead() {
+        return undefined;
+      },
+      write(chunk: string | Buffer) {
+        const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        receivedChunks.push(buf);
+        writeCallIndex++;
+        // Return false on first write to trigger drain wait
+        return writeCallIndex !== 1;
+      },
+      end(chunk?: string | Buffer) {
+        endCalled = true;
+        if (chunk !== undefined) {
+          receivedChunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+      },
+      on(event: string, handler: (...args: unknown[]) => void) {
+        handlers.set(event, handler);
+        return undefined;
+      },
+      off(event: string) {
+        handlers.delete(event);
+        return undefined;
+      },
+    };
+
+    const nodeHandler = createNodeStyleHandler('finish-before-drain.test', {
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(streamChunkEncoder.encode('first'));
+              controller.enqueue(streamChunkEncoder.encode('second'));
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    nodeHandler(
+      {
+        method: 'GET',
+        url: '/',
+        headers: {},
+        on() {
+          return undefined;
+        },
+      },
+      responseWriter as unknown as NodeStyleResponse,
+    );
+
+    // Allow first read/write cycle to complete (backpressure wait should be active)
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+
+    // Only first chunk should have been written (write returned false => drain wait)
+    expect(receivedChunks).toHaveLength(1);
+    expect(receivedChunks[0]).toEqual(Buffer.from('first'));
+
+    // Fire finish instead of drain — writer must stop, no second write
+    const finishHandler = handlers.get('finish');
+    finishHandler?.();
+    finishHandler?.(); // idempotent
+
+    // writeResponseBody returns synchronously in microtask after finish resolves.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
+
+    expect(endCalled).toBe(false);
+    expect(receivedChunks).toHaveLength(1);
+    expect(receivedChunks[0]).toEqual(Buffer.from('first'));
   });
 
   test('request body stream pauses Node source when consumer buffer is full and resumes on pull', async () => {
@@ -685,9 +861,9 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     reader.releaseLock();
   });
 
-  test('request body stream cancel destroys the Node source and removes listeners', async () => {
+  test('request body stream cancel destroys the Node source and removes specific listeners only', async () => {
+    const removedEvents: string[] = [];
     let destroyed = false;
-    let removedListeners = false;
 
     const mockRequest = {
       method: 'POST',
@@ -696,13 +872,14 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
       on() {
         return undefined;
       },
+      off(event: string) {
+        removedEvents.push(event);
+        return undefined;
+      },
       pause() {},
       resume() {},
       destroy() {
         destroyed = true;
-      },
-      removeAllListeners() {
-        removedListeners = true;
       },
     };
 
@@ -711,6 +888,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     await reader.cancel('test-cancel');
 
     expect(destroyed).toBe(true);
-    expect(removedListeners).toBe(true);
+    // Should have removed data, end, and error listeners only
+    expect(removedEvents.sort()).toEqual(['data', 'end', 'error']);
   });
 });
