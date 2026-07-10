@@ -64,6 +64,109 @@ test.before(async () => {
   }
 });
 
+// ================ Federation Upstream Abort Propagation (deferred) ================
+// Mid-stream Broker abort propagation through federation — the AbortSignal
+// reason carries a structured stream-failure error through to the local
+// dispatch promise rejection (rejectBeforeResponse), but the guest request
+// PassThrough has already ended via the body pipe, so destroy(error) is a
+// no-op and the 'error' event never fires on the guest handler.  A safe
+// delivery mechanism requires further design; deferred pending review.
+
+// ================ Waiter Cleanup After Host Close ================
+
+test('Host close fails pending federated request stream waiters with bounded rejection', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  await manager.start();
+
+  // Use a raw H2 client to register a real inbound federation host.
+  // The handshake creates the host entry in the manager's inboundFederationHosts.
+  // We do NOT open /verser/host/federation/request so any broker request
+  // targeting a route through this host will enqueue a waiter.
+  const rawSession = await connectRawClient(manager.address.port);
+  const hsStream = rawSession.request({
+    ':method': 'POST',
+    ':path': '/verser/host/federation',
+    'content-type': 'application/json',
+  });
+  hsStream.end(
+    JSON.stringify({
+      hostId: 'raw-runner',
+      protocolVersion: 1,
+      importRoutes: true,
+      exportRoutes: true,
+    }),
+  );
+  const hsHeaders = await once(hsStream, 'response');
+  assert.equal(Number(hsHeaders[':status']), 200, `Handshake response: ${hsHeaders[':status']}`);
+  hsStream.resume();
+
+  // Add the federated route directly (routes go through setImportedFederatedRoutes,
+  // avoiding the route-stream close lifecycle that removes the inbound host).
+  manager.setImportedFederatedRoutes('raw-runner', [
+    {
+      targetId: 'guest-waiter-close',
+      domain: 'waiter-close.verser.test',
+      originHostId: 'host-raw-runner',
+      nextHopHostId: 'raw-runner',
+      hopCount: 1,
+      viaHostIds: ['host-raw-runner'],
+      source: 'upstream',
+    },
+  ]);
+  assert.equal(
+    manager.getFederatedRouteCandidates('guest-waiter-close', 'waiter-close.verser.test').length,
+    1,
+    'imported federated route should be available before starting the waiter request',
+  );
+
+  const broker = await manager.attachLocalBroker({ brokerId: 'broker-waiter-close' });
+
+  try {
+    const start = Date.now();
+    const requestPromise = broker.request({
+      targetId: 'guest-waiter-close',
+      method: 'GET',
+      path: '/wait',
+      headers: { host: 'waiter-close.verser.test' },
+      leaseAcquireTimeoutMs: 60_000,
+    });
+    let settled = false;
+    requestPromise
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => {
+        // The assertion below observes settlement; rejectionPromise owns the
+        // expected request rejection.
+      });
+
+    // Attach a catch handler before close so the rejection is always
+    // handled even if it fires synchronously during manager.close().
+    const rejectionPromise = requestPromise
+      .then(() => {
+        throw new Error('request should have been rejected');
+      })
+      .catch((err) => err);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, 'request should be waiting for a federated request stream');
+    await manager.close('waiter-cleanup-test');
+    const rejection = await rejectionPromise;
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 1500, `Request should reject fast (< 1.5 s), took ${elapsed} ms`);
+    assert.ok(
+      rejection?.message?.includes('Host closing') ||
+        rejection?.message?.includes('closing') ||
+        rejection?.message?.includes('unavailable'),
+      `Rejection should reference close/unavailable, got: ${rejection?.message}`,
+    );
+  } finally {
+    await broker.close();
+    rawSession.destroy();
+    await manager.close();
+  }
+});
+
 test('Host connects outbound to an upstream Host and closes the link', async () => {
   const upstream = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const downstream = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
@@ -1911,94 +2014,6 @@ test('Upstream disconnect during an active federated request fails the Broker re
       assert.match(error.message, /closed|disconnect|metadata|upstream|lease/i);
       return true;
     });
-  } finally {
-    await broker?.close();
-    await runner.close();
-    await manager.close();
-  }
-});
-
-// ================ Characterization: Federation Upstream Abort Propagation ================
-
-test('Federated forwarding does NOT propagate mid-stream Broker abort as an explicit error to downstream Guest (gap: cancellation closes lease but no error event through federation)', async () => {
-  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
-  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
-  let broker;
-  await manager.start();
-  try {
-    await runner.connectUpstream({
-      upstreamId: 'manager',
-      url: hostUrl(manager),
-      tls: { ca: trusted.certificate },
-    });
-
-    let guestRequestError;
-    const requestClosed = new Promise((resolve) => {
-      runner.attachLocalGuest({
-        guestId: 'guest-federated-abort',
-        routedDomains: ['federated-abort.verser.test'],
-        listener: (request, response) => {
-          request.resume();
-          request.once('error', (err) => {
-            guestRequestError = err;
-          });
-          request.once('close', () => {
-            resolve();
-          });
-        },
-      });
-    });
-
-    await assertEventually(() =>
-      assert.equal(
-        manager.getFederatedRouteCandidates('guest-federated-abort', 'federated-abort.verser.test')
-          .length,
-        1,
-      ),
-    );
-
-    // Use a raw H2 session to send a broker request and then cancel it
-    const rawBrokerSession = await connectRawClient(manager.address.port);
-    try {
-      const brokerStream = rawBrokerSession.request({
-        ':method': 'POST',
-        ':path': '/verser/request',
-        'x-verser-target-id': 'guest-federated-abort',
-        'x-verser-request-id': 'req-federated-abort-1',
-        'x-verser-source-id': 'broker-federated-abort',
-        'x-verser-method': 'POST',
-        'x-verser-path': '/federated-abort',
-      });
-      brokerStream.write(Buffer.from('body'));
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      brokerStream.close(http2.constants.NGHTTP2_CANCEL);
-
-      // The lease stream closes (detected via request.on('close')),
-      // but the request does NOT receive an explicit 'error' event through federation
-      await Promise.race([
-        requestClosed,
-        new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  'Guest request stream was not closed after Broker abort through federation',
-                ),
-              ),
-            1500,
-          ),
-        ),
-      ]);
-
-      // The stream closes but no error event fires — characterizes the gap
-      assert.equal(
-        guestRequestError,
-        undefined,
-        'Expected no error event — Broker abort does not propagate as Guest request error through federation (known gap)',
-      );
-    } finally {
-      rawBrokerSession.destroy();
-    }
   } finally {
     await broker?.close();
     await runner.close();

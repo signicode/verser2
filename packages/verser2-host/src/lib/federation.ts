@@ -529,6 +529,8 @@ export async function handleFederatedIncomingRequestStream(
 ): Promise<void> {
   let requestId: string | undefined;
   let targetId: string | undefined;
+  let localSettled = false;
+  let cleanupStreamListeners = (): void => {};
   try {
     const metadata = await readLeaseRequestMetadataFromStream(stream, {
       guestId: localHostId,
@@ -537,9 +539,32 @@ export async function handleFederatedIncomingRequestStream(
     requestId = metadata.requestId;
     targetId = metadata.targetId;
     const controller = new AbortController();
-    const abortForwardedRequest = (): void => controller.abort();
-    stream.once('aborted', abortForwardedRequest);
-    stream.once('error', abortForwardedRequest);
+    const makeStreamFailure = (): Error =>
+      createVerserError('stream-failure', 'Federated request stream was cancelled or failed', {
+        peerHostId,
+        requestId,
+        targetId,
+        rstCode:
+          'rstCode' in stream
+            ? String((stream as http2.ServerHttp2Stream).rstCode ?? 'unknown')
+            : undefined,
+      });
+    const abortLocalFromStream = (): void => {
+      if (localSettled) return;
+      controller.abort(makeStreamFailure());
+    };
+    const cancelLocalOnClose = (): void => {
+      if (localSettled) return;
+      controller.abort(makeStreamFailure());
+    };
+    cleanupStreamListeners = (): void => {
+      stream.off('aborted', abortLocalFromStream);
+      stream.off('error', abortLocalFromStream);
+      stream.off('close', cancelLocalOnClose);
+    };
+    stream.once('aborted', abortLocalFromStream);
+    stream.once('error', abortLocalFromStream);
+    stream.once('close', cancelLocalOnClose);
     const response = await routeFn({
       requestId: metadata.requestId,
       sourceId: metadata.sourceId,
@@ -564,16 +589,20 @@ export async function handleFederatedIncomingRequestStream(
       }),
     );
     response.body.once('error', () => {
+      cleanupStreamListeners();
       if (!stream.closed) {
         stream.close(http2.constants.NGHTTP2_CANCEL);
       }
     });
+    response.body.once('close', cleanupStreamListeners);
     response.body.once('end', () => {
-      stream.off('aborted', abortForwardedRequest);
-      stream.off('error', abortForwardedRequest);
+      localSettled = true;
+      cleanupStreamListeners();
     });
     response.body.pipe(stream);
   } catch (error) {
+    localSettled = true;
+    cleanupStreamListeners();
     const verserError = toVerserError(error);
     emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: verserError });
     if (requestId !== undefined && targetId !== undefined && !stream.closed) {

@@ -388,9 +388,11 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     this.leasePool.closeAllLeases();
     this.leasePool.failAllQueuedLeaseAcquisitions(reason);
+    this.failAllFederatedRequestStreamWaiters(`Host closing: ${reason}`);
 
     for (const link of this.inboundFederationHosts.values()) {
       link.routeStream?.close(http2.constants.NGHTTP2_NO_ERROR);
+      link.requestStream?.close(http2.constants.NGHTTP2_NO_ERROR);
     }
     for (const session of this.sessions) {
       session.destroy();
@@ -1285,6 +1287,12 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.failFederatedRequestStreamWaiters(hostId, 'Federated Host disconnected');
     this.removeImportedFederatedRoutes(hostId);
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected, peerId: hostId });
+  }
+
+  private failAllFederatedRequestStreamWaiters(message: string): void {
+    for (const [hostId] of this.federatedRequestStreamWaiters) {
+      this.failFederatedRequestStreamWaiters(hostId, message);
+    }
   }
 
   private failFederatedRequestStreamWaiters(hostId: string, message: string): void {

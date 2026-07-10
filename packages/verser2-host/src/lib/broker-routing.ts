@@ -578,9 +578,14 @@ export async function routeLocalRequestDispatch(
     role: 'guest',
   });
   const controller = new AbortController();
-  const cancelFromUpstream = (): void => controller.abort();
+  const cancelFromUpstream = (): void => {
+    // Propagate the upstream signal's reason (set by controller.abort(reason)
+    // in the federation boundary) so structured errors like stream-failure
+    // pass through the local dispatch abort chain.
+    controller.abort(request.signal?.reason);
+  };
   if (request.signal?.aborted) {
-    controller.abort();
+    controller.abort(request.signal?.reason);
   } else {
     request.signal?.addEventListener('abort', cancelFromUpstream, { once: true });
   }

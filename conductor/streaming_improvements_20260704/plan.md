@@ -221,13 +221,20 @@
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 
-- [ ] Task: Harden federated/upstream streaming behavior
-    - [ ] Improve Host-to-Host federated request/response streaming abort propagation and structured error preservation.
-    - [ ] Add or update tests for mid-stream Broker abort across federated forwarding.
-    - [ ] Add or update tests for upstream disconnect, waiting stream cleanup, and no leaked waiters/leases.
+- [~] Task: Harden federated/upstream streaming behavior
+    - [~] Improve Host-to-Host federated request/response streaming abort propagation and structured error preservation.
+        - `packages/verser2-host/src/lib/federation.ts`: changed `controller.abort()` to `controller.abort(makeStreamFailure())` so the AbortController signal carries a `VerserError` with code `stream-failure` and rstCode context. Added a `close` handler that aborts local dispatch when the federated request stream closes before local response settlement, including graceful close races where the peer can no longer receive a response. Uses `localSettled` guard to prevent double abort. Cleans up stream listeners on normal response completion and error paths.
+        - `packages/verser2-host/src/lib/broker-routing.ts`: propagated `request.signal?.reason` through the two-controller AbortController chain so the structured error reaches the local dispatch.
+        - `packages/verser2-host/src/lib/local-peers.ts`: local request abort listeners use `request.signal.reason` if it is an Error (federation path), otherwise fall back to `createDisconnectedError(request)`. No direct `emit('error')`.
+        - The `stream-failure` error propagates through the AbortSignal reason and dispatch rejection paths, but the guest request PassThrough may already have ended via the body pipe when `localRequest.destroy(error)` is called, so a guest handler `'error'` event is not guaranteed. The in-process abort propagation test was removed as infeasible without `emit('error')`. A characterization comment documents the limitation. The waiter test (below) verifies the close-time waiter rejection path.
+    - [ ] Add tests for mid-stream Broker abort across federated forwarding — deferred. The `stream-failure` AbortSignal reason reaches the dispatch promise rejection but cannot be delivered as an 'error' event on the already-ended guest PassThrough without `emit('error')`. A safe delivery mechanism for post-pipe-end errors requires further design.
+    - [x] Add tests for upstream disconnect, waiting stream cleanup, and no leaked waiters/leases.
+        - `packages/verser2-host/src/lib/node-http2-verser-host.ts`: added `failAllFederatedRequestStreamWaiters(message)` helper, called from `close()`. Also closes `link.requestStream` alongside `link.routeStream`. Deferred: inbound request-stream-close waiter failure (breaks normal replenishment).
+        - `test/host-upstreams.test.js`: added `Host close fails pending federated request stream waiters with bounded rejection` — registers a real inbound federation host via raw H2 handshake, asserts a successful handshake and imported candidate, leaves request stream unopened, verifies the broker request is pending on the waiter path before close, closes the manager, and asserts < 1500 ms rejection with close/unavailable message.
     - [ ] Clarify keep-alive/liveness behavior for idle leases and upstream waiting sockets/streams without introducing CONNECT/L4 semantics.
-    - [ ] Run `npm run build --workspace=@signicode/verser2-host` and `node --test test/host-upstreams.test.js`.
-    - [ ] Commit this completed task according to the per-task commit policy.
+        - Not yet implemented (pending future track).
+    - [x] Run `npm run build --workspace=@signicode/verser2-host` — passes.
+    - [x] Validation: `node --test --test-concurrency=1 --test-name-pattern="Host close fails pending federated request stream waiters" test/host-upstreams.test.js` — 1/1 pass. `node --test --test-concurrency=1 test/host-upstreams.test.js` — 37 tests, 37 pass, 0 fail. `node --test --test-name-pattern="Broker abort" test/broker-routing.test.js` — 1/1 pass. `npm run lint` — clean.
 - [ ] Task: Update Bun wrapper parity
     - [ ] Confirm Bun Guest/Broker wrappers inherit the improved Node transport streaming behavior.
     - [ ] Update Bun tests and docs for supported streaming behavior.

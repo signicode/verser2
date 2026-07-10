@@ -71,7 +71,11 @@ class LocalIncomingMessage extends PassThrough implements LocalRequest {
       // headers does not surface as an unhandled stream error.
     });
     const onAbort = (): void => {
-      this.destroy(createDisconnectedError(request));
+      this.destroy(
+        request.signal?.reason instanceof Error
+          ? request.signal.reason
+          : createDisconnectedError(request),
+      );
     };
     request.signal?.addEventListener('abort', onAbort, { once: true });
     this.once('close', () => request.signal?.removeEventListener('abort', onAbort));
@@ -355,7 +359,14 @@ export function dispatchLocalGuestRequest(
       rejectBeforeResponse(streamError);
     };
     const abort = (): void => {
-      const error = createDisconnectedError(request);
+      // Use the signal reason when available (set by controller.abort(reason)
+      // in the federation boundary), so structured errors like stream-failure
+      // propagate through dispatch rejection paths. Fall back to the default
+      // disconnected error for direct (non-federated) abort paths.
+      const error =
+        request.signal?.reason instanceof Error
+          ? request.signal.reason
+          : createDisconnectedError(request);
       localRequest.destroy(error);
       if (localResponse.headersStarted) {
         localResponse.fail(error);
