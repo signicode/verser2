@@ -510,3 +510,33 @@ test('Broker Dispatcher streams large request body through fetch', async () => {
     await closeRoute(route);
   }
 });
+
+// ================ Regression Guard: Upgrade Rejection ================
+
+test('Broker Dispatcher rejects upgrade requests as unsupported', async () => {
+  const broker = createVerserBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'broker-dispatcher-upgrade-reject',
+  });
+  const dispatcher = broker.createDispatcher();
+
+  const error = await new Promise((resolve) => {
+    dispatcher.dispatch(
+      {
+        path: '/',
+        method: 'GET',
+        upgrade: 'websocket',
+      },
+      {
+        onConnect: () => {},
+        onError: (err) => resolve(err),
+        onHeaders: () => true,
+        onData: () => {},
+        onComplete: () => {},
+      },
+    );
+  });
+
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /Verser Dispatcher does not support upgrade requests/i);
+});

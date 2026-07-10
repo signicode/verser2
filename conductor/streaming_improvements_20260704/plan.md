@@ -351,10 +351,20 @@
         16. Bun `server.upgrade()` remains false if Bun Guest WebSocket support is deferred.
         17. Federated WebSocket routes fail with explicit unsupported error unless federation support is separately approved.
     - [x] Pause for user approval before adding protocol/API changes: approved by user for VWS/1 as scoped, including Node direct Broker/Guest APIs and Python ASGI Guest websocket scopes, with Bun `server.upgrade()`, Agent/Dispatcher generic upgrades, generic CONNECT/RFC8441 tunneling, and L4 forwarding out of scope.
-- [ ] Task: Add WebSocket acceptance tests before implementation
-    - [ ] Add tests for successful WebSocket connection setup on the approved runtime surface.
-    - [ ] Add tests for bidirectional message flow, close handshake, abnormal close/abort, backpressure, route revocation/disconnect, and Host/federation behavior where in scope.
-    - [ ] Confirm tests fail for missing WebSocket behavior before implementation.
+- [x] Task: Add WebSocket acceptance tests before implementation
+    - [x] Add tests for successful WebSocket connection setup on the approved runtime surface.
+        - `test/websocket.test.js`: Node Broker opens VWS/1 WebSocket to Node Guest with subprotocol negotiation.
+        - `packages/verser2-guest-python/tests/test_websocket_asgi.py`: `build_websocket_scope` produces correct ASGI websocket scope.
+    - [x] Add tests for bidirectional message flow, close handshake, abnormal close/abort, backpressure, route revocation/disconnect, and Host/federation behavior where in scope.
+        - `test/websocket.test.js`: Bidirectional TEXT and BINARY messages preserve message boundaries; Normal close code/reason delivered both ways.
+        - `packages/verser2-guest-python/tests/test_websocket_asgi.py`: Full ASGI websocket lifecycle (connect, accept, exchange messages, close).
+        - `test/dispatcher.test.js`: Regression guard — Broker Dispatcher rejects upgrade requests (passes today).
+    - [x] Confirm tests fail for missing WebSocket behavior before implementation — all Node WebSocket tests fail with TypeError (methods do not exist), Python WebSocket tests fail with ImportError (functions not yet implemented). See validation commands below.
+    - Validation commands and observed results:
+        - `node --test test/websocket.test.js` — 3/3 fail with `TypeError: guest.attachWebSocket is not a function` (API does not exist).
+        - `node --test --test-name-pattern="upgrade" test/dispatcher.test.js` — 1/1 pass (regression guard confirms Dispatcher rejects upgrades today).
+        - `uv run --project packages/verser2-guest-python python -m unittest discover -s /home/michal/verser2/packages/verser2-guest-python/tests -p "test_websocket_asgi.py" -v` — 0/2 pass; both fail with `ImportError: cannot import name 'build_websocket_scope' from 'verser2_guest_python.asgi'` (function does not exist).
+        - `npm run lint` — passes.
 - [ ] Task: Implement approved WebSocket support
     - [ ] Implement only the approved WebSocket runtime surfaces and protocol/API changes.
     - [ ] Preserve existing HTTP request/response behavior and avoid introducing generic tunnel behavior.
