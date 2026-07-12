@@ -428,10 +428,15 @@
     - [x] Run `npm run lint`: `biome check .` passed, checked 148 files with no fixes applied.
     - [x] Confirm 95% meaningful coverage for changed behavior or record justified exceptions: changed streaming/VWS behavior is covered by focused Node, Python, docs, package, and full bounded suites; exceptions remain documented out-of-scope boundaries for generic upgrades, CONNECT/RFC8441, L4 forwarding, Bun `server.upgrade()`, Python Host/fetch/Agent/Dispatcher, and federated WebSocket routes.
     - [x] Commit final validation/plan updates according to the per-task commit policy if files changed.
-- [ ] Task: Branching Policy finalization
-    - [ ] Ensure all completed task work is committed.
-    - [ ] Push the implementation branch.
-    - [ ] Open or update the draft PR targeting the captured base branch using the track `spec.md` as the PR body.
-    - [ ] Post final verification results as a PR comment.
-    - [ ] Mark the PR ready only after final verification is complete.
-- [ ] Task: Conductor - Phase Checkpoint 'Documentation, Review, and Final Validation' (Protocol in workflow.md)
+- [x] Task: Branching Policy finalization
+    - [x] Ensure all completed task work is committed: final review/docs/validation changes committed as `30093ea`.
+    - [x] Push the implementation branch: pushed `conductor/streaming_improvements` to origin.
+    - [x] Open or update the draft PR targeting the captured base branch using the track `spec.md` as the PR body: updated https://github.com/signicode/verser2/pull/51.
+    - [x] Post final verification results as a PR comment: https://github.com/signicode/verser2/pull/51#issuecomment-4952422941.
+    - [x] Mark the PR ready only after final verification is complete: PR #51 marked ready after local final validation passed.
+- [x] Task: Conductor - Phase Checkpoint 'Documentation, Review, and Final Validation' (Protocol in workflow.md)
+    - Phase 5 completed on branch `conductor/streaming_improvements` with docs/codemaps/API references updated for VWS/1 and streaming boundaries, final VWS review fixes applied, and PR #51 moved from draft to ready for review.
+    - Common-library review/deduplication: VWS frame validation remains centralized in `@signicode/verser-common`; docs reinforce that VWS/1 is explicit framed WebSocket over existing TLS HTTP/2 peer transport, not generic upgrade/tunnel support.
+    - Validation: final `npm test && npm run lint` passed locally — 380 tests total, 376 passing, 4 skipped, 0 failed; Biome checked 148 files with no fixes applied. Focused package builds and VWS/docs/packages/Python validations passed before the full run.
+    - Coverage: changed streaming and VWS behavior is covered by focused Node/Python/common/docs/package tests plus the final bounded suite. Remaining unsupported boundaries are documented and guarded by tests where applicable.
+    - Review: configured review specialist rechecked final docs/API-boundary fixes and reported no P1/P2 blockers before final validation.
