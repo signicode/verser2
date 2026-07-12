@@ -1,9 +1,6 @@
 // Acceptance tests for VWS/1 WebSocket support.
 //
-// These tests describe the expected API shape (guest.attachWebSocket,
-// broker.webSocket) and currently fail because the implementation does
-// not exist yet. They will pass once Phase 4 WebSocket support is
-// implemented.
+// These tests cover the approved VWS/1 API and lifecycle behavior.
 //
 // Out of scope in this test file:
 //   - Agent / Dispatcher generic upgrade handling
@@ -13,6 +10,7 @@
 
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
 const { trusted } = require('./support/tls-fixtures.cjs');
@@ -323,18 +321,19 @@ test('Malformed remote frame does not crash when no ws.on(error) listener', asyn
 
 test('Pre-accept send is queued and not written until after accept', async () => {
   const { VerserWebSocket } = loadVerserGuestNode();
-  const { PassThrough } = require('node:stream');
+  const { Duplex } = require('node:stream');
 
-  const pt = new PassThrough();
+  const written = [];
+  const pt = new Duplex({
+    read() {},
+    write(chunk, _encoding, callback) {
+      written.push(Buffer.from(chunk));
+      callback();
+    },
+  });
   const ws = new VerserWebSocket(pt);
 
   // Collect written data
-  const written = [];
-  const originalWrite = pt.write.bind(pt);
-  pt.write = (chunk) => {
-    written.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    return originalWrite(chunk);
-  };
 
   // Send a message BEFORE accept
   ws.send('before-accept', { type: 'text' });
@@ -358,6 +357,46 @@ test('Pre-accept send is queued and not written until after accept', async () =>
   const dataFrame = JSON.parse(written[1].toString().trimEnd());
   assert.equal(dataFrame.type, 'text');
   assert.equal(dataFrame.data, 'before-accept');
+});
+
+test('VWS ping is automatically answered with pong and exposed as an event', async () => {
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const stream = new PassThrough();
+  const ws = new VerserWebSocket(stream, '', true);
+  const output = [];
+  stream.on('data', (chunk) => output.push(chunk.toString()));
+  const pong = new Promise((resolve) => ws.once('pong', resolve));
+  stream.write('{"type":"ping","data":"nonce"}\n');
+  assert.equal(await pong, 'nonce');
+  assert.deepEqual(output.at(-1), '{"type":"pong","data":"nonce"}\n');
+  stream.destroy();
+});
+
+test('VWS rejects invalid application close codes and oversized reasons before writing', () => {
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const stream = new PassThrough();
+  const ws = new VerserWebSocket(stream, '', true);
+  assert.throws(() => ws.close(1006), /Invalid WebSocket close code/);
+  assert.throws(() => ws.close(2000), /Invalid WebSocket close code/);
+  assert.throws(() => ws.close(1000, '😀'.repeat(32)), /123 UTF-8 bytes/);
+  assert.equal(stream.read(), null);
+  stream.destroy();
+});
+
+test('VWS rejects invalid remote close frames with protocol error, never wire 1006', async () => {
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const stream = new PassThrough();
+  const output = [];
+  stream.on('data', (chunk) => output.push(chunk.toString()));
+  const ws = new VerserWebSocket(stream, '', true);
+  const error = new Promise((resolve) => ws.once('error', resolve));
+  const close = new Promise((resolve) => ws.once('close', resolve));
+  stream.write('{"type":"close","code":1006,"reason":"bad"}\n');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(output.at(-1), /"type":"close","code":1002/);
+  assert.equal((await error).closeCode, 1002);
+  stream.destroy();
+  await close.catch(() => undefined);
 });
 
 test('Broker webSocket rejects when Guest closes stream before handshake', async () => {
@@ -447,7 +486,217 @@ test('Broker webSocket rejects when Broker closes before Guest accepts', async (
   }
 });
 
-test('Route revocation blocks new WebSocket opens', async () => {
+test('VWS concurrent full-duplex sends complete without retaining bodies', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-broker-duplex' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-guest-duplex' });
+  try {
+    let guestReceived = 0;
+    let brokerReceived = 0;
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', () => {
+        guestReceived += 1;
+      });
+      setTimeout(() => {
+        for (let index = 0; index < 20; index += 1)
+          void ws.send(`guest-${index}`, { type: 'text' });
+      }, 10);
+    }, 'ws-duplex.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('ws-duplex.local.test');
+    const ws = await broker.webSocket({
+      targetId: 'ws-guest-duplex',
+      domain: 'ws-duplex.local.test',
+    });
+    const complete = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('full-duplex traffic timed out')), 3000);
+      ws.on('message', () => {
+        brokerReceived += 1;
+        if (brokerReceived === 20 && guestReceived === 20) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) => ws.send(`broker-${index}`, { type: 'text' })),
+    );
+    await complete;
+    assert.equal(guestReceived, 20);
+    assert.equal(brokerReceived, 20);
+    ws.close();
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('VWS slow receiver completes bounded streamed sends with awaited backpressure', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-broker-slow' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-guest-slow' });
+  try {
+    let received = 0;
+    let receivedBytes = 0;
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', async (data) => {
+        received += 1;
+        receivedBytes += typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength;
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      });
+    }, 'ws-slow.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('ws-slow.local.test');
+    const ws = await broker.webSocket({ targetId: 'ws-guest-slow', domain: 'ws-slow.local.test' });
+    const count = 8;
+    const size = 8 * 1024;
+    for (let index = 0; index < count; index += 1)
+      await ws.send(Buffer.alloc(size, index & 0xff), { type: 'binary' });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`slow receiver timed out (${received}/${count})`)),
+        5000,
+      );
+      const check = () => {
+        if (received === count) {
+          clearTimeout(timer);
+          resolve();
+        } else {
+          setTimeout(check, 5);
+        }
+      };
+      check();
+    });
+    assert.equal(received, count);
+    assert.equal(receivedBytes, count * size);
+    ws.close();
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Established Broker termination gives Guest local close 1006', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-broker-abort' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-guest-abort' });
+  try {
+    const closed = new Promise((resolve) =>
+      guest.attachWebSocket((_open, ws) => ws.once('close', resolve), 'ws-abort.local.test'),
+    );
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('ws-abort.local.test');
+    await broker.webSocket({ targetId: 'ws-guest-abort', domain: 'ws-abort.local.test' });
+    await broker.close('abort-established');
+    const result = await Promise.race([
+      closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Guest close timed out')), 3000),
+      ),
+    ]);
+    assert.equal(result, 1006);
+  } finally {
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Established Guest disconnect gives Broker abnormal close or structured failure', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-broker-guest-drop' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-guest-drop' });
+  try {
+    guest.attachWebSocket(() => {}, 'ws-guest-drop.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('ws-guest-drop.local.test');
+    const ws = await broker.webSocket({
+      targetId: 'ws-guest-drop',
+      domain: 'ws-guest-drop.local.test',
+    });
+    const outcome = new Promise((resolve) => {
+      ws.once('close', (code) => resolve({ code }));
+      ws.once('error', (error) => resolve({ error }));
+    });
+    await guest.close('guest-disconnect');
+    const result = await Promise.race([
+      outcome,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Broker close timed out')), 3000),
+      ),
+    ]);
+    assert.ok(result.error || result.code === 1006);
+  } finally {
+    await broker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Host close cleans active VWS peers deterministically', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-broker-host-drop' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-guest-host-drop' });
+  try {
+    let guestClosed = false;
+    guest.attachWebSocket(
+      (_open, ws) =>
+        ws.once('close', () => {
+          guestClosed = true;
+        }),
+      'ws-host-drop.local.test',
+    );
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('ws-host-drop.local.test');
+    const ws = await broker.webSocket({
+      targetId: 'ws-guest-host-drop',
+      domain: 'ws-host-drop.local.test',
+    });
+    const brokerClosed = new Promise((resolve) => ws.once('close', resolve));
+    await host.close('host-shutdown');
+    await Promise.race([
+      brokerClosed,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Host close timed out')), 3000)),
+    ]);
+    await new Promise((resolve, reject) => {
+      if (guestClosed) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => reject(new Error('Guest close timed out')), 3000);
+      const check = () => {
+        if (guestClosed) {
+          clearTimeout(timer);
+          resolve();
+        } else {
+          setTimeout(check, 5);
+        }
+      };
+      check();
+    });
+    assert.equal(guestClosed, true);
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+  }
+});
+
+test('Route revocation blocks new opens but preserves an active WebSocket', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
@@ -455,8 +704,10 @@ test('Route revocation blocks new WebSocket opens', async () => {
   const guest = createGuest({ hostUrl, guestId: 'ws-guest-revoke' });
 
   try {
-    guest.attachWebSocket((_open, _ws) => {
-      // Accept by default
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', (data, options) => {
+        void ws.send(data, options);
+      });
     }, 'ws-revoke.local.test');
 
     await broker.connect();
@@ -468,14 +719,25 @@ test('Route revocation blocks new WebSocket opens', async () => {
       targetId: 'ws-guest-revoke',
       domain: 'ws-revoke.local.test',
     });
-    ws1.close(1000, 'first');
-
     // Revoke the route
     const revokeResult = await guest.revokeRoutes(['ws-revoke.local.test']);
     assert.equal(revokeResult.status, 'ack');
 
     // Wait for route removal to propagate to Broker
     await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const activeEcho = new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('active WebSocket was terminated by revocation')),
+        2000,
+      );
+      ws1.once('message', (data) => {
+        clearTimeout(timer);
+        resolve(data);
+      });
+    });
+    await ws1.send('active-after-revoke', { type: 'text' });
+    assert.equal(await activeEcho, 'active-after-revoke');
 
     // Second open should fail
     await assert.rejects(
@@ -486,6 +748,92 @@ test('Route revocation blocks new WebSocket opens', async () => {
         }),
       /not available|revoked|missing/i,
     );
+    ws1.close();
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Federated WebSocket routes fail with an explicit unsupported error', async () => {
+  const host = createHost({ port: 0, hostId: 'ws-federation-host' });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-federation-broker' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-federated-target' });
+  try {
+    guest.attachWebSocket(() => {}, 'ws-federated-local-only.local.test');
+    await broker.connect();
+    await guest.connect();
+    host.setImportedFederatedRoutes('remote-host', [
+      {
+        targetId: 'ws-federated-target',
+        domain: 'ws-federated.local.test',
+        originHostId: 'remote-origin',
+        nextHopHostId: 'remote-host',
+        hopCount: 1,
+        viaHostIds: [],
+        source: 'upstream',
+      },
+    ]);
+    // The direct API accepts an explicit target/domain; give the Host one
+    // event-loop turn to publish the imported candidate before opening.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await assert.rejects(
+      () =>
+        broker.webSocket({ targetId: 'ws-federated-target', domain: 'ws-federated.local.test' }),
+      /Federated WebSocket routes are not supported/,
+    );
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Node Guest maintains a spare WS lease for three concurrent connections', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-broker-three' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-guest-three' });
+  try {
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', (data, options) => {
+        void ws.send(data, options);
+      });
+    }, 'ws-three.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('ws-three.local.test');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const sockets = await Promise.all(
+      [1, 2, 3].map(() =>
+        broker.webSocket({
+          targetId: 'ws-guest-three',
+          domain: 'ws-three.local.test',
+        }),
+      ),
+    );
+    await Promise.all(
+      sockets.map(
+        (ws, index) =>
+          new Promise((resolve, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error('concurrent WebSocket timed out')),
+              3000,
+            );
+            ws.once('message', (data) => {
+              clearTimeout(timer);
+              assert.equal(data, `three-${index}`);
+              resolve();
+            });
+            void ws.send(`three-${index}`, { type: 'text' });
+          }),
+      ),
+    );
+    for (const ws of sockets) ws.close();
   } finally {
     await broker.close('test-complete');
     await guest.close('test-complete');

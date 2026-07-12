@@ -396,7 +396,17 @@
         - `node --test test/packages.test.js`: 6/6 pass.
         - `npm run lint`: clean.
     - [x] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Conductor - Phase Checkpoint 'WebSocket Design Gate and Implementation' (Protocol in workflow.md)
+    - [x] Complete the remaining approved acceptance coverage and runtime behavior identified after the initial implementation review:
+        - Add VWS/1 PING/PONG frames and automatic pong behavior.
+        - Validate application-sent close codes before putting a CLOSE frame on the wire.
+        - Cover concurrent full-duplex traffic, slow-receiver backpressure, established-session abnormal closes, Host-close cleanup, and explicit federated-route rejection.
+        - Integrate the approved Python ASGI websocket scope into the Python Guest VWS/1 path rather than leaving helper-only functions.
+- [x] Task: Conductor - Phase Checkpoint 'WebSocket Design Gate and Implementation' (Protocol in workflow.md)
+    - [x] Phase 4 adds explicit VWS/1 Node Broker/Guest routing and Python ASGI Guest websocket leases; it does not add generic HTTP upgrades, CONNECT/RFC8441, L4 forwarding, Bun `server.upgrade()`, or Agent/Dispatcher upgrades.
+    - [x] Common-library review/deduplication: VWS frame types, bounded framed reads, and constants are centralized in `@signicode/verser-common`; Node and Python remain runtime adapters.
+    - [x] Acceptance coverage includes Node subprotocol negotiation, text/binary/full-duplex traffic, bounded slow-receiver processing, close/abnormal close, ping/pong, size/close validation, route revocation, Host close, federation rejection, and concurrent lease replenishment. Python covers live WS lease dispatch, ASGI scope/lifecycle, strict frames, bounded queues, H2 flow-control, close finalization, and reset cleanup.
+    - [x] Validation: focused package builds passed; `node --test test/common-envelope.test.js test/websocket.test.js test/packages.test.js` passed 41/41; `node --test test/broker-routing.test.js test/host-upstreams.test.js` passed 84/84; Dispatcher upgrade guard passed; Python suite passed 104/104; lint passed. `npm run test:bounded` had one transient `SIGSEGV` after Dispatcher subtests passed; its bounded isolated rerun passed 13/13.
+    - [x] Review: Oracle re-review found no remaining P1/P2 blockers and approved the Phase 4 checkpoint.
 
 ## Phase 5: Documentation, Review, and Final Validation
 

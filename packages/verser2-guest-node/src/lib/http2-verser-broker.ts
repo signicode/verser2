@@ -421,6 +421,7 @@ export class Http2VerserBroker implements VerserBroker {
         ':path': '/verser/websocket',
         'x-verser-target-id': options.targetId,
         'x-verser-domain': options.domain,
+        'x-verser-source-id': this.options.brokerId,
       };
       if (options.protocol !== undefined && options.protocol.length > 0) {
         requestHeaders['x-verser-ws-protocol'] = options.protocol;

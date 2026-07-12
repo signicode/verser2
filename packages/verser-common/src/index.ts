@@ -209,6 +209,8 @@ export type {
   VwsAcceptFrame,
   VwsTextFrame,
   VwsBinaryFrame,
+  VwsPingFrame,
+  VwsPongFrame,
   VwsCloseFrame,
   VwsErrorFrame,
 } from './lib/vws';

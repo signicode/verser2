@@ -5,7 +5,7 @@
  * streams. Each frame is a single JSON object terminated by `\n`.
  * Binary payloads are base64-encoded inside the JSON.
  *
- * Frame types: open, accept, text, binary, close, error.
+ * Frame types: open, accept, text, binary, ping, pong, close, error.
  *
  * @public
  */
@@ -22,7 +22,15 @@ export const VWS_MAX_FRAME_BYTES = 1 * 1024 * 1024;
  * Discriminated VWS/1 frame type union.
  * @public
  */
-export type VwsFrameType = 'open' | 'accept' | 'text' | 'binary' | 'close' | 'error';
+export type VwsFrameType =
+  | 'open'
+  | 'accept'
+  | 'text'
+  | 'binary'
+  | 'ping'
+  | 'pong'
+  | 'close'
+  | 'error';
 
 /**
  * VWS/1 open frame — Broker → Host → Guest to initiate a WebSocket.
@@ -62,6 +70,16 @@ export interface VwsBinaryFrame {
   readonly data: string; // base64-encoded
 }
 
+export interface VwsPingFrame {
+  readonly type: 'ping';
+  readonly data?: string;
+}
+
+export interface VwsPongFrame {
+  readonly type: 'pong';
+  readonly data?: string;
+}
+
 /**
  * VWS/1 close frame — code and optional reason.
  * @public
@@ -90,6 +108,8 @@ export type VwsFrame =
   | VwsAcceptFrame
   | VwsTextFrame
   | VwsBinaryFrame
+  | VwsPingFrame
+  | VwsPongFrame
   | VwsCloseFrame
   | VwsErrorFrame;
 
@@ -148,62 +168,54 @@ export function readVwsLine(
   maxBytes: number = VWS_MAX_FRAME_BYTES,
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    let buffer = '';
-
-    const rejectOversize = (): void => {
+    let buffer = Buffer.alloc(0);
+    let settled = false;
+    const cleanup = (): void => {
       stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+      stream.off('close', onClose);
+    };
+    const finish = (error?: Error, value?: string): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(value ?? '');
+    };
+    const oversize = (): void => {
       const err = new Error(
         `VWS frame exceeds maximum allowed size (${maxBytes} bytes)`,
       ) as Error & { closeCode: number };
       err.closeCode = 1009;
-      reject(err);
+      finish(err);
     };
-
     const onData = (chunk: Buffer): void => {
-      const str = chunk.toString();
-      const idx = str.indexOf('\n');
-      if (idx >= 0) {
-        const line = buffer + str.slice(0, idx);
-        // Enforce maxBytes before resolving, even when newline is in this chunk
-        if (Buffer.byteLength(line, 'utf8') > maxBytes) {
-          rejectOversize();
-          return;
-        }
-        stream.off('data', onData);
-        // Preserve remaining bytes after newline for subsequent parsers
-        const remaining = str.slice(idx + 1);
-        if (remaining.length > 0) {
-          stream.unshift(Buffer.from(remaining));
-        }
-        resolve(line);
+      buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
+      const idx = buffer.indexOf(0x0a);
+      if (idx < 0) {
+        if (buffer.byteLength > maxBytes) oversize();
         return;
       }
-      // No newline in this chunk — accumulate and check size
-      const newBuffer = buffer + str;
-      const newByteLength = Buffer.byteLength(newBuffer, 'utf8');
-      if (newByteLength > maxBytes) {
-        rejectOversize();
+      const line = buffer.subarray(0, idx);
+      const remaining = buffer.subarray(idx + 1);
+      if (line.byteLength > maxBytes) {
+        oversize();
         return;
       }
-      buffer = newBuffer;
+      finish(undefined, line.toString('utf8'));
+      if (remaining.byteLength > 0) stream.unshift(remaining);
     };
-
+    const onEnd = (): void =>
+      finish(
+        buffer.byteLength > 0 ? undefined : new Error('Stream ended before VWS frame'),
+        buffer.toString('utf8'),
+      );
+    const onError = (error: Error): void => finish(error);
+    const onClose = (): void => finish(new Error('Stream closed before VWS frame'));
     stream.on('data', onData);
-    stream.once('end', () => {
-      stream.off('data', onData);
-      if (buffer.length > 0) {
-        resolve(buffer);
-      } else {
-        reject(new Error('Stream ended before VWS frame'));
-      }
-    });
-    stream.once('error', (err: Error) => {
-      stream.off('data', onData);
-      reject(err);
-    });
-    stream.once('close', () => {
-      stream.off('data', onData);
-      reject(new Error('Stream closed before VWS frame'));
-    });
+    stream.once('end', onEnd);
+    stream.once('error', onError);
+    stream.once('close', onClose);
   });
 }

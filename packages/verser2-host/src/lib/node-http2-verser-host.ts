@@ -154,6 +154,8 @@ export class NodeHttp2VerserHost implements VerserHost {
   /** Idle WebSocket lease streams keyed by Guest peer ID. */
   private readonly wsIdleLeases = new Map<VerserPeerId, http2.ServerHttp2Stream[]>();
 
+  private static readonly MAX_WS_IDLE_LEASES_PER_GUEST = 4;
+
   private readonly routeRegistry: HostRouteRegistry;
 
   private readonly degradedCleanup: DegradedRouteCleanup;
@@ -1953,8 +1955,14 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
     }
 
-    stream.respond({ ':status': 200 });
     const leases = this.wsIdleLeases.get(guestId) ?? [];
+    if (leases.length >= NodeHttp2VerserHost.MAX_WS_IDLE_LEASES_PER_GUEST) {
+      throw createVerserError('timeout', 'Guest WebSocket lease capacity exceeded', {
+        targetId: guestId,
+        limit: NodeHttp2VerserHost.MAX_WS_IDLE_LEASES_PER_GUEST,
+      });
+    }
+    stream.respond({ ':status': 200 });
     leases.push(stream);
     this.wsIdleLeases.set(guestId, leases);
 
@@ -2082,6 +2090,22 @@ export class NodeHttp2VerserHost implements VerserHost {
     const domain = String(headers['x-verser-domain'] ?? '');
     const protocol = String(headers['x-verser-ws-protocol'] ?? '');
     const wsPath = String(headers['x-verser-ws-path'] ?? '/');
+    const sourceId = createPeerId(String(headers['x-verser-source-id'] ?? ''));
+    const source = this.peers.get(sourceId);
+    if (
+      source === undefined ||
+      source.role !== 'broker' ||
+      source.transport !== 'h2' ||
+      source.session !== brokerStream.session
+    ) {
+      throw createVerserError(
+        'authorization-denied',
+        'WebSocket source Broker is not authorized for this session',
+        {
+          sourceId,
+        },
+      );
+    }
 
     // Validate target Guest
     const target = this.peers.get(targetId);
@@ -2156,8 +2180,15 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
       const acceptFrame: Record<string, unknown> = JSON.parse(acceptLine);
       if (acceptFrame.type === 'error') {
+        if (typeof acceptFrame.message !== 'string') {
+          returnLease();
+          throw createVerserError('protocol-error', 'Malformed VWS error frame', {
+            targetId,
+            domain,
+          });
+        }
         returnLease();
-        throw createVerserError('protocol-error', String(acceptFrame.message), {
+        throw createVerserError('protocol-error', acceptFrame.message, {
           targetId,
           domain,
         });
@@ -2170,7 +2201,14 @@ export class NodeHttp2VerserHost implements VerserHost {
           { targetId, domain },
         );
       }
-      acceptProtocol = String(acceptFrame.protocol ?? '');
+      if (acceptFrame.protocol !== undefined && typeof acceptFrame.protocol !== 'string') {
+        returnLease();
+        throw createVerserError('protocol-error', 'Malformed VWS accept protocol', {
+          targetId,
+          domain,
+        });
+      }
+      acceptProtocol = acceptFrame.protocol ?? '';
     } catch (error) {
       // Cleanup: respond to Broker with error if not already responded.
       // sendError calls respond() + end(), so do not close brokerStream

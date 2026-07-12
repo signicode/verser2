@@ -42,6 +42,7 @@ These classes are **not** thread-safe. Use them from a single async context.
 
 from .broker import VerserBroker, VerserBrokerResponse, create_verser_broker
 from .guest import VerserGuest, create_verser_guest
+from .asgi import VwsAsgiConnection, build_websocket_scope, dispatch_asgi_websocket
 
 VERSER2_GUEST_PYTHON_PACKAGE_NAME = "@signicode/verser2-guest-python"
 
@@ -52,4 +53,7 @@ __all__ = [
     "VerserGuest",
     "create_verser_broker",
     "create_verser_guest",
+    "VwsAsgiConnection",
+    "build_websocket_scope",
+    "dispatch_asgi_websocket",
 ]

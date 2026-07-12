@@ -574,8 +574,9 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     if (session === undefined || session.closed || session.destroyed) {
       return;
     }
-    // Keep one idle WS lease at all times
-    if (this.wsLeaseStreams.size === 0) {
+    // Keep one spare lease while an accepted WebSocket occupies another
+    // stream. The Host enforces the per-Guest idle cap.
+    if (this.wsLeaseStreams.size < 4) {
       this.openWsLeaseStream(session);
     }
   }
@@ -598,6 +599,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
         return;
       }
       // Stream accepted — now read the VWS open frame
+      this.maintainWsLeasePool();
       this.handleWsLeaseStream(stream).catch((error: unknown) => {
         if (this.closing) {
           return;
@@ -640,9 +642,16 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       );
     }
 
-    const domain = String(openFrame.domain ?? '');
-    const path = String(openFrame.path ?? '/');
-    const requestedProtocol = String(openFrame.protocol ?? '');
+    if (
+      typeof openFrame.domain !== 'string' ||
+      (openFrame.path !== undefined && typeof openFrame.path !== 'string') ||
+      (openFrame.protocol !== undefined && typeof openFrame.protocol !== 'string')
+    ) {
+      throw createVerserError('protocol-error', 'Malformed VWS open frame');
+    }
+    const domain = openFrame.domain;
+    const path = openFrame.path ?? '/';
+    const requestedProtocol = openFrame.protocol ?? '';
 
     // Create the WebSocket (no accept sent yet)
     const ws = new VerserWebSocket(stream, requestedProtocol);
@@ -668,7 +677,11 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       acceptResult !== undefined && typeof acceptResult === 'object' && 'protocol' in acceptResult
         ? (acceptResult as { protocol?: string }).protocol
         : requestedProtocol;
+    if (acceptProtocol !== undefined && typeof acceptProtocol !== 'string') {
+      throw createVerserError('protocol-error', 'Malformed WebSocket accept protocol');
+    }
     ws.sendAccept(acceptProtocol);
+    this.maintainWsLeasePool();
   }
 
   /**

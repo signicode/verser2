@@ -6,6 +6,19 @@ const { loadVerserCommon } = require('./support/verser-package-imports.cjs');
 
 const common = loadVerserCommon();
 
+test('readVwsLine preserves split UTF-8 bytes and trailing frames', async () => {
+  const stream = new PassThrough();
+  const payload = Buffer.from('{"type":"open","path":"/😀"}\n{"type":"accept"}\n');
+  const split = payload.indexOf(Buffer.from('😀')) + 2;
+  const linePromise = common.readVwsLine(stream);
+  stream.write(payload.subarray(0, split));
+  stream.write(payload.subarray(split));
+  const line = await linePromise;
+  assert.equal(JSON.parse(line).path, '/😀');
+  assert.equal(await common.readVwsLine(stream), '{"type":"accept"}');
+  stream.destroy();
+});
+
 test('shared envelope helpers encode request, response, and error metadata', () => {
   const requestEnvelope = common.encodeVerserEnvelope({
     type: 'request',
