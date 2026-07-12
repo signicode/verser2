@@ -21,6 +21,10 @@ Key differences from Node/Bun Guests:
 - **TLS client identity** — Guest and Broker support PEM (`tls_cert_file`/`tls_key_file`/`tls_key_password`) and PFX/PKCS12 (`tls_pfx_file`/`tls_pfx_password`) client certificates via a shared private Python TLS helper. PFX is converted to a temporary PEM file before loading into `SSLContext.load_cert_chain()`.
 - **Response body one-shot** — `VerserBrokerResponse` enforces single-use body access. `read()`, `text()`, `json()` buffer the full body; `aiter_bytes(chunk_size)` yields streaming chunks. Calling more than once raises `RuntimeError`.
 - **Async context manager** — `VerserBroker` supports `async with broker:` to auto-connect and auto-close.
+- **VWS/1 WebSocket leases** — Dedicated `/verser/guest/websocket-lease` streams
+  map explicit framed WebSocket messages to ASGI websocket scopes. They are
+  separate from HTTP envelope leases; generic upgrades and Python Host/fetch/
+  Agent/Dispatcher APIs are unsupported.
 - **npm workspace bridge** — `package.json` declares `"main": "dist/index.js"` for npm workspace tooling. The `scripts/build.mjs` writes a minimal JS entrypoint that exports package name constants. Actual Python logic lives under `src/verser2_guest_python/`.
 
 ## Data & Control Flow
@@ -76,7 +80,10 @@ decode_envelope(buffer)         → (type_str, metadata_dict, remainder_body)
 
 - **npm workspace** — `package.json` referenced via root `"workspaces": ["packages/*"]`. `npm run build/test/lint --workspace=@signicode/verser2-guest-python` delegates to `scripts/build.mjs` / `uv run` commands.
 - **npm dist bridge** — `dist/index.js` exports `VERSER2_GUEST_PYTHON_PACKAGE_NAME` and `PYTHON_DISTRIBUTION_NAME` for JS tooling (consumer tests, version policy, package staging).
-- **Host connection** — Both Guest and Broker connect to the Host via TCP+TLS on the configured `host_url`. Uses Verser protocol endpoints: `/verser/register`, `/verser/guest/control`, `/verser/guest/lease`, `/verser/request`.
-- **Tests** — Python `unittest` tests under `tests/` (`test_asgi_guest.py`, `test_broker_api.py`, `test_scaffold.py`) run via `uv run --project . python -m unittest discover -s tests`. Mock transports (FakeReader, FakeConn) avoid real TLS/network.
+- **Host connection** — Both Guest and Broker connect to the Host via TCP+TLS on the configured `host_url`. Uses Verser protocol endpoints: `/verser/register`, `/verser/guest/control`, `/verser/guest/lease`, `/verser/guest/websocket-lease`, `/verser/request`.
+- **Tests** — Python `unittest` tests under `tests/` (`test_asgi_guest.py`,
+  `test_broker_api.py`, `test_websocket_asgi.py`, `test_scaffold.py`) run via
+  `uv run --project . python -m unittest discover -s tests`. Mock transports
+  (FakeReader, FakeConn) avoid real TLS/network.
 - **CI** — `.github/workflows/package-publish.yml` runs `npm run build` (which builds Python dist via `scripts/build.mjs`) and includes the Python package in staging, consumer validation, and tarball testing.
 - **Documentation** — Referenced from root README, docs/exposing-http.md (Python Guest section), docs/making-requests.md (Python Broker section), and package-specific README.md.

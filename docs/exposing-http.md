@@ -44,6 +44,30 @@ response objects. The following are outside the supported surface:
 - Trailers and informational (1xx) responses
 - Full `IncomingMessage` / `ServerResponse` socket internals
 
+### VWS/1 WebSockets (Node)
+
+Node WebSockets use explicit VWS/1 framed messages over the existing TLS HTTP/2
+connection. They do not use HTTP/1 upgrade bytes or a raw socket:
+
+```ts
+guest.attachWebSocket((_open, ws) => {
+  ws.on('message', async (data, options) => {
+    await ws.send(data, options);
+  });
+  ws.on('close', (code, reason) => console.log('closed', code, reason));
+}, 'chat.local.test');
+
+const ws = await broker.webSocket({ targetId: 'client-a', domain: 'chat.local.test' });
+await ws.send('hello', { type: 'text' });
+ws.on('message', (data, options) => console.log(options.type, data));
+```
+
+`send()` returns a promise and applies transport backpressure. Text and binary
+message boundaries are preserved; `ping()` is automatically answered with a
+`pong`. Abnormal transport loss is local close code `1006`. Agent/Dispatcher
+upgrades, generic CONNECT/RFC8441, L4 forwarding, and federated WebSocket routes
+are unsupported.
+
 ### Local Host-side Node Guest
 
 The Host package can attach the same listener shape directly through
@@ -116,8 +140,8 @@ bunGuest.attach({
 });
 ```
 
-**WebSocket limitation:** `server.upgrade(request)` returns `false` — WebSocket
-upgrade is not forwarded.
+**WebSocket limitation:** `server.upgrade(request)` returns `false` — Bun
+WebSocket support is deferred and no upgrade is forwarded.
 
 ## Python Guest
 
@@ -183,6 +207,13 @@ guest = create_verser_guest(
     tls_ca_file="/etc/verser/ca.crt",
 )
 ```
+
+### Python ASGI WebSockets
+
+Python Guests receive VWS/1 connections as ASGI `websocket` scopes. Handle
+`websocket.connect`, send `websocket.accept`, then exchange text or binary
+`websocket.receive`/`websocket.send` events. This uses the dedicated VWS lease,
+not HTTP/1 upgrade forwarding.
 
 ## Route revocation
 

@@ -93,6 +93,16 @@ await broker.close();
 await guest.close();
 ```
 
+## VWS/1 WebSockets
+
+The Host admits explicit VWS/1 framed WebSocket streams from registered Node
+Brokers to Node or Python Guests over TLS HTTP/2. The Bun-facing Broker wrapper
+inherits the Node Broker's direct `webSocket()` API, while Python Broker does not
+initiate VWS/1 connections. The Host does not forward HTTP/1 upgrade bytes,
+CONNECT/RFC8441, or L4 traffic. Federated WebSocket routes are explicitly
+unsupported. Agent/Dispatcher upgrades and Bun `server.upgrade()` are outside
+this package's scope.
+
 ## Caveats
 
 - Host uses Node TLS HTTP/2 and requires TLS options.

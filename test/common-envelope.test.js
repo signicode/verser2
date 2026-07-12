@@ -19,6 +19,23 @@ test('readVwsLine preserves split UTF-8 bytes and trailing frames', async () => 
   stream.destroy();
 });
 
+test('decodeVwsFrame validates VWS control and payload schemas', () => {
+  assert.deepEqual(common.decodeVwsFrame('{"type":"ping","data":"x"}'), {
+    type: 'ping',
+    data: 'x',
+  });
+  assert.throws(
+    () => common.decodeVwsFrame('{"type":"close","code":1006}'),
+    /Invalid VWS close code/,
+  );
+  assert.throws(() => common.decodeVwsFrame('{"type":"text","data":42}'), /Invalid VWS text frame/);
+  assert.throws(
+    () => common.decodeVwsFrame('{"type":"binary","data":"not-base64"}'),
+    /Invalid VWS binary frame/,
+  );
+  assert.throws(() => common.decodeVwsFrame('{"type":"unknown"}'), /Unknown VWS frame type/);
+});
+
 test('shared envelope helpers encode request, response, and error metadata', () => {
   const requestEnvelope = common.encodeVerserEnvelope({
     type: 'request',

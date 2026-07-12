@@ -8,6 +8,9 @@ Host link.
 This is route-aware Host-to-Host federation. It is not generic L4 tunneling or
 HTTP/2 CONNECT tunneling.
 
+VWS/1 WebSocket routes are not federated. An attempted federated WebSocket open
+fails with `Federated WebSocket routes are not supported`.
+
 ## Concepts
 
 ```txt

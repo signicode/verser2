@@ -840,3 +840,22 @@ test('Node Guest maintains a spare WS lease for three concurrent connections', a
     await host.close('test-complete');
   }
 });
+
+test('VWS close timeout cleans up when the peer never responds', async () => {
+  const { Duplex } = require('node:stream');
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const stream = new Duplex({
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const ws = new VerserWebSocket(stream, '', true);
+  const closed = new Promise((resolve) =>
+    ws.once('close', (code, reason) => resolve({ code, reason })),
+  );
+  ws.close(1000, 'timeout-test');
+  const result = await closed;
+  assert.equal(result.code, 1006);
+  assert.match(result.reason, /timeout/);
+});

@@ -165,4 +165,7 @@ and version/dist-tag policy.
 - Task-focused usage docs live under `docs/`.
 - Release and packaging process docs remain separate from API usage docs.
 - Do not describe HTTP/3, browser/Rust/Go/Java Guests, Python Host behavior,
-  WebSocket forwarding, or complete gateway authorization as implemented.
+  generic WebSocket upgrade forwarding, CONNECT/RFC8441/L4 forwarding, or
+  complete gateway authorization as implemented. VWS/1 is the explicit framed
+  WebSocket protocol over existing TLS HTTP/2; Agent/Dispatcher upgrades and Bun
+  `server.upgrade()` remain unsupported.

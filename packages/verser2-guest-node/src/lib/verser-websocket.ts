@@ -12,7 +12,7 @@ import { EventEmitter } from 'node:events';
 import type * as http2 from 'node:http2';
 import { StringDecoder } from 'node:string_decoder';
 
-import { VWS_MAX_FRAME_BYTES } from '@signicode/verser-common';
+import { VWS_MAX_FRAME_BYTES, decodeVwsFrame } from '@signicode/verser-common';
 
 /**
  * Options for {@link VerserWebSocket.send}.
@@ -37,6 +37,7 @@ const MAX_INBOUND_MESSAGES = 64;
 const MAX_INBOUND_BYTES = VWS_MAX_FRAME_BYTES;
 const MAX_PRE_ACCEPT_MESSAGES = 64;
 const MAX_PRE_ACCEPT_BYTES = VWS_MAX_FRAME_BYTES;
+const VWS_CLOSE_TIMEOUT_MS = 1_000;
 
 /**
  * VWS/1 WebSocket-like object returned by `broker.webSocket()`
@@ -83,6 +84,7 @@ export class VerserWebSocket extends EventEmitter {
   }> = [];
   private inboundQueueBytes = 0;
   private processingInbound = false;
+  private closeTimer?: NodeJS.Timeout;
 
   /**
    * @param stream - The underlying HTTP/2 stream for VWS/1 frames.
@@ -142,7 +144,7 @@ export class VerserWebSocket extends EventEmitter {
           return;
         }
         try {
-          this.handleFrame(JSON.parse(line) as Record<string, unknown>);
+          this.handleFrame(decodeVwsFrame(line) as unknown as Record<string, unknown>);
         } catch (err) {
           this.handleProtocolFault(
             err instanceof Error ? err : new Error(String(err)),
@@ -156,6 +158,7 @@ export class VerserWebSocket extends EventEmitter {
 
     (this.stream as NodeJS.ReadableStream).on('data', processIncoming);
     (this.stream as NodeJS.ReadableStream).on('end', () => {
+      if (this.closeTimer !== undefined) clearTimeout(this.closeTimer);
       if (!this.destroyed && lineBuffer.length > 0) {
         // Silently drop incomplete trailing data (no newline at end)
         lineBuffer = '';
@@ -170,6 +173,7 @@ export class VerserWebSocket extends EventEmitter {
       }
     });
     (this.stream as NodeJS.ReadableStream).on('close', () => {
+      if (this.closeTimer !== undefined) clearTimeout(this.closeTimer);
       if (!this.destroyed) {
         this.destroyed = true;
         if (!this.accepted) this.drainSendQueue(false);
@@ -282,8 +286,14 @@ export class VerserWebSocket extends EventEmitter {
       this.drainSendQueue(false);
     }
     void this.writeLine(JSON.stringify({ type: 'close', code, reason })).catch(() => undefined);
-    // Do NOT end the stream — the peer's close response is still expected.
-    // The handleFrame 'close' case will end the stream when the echo arrives.
+    this.closeTimer = setTimeout(() => {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      this.endStream();
+      const stream = this.stream as unknown as { destroy?: (error?: Error) => void };
+      stream.destroy?.(new Error('VWS close handshake timed out'));
+      this.emit('close', 1006, 'close handshake timeout');
+    }, VWS_CLOSE_TIMEOUT_MS);
   }
 
   /**
@@ -463,6 +473,7 @@ export class VerserWebSocket extends EventEmitter {
           return;
         }
         this.destroyed = true;
+        if (this.closeTimer !== undefined) clearTimeout(this.closeTimer);
         this.emit('close', code, reason);
         // Echo the close frame back if we haven't already sent one
         if (!this.closeSent) {

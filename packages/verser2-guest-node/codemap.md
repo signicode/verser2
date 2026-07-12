@@ -40,6 +40,11 @@ Key factory functions exported at the package level:
 - **Single active session** — Both Guest and Broker maintain at most one HTTP/2
   session at any time.
 
+- **VWS/1 WebSocket transport** — `guest.attachWebSocket()` and
+  `broker.webSocket()` use explicit framed messages over dedicated TLS HTTP/2
+  streams. Generic upgrade, CONNECT/RFC8441, L4, Agent, and Dispatcher
+  forwarding are not implemented.
+
 ## Data & Control Flow
 
 ### Guest (inbound request)

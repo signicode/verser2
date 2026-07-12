@@ -143,6 +143,9 @@ console.log(await response.text());
 The Dispatcher rejects upgrade requests. It supports buffer, string, stream, and
 iterable body forms.
 
+It does not provide arbitrary WebSocket upgrade forwarding. Use the explicit
+Node Broker `webSocket()` API for VWS/1 instead.
+
 ## Fetch helper
 
 `createFetch()` wraps a fetch function pre-wired to the Broker dispatcher:

@@ -271,8 +271,10 @@ export interface VerserHostLifecycleEvent {
  * - The Host requires TLS for remote peer connections. Local peers bypass TLS
  *   because they are attached in-process.
  * - Route matching uses exact hostname equality — no wildcard or suffix matching.
- * - The Host does **not** implement WebSocket, HTTP upgrade, CONNECT tunneling,
- *   trailers, or informational response forwarding.
+ * - The Host supports only explicit VWS/1 framed WebSockets over existing TLS
+ *   HTTP/2. Generic HTTP upgrade, CONNECT/RFC8441, L4 forwarding, trailers, and
+ *   informational response forwarding are unsupported.
+ * - Federated WebSocket routes are explicitly unsupported.
  * - Registration authorization via `tls.clientAuth.authorizeRegistration` is a
  *   registration-time mTLS hook only — not a complete per-request authentication
  *   or authorization gateway.

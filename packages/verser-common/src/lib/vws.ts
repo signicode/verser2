@@ -146,6 +146,64 @@ export function decodeVwsFrame(line: string): VwsFrame {
   if (typeof obj.type !== 'string') {
     throw new Error('Invalid VWS frame: missing or non-string type');
   }
+  const protocolError = (message: string): never => {
+    throw Object.assign(new Error(message), { closeCode: 1002 });
+  };
+  const optionalString = (name: string): void => {
+    if (obj[name] !== undefined && typeof obj[name] !== 'string')
+      protocolError(`Invalid VWS ${name}`);
+  };
+  switch (obj.type) {
+    case 'open':
+      if (
+        typeof obj.domain !== 'string' ||
+        (obj.path !== undefined && typeof obj.path !== 'string')
+      )
+        protocolError('Invalid VWS open frame');
+      optionalString('protocol');
+      break;
+    case 'accept':
+      optionalString('protocol');
+      break;
+    case 'text':
+      if (typeof obj.data !== 'string') protocolError('Invalid VWS text frame');
+      break;
+    case 'binary':
+      if (
+        typeof obj.data !== 'string' ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(obj.data)
+      )
+        protocolError('Invalid VWS binary frame');
+      break;
+    case 'ping':
+    case 'pong':
+      optionalString('data');
+      break;
+    case 'close': {
+      if (
+        typeof obj.code !== 'number' ||
+        !Number.isInteger(obj.code) ||
+        (obj.reason !== undefined && typeof obj.reason !== 'string')
+      )
+        protocolError('Invalid VWS close frame');
+      const code = obj.code as number;
+      if (
+        !(
+          (code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code)) ||
+          (code >= 3000 && code <= 4999)
+        )
+      )
+        protocolError('Invalid VWS close code');
+      if (typeof obj.reason === 'string' && Buffer.byteLength(obj.reason, 'utf8') > 123)
+        protocolError('VWS close reason exceeds 123 UTF-8 bytes');
+      break;
+    }
+    case 'error':
+      if (typeof obj.message !== 'string') protocolError('Invalid VWS error frame');
+      break;
+    default:
+      protocolError('Unknown VWS frame type');
+  }
   return parsed as VwsFrame;
 }
 

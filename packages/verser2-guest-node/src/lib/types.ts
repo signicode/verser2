@@ -432,6 +432,4 @@ export interface VerserBrokerWebSocketRequest {
   readonly path?: string;
   /** Optional VWS sub-protocol to negotiate. */
   readonly protocol?: string;
-  /** Optional request headers (reserved for future use). */
-  readonly headers?: Record<string, string>;
 }

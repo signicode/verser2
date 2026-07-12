@@ -410,24 +410,24 @@
 
 ## Phase 5: Documentation, Review, and Final Validation
 
-- [ ] Task: Update docs and codemaps for implemented streaming and WebSocket behavior
-    - [ ] Update README, docs, package READMEs, codemaps, and public API references to reflect supported streaming and WebSocket behavior.
-    - [ ] Ensure docs do not present Verser2 as a generic tunnel, L4 forwarder, public gateway, Python Host, or Python fetch/Agent/Dispatcher provider.
-    - [ ] Document unsupported items: literal HTTP/1 chunk-frame forwarding, CONNECT/L4, HTTP/3, trailers, informational responses, and complete gateway/auth policy.
-    - [ ] Run docs/package validation checks.
-    - [ ] Commit this completed task according to the per-task commit policy.
-- [ ] Task: Code review and architecture review
-    - [ ] Delegate a review to the configured review specialist after implementation is complete.
-    - [ ] Address in-scope findings around stream lifecycle, cleanup, backpressure, abort propagation, WebSocket boundaries, docs accuracy, and common-library reuse.
-    - [ ] Re-run the narrowest validation for any review-driven changes.
-    - [ ] Commit review-driven changes according to the per-task commit policy.
-- [ ] Task: Run final validation
-    - [ ] Run affected package builds for common, Host, Node Guest, Bun Guest, and Python package checks.
-    - [ ] Run focused tests for Host routing, Host upstreams, local peers, Broker routing, common envelope/body helpers, Agent, Dispatcher, Node Guest, Bun wrapper, Python Guest/Broker integration, and WebSockets.
-    - [ ] Run `npm test`.
-    - [ ] Run `npm run lint`.
-    - [ ] Confirm 95% meaningful coverage for changed behavior or record justified exceptions.
-    - [ ] Commit final validation/plan updates according to the per-task commit policy if files changed.
+- [x] Task: Update docs and codemaps for implemented streaming and WebSocket behavior
+    - [x] Update README, docs, package READMEs, codemaps, and public API references to reflect supported streaming and WebSocket behavior.
+    - [x] Ensure docs do not present Verser2 as a generic tunnel, L4 forwarder, public gateway, Python Host, or Python fetch/Agent/Dispatcher provider.
+    - [x] Document unsupported items: literal HTTP/1 chunk-frame forwarding, CONNECT/L4, HTTP/3, trailers, informational responses, and complete gateway/auth policy.
+    - [x] Run docs/package validation checks: builds for common/Host/Node Guest passed; `node --test test/docs.test.js test/python-guest-documentation.test.js test/packages.test.js` passed 16/16; `npm run lint` passed.
+    - [x] Commit this completed task according to the per-task commit policy.
+- [x] Task: Code review and architecture review
+    - [x] Delegate a review to the configured review specialist after implementation is complete.
+    - [x] Address in-scope findings around stream lifecycle, cleanup, backpressure, abort propagation, WebSocket boundaries, docs accuracy, and common-library reuse.
+    - [x] Re-run the narrowest validation for any review-driven changes: focused builds, VWS/docs/package/Python suites, and lint passed after the review fixes.
+    - [x] Commit review-driven changes according to the per-task commit policy.
+- [x] Task: Run final validation
+    - [x] Run affected package builds for common, Host, Node Guest, Bun Guest, and Python package checks: covered by `npm test` bounded build/staging flow and prior focused builds for common/Host/Node Guest/Python checks.
+    - [x] Run focused tests for Host routing, Host upstreams, local peers, Broker routing, common envelope/body helpers, Agent, Dispatcher, Node Guest, Bun wrapper, Python Guest/Broker integration, and WebSockets: focused validation passed before final full run, including VWS/docs/packages/Python suites and isolated Dispatcher bounded rerun after the earlier transient `SIGSEGV`.
+    - [x] Run `npm test`: passed 380 tests total, 376 passing, 4 skipped, 0 failed.
+    - [x] Run `npm run lint`: `biome check .` passed, checked 148 files with no fixes applied.
+    - [x] Confirm 95% meaningful coverage for changed behavior or record justified exceptions: changed streaming/VWS behavior is covered by focused Node, Python, docs, package, and full bounded suites; exceptions remain documented out-of-scope boundaries for generic upgrades, CONNECT/RFC8441, L4 forwarding, Bun `server.upgrade()`, Python Host/fetch/Agent/Dispatcher, and federated WebSocket routes.
+    - [x] Commit final validation/plan updates according to the per-task commit policy if files changed.
 - [ ] Task: Branching Policy finalization
     - [ ] Ensure all completed task work is committed.
     - [ ] Push the implementation branch.

@@ -23,6 +23,10 @@ Shared protocol, type, and utility exports for verser2 packages.
 
 ## Usage
 
+The shared package also exports VWS/1 frame types and bounded NDJSON framing
+helpers for explicit framed WebSockets over TLS HTTP/2. It does not provide
+HTTP upgrade, CONNECT/RFC8441, or L4 forwarding.
+
 This package is typically consumed as a dependency of other verser2 packages
 rather than directly by applications. Its types and helpers are re-exported
 through higher-level packages (`@signicode/verser2-host`,

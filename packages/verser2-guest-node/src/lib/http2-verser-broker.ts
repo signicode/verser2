@@ -443,10 +443,17 @@ export class Http2VerserBroker implements VerserBroker {
         const status = Number(headers[':status'] ?? 0);
         if (status !== 200) {
           // Collect body for error details
+          const maxErrorBodyBytes = 64 * 1024;
           let body = '';
+          let bodyBytes = 0;
           stream.setEncoding('utf8');
           stream.on('data', (chunk: string) => {
-            body += chunk;
+            if (bodyBytes < maxErrorBodyBytes) {
+              const remaining = maxErrorBodyBytes - bodyBytes;
+              const bounded = chunk.slice(0, remaining);
+              body += bounded;
+              bodyBytes += Buffer.byteLength(bounded, 'utf8');
+            }
           });
           stream.on('end', () => {
             settleOnce(() => {
