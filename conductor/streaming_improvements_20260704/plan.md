@@ -445,3 +445,34 @@
     - Validation: final `npm test && npm run lint` passed locally — 380 tests total, 376 passing, 4 skipped, 0 failed; Biome checked 148 files with no fixes applied. Focused package builds and VWS/docs/packages/Python validations passed before the full run.
     - Coverage: changed streaming and VWS behavior is covered by focused Node/Python/common/docs/package tests plus the final bounded suite. Remaining unsupported boundaries are documented and guarded by tests where applicable.
     - Review: configured review specialist rechecked final docs/API-boundary fixes and reported no P1/P2 blockers before final validation.
+
+## Phase 6: Post-Review Streaming and VWS Hardening
+
+- [ ] Task: Fix Bun response flow control and source cancellation
+    - [ ] Make Bun `createFetch()` response conversion pull-driven or pause/resume the Node response body according to Web stream demand.
+    - [ ] Cancel the source Web response stream when the remote response sink closes, finishes, or errors.
+    - [ ] Add slow-consumer and source-cancellation coverage without retaining generated bodies.
+- [ ] Task: Fix Python connection-loss and VWS negotiation behavior
+    - [ ] Fail Python Guest H2 flow-control waiters on reader EOF and read-loop failure; add a zero-window connection-loss test.
+    - [ ] Reject Python ASGI-selected VWS subprotocols that the Broker did not offer; add coverage.
+    - [ ] Reconcile the ASGI module documentation with its exported public helpers.
+- [ ] Task: Fix Node upload cleanup, shutdown, and VWS protocol behavior
+    - [ ] Clean up or terminate the original replayable upload source after abort and add lifecycle coverage.
+    - [ ] Clear or unref the Broker shutdown timeout after normal session close.
+    - [ ] Reject Node Guest-selected VWS subprotocols that the Broker did not offer; add coverage.
+    - [ ] Export the declared public `VerserWebSocketEvents` type.
+    - [ ] Make bounded `readVwsLine()` fragmented-input handling avoid repeated `Buffer.concat()`.
+- [ ] Task: Restore streaming-test discipline and documentation precision
+    - [ ] Rewrite identified tests to avoid retained generated bodies and to honor write/drain backpressure; use the guarded wrapper for WebSocket tests.
+    - [ ] Correct VWS handshake-close tests so the handler is genuinely pending rather than auto-accepting.
+    - [ ] Clarify that the 1 MiB VWS limit applies to an encoded frame and binary payload capacity is lower after base64 encoding.
+- [ ] Task: Implement idle-lease and upstream waiter liveness requirements
+    - [ ] Implement and test deterministic idle-lease and upstream waiting-stream cleanup/liveness required by the track specification.
+    - [ ] Address Guest request error delivery across federation and active-stream route-revocation semantics, with tests.
+- [ ] Task: Record federated WebSocket route limitation for a future track
+    - [ ] Keep federated WebSocket connections unsupported.
+    - [ ] Record that real imported-only federated routes may currently return `missing-guest` instead of the desired explicit unsupported error; leave error-path correction for a new track.
+- [ ] Task: Post-review validation and final review
+    - [ ] Run focused builds/tests for each touched runtime, then `npm test` and `npm run lint`.
+    - [ ] Request an Oracle re-review of the complete PR.
+    - [ ] Commit and push completed post-review tasks according to policy.
