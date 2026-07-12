@@ -146,4 +146,5 @@ The Host responds with `ack` (all revoked), `partial` (some failed), or `error`
 - [Docs: Connecting](../../docs/connecting.md)
 - [Docs: Exposing HTTP](../../docs/exposing-http.md)
 - [Docs: Making requests](../../docs/making-requests.md)
+- [Docs: VWS/1 WebSockets](../../docs/websockets.md)
 - [Docs: Lifecycle and errors](../../docs/lifecycle-and-errors.md)

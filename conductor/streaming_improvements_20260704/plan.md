@@ -434,6 +434,11 @@
     - [x] Open or update the draft PR targeting the captured base branch using the track `spec.md` as the PR body: updated https://github.com/signicode/verser2/pull/51.
     - [x] Post final verification results as a PR comment: https://github.com/signicode/verser2/pull/51#issuecomment-4952422941.
     - [x] Mark the PR ready only after final verification is complete: PR #51 marked ready after local final validation passed.
+- [x] Task: Add dedicated VWS/1 WebSocket documentation
+    - [x] Add a dedicated consumer-facing WebSocket guide with Node and Python ASGI examples.
+    - [x] Link the guide from root, documentation, and relevant package navigation.
+    - [x] Validate the guide with the focused documentation test and lint checks: `node --test test/docs.test.js` passed 6/6; `npm run lint` passed.
+    - [x] Commit and push the documentation follow-up.
 - [x] Task: Conductor - Phase Checkpoint 'Documentation, Review, and Final Validation' (Protocol in workflow.md)
     - Phase 5 completed on branch `conductor/streaming_improvements` with docs/codemaps/API references updated for VWS/1 and streaming boundaries, final VWS review fixes applied, and PR #51 moved from draft to ready for review.
     - Common-library review/deduplication: VWS frame validation remains centralized in `@signicode/verser-common`; docs reinforce that VWS/1 is explicit framed WebSocket over existing TLS HTTP/2 peer transport, not generic upgrade/tunnel support.

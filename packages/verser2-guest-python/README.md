@@ -124,6 +124,9 @@ This is explicit framing over the existing TLS HTTP/2 transport, not generic
 HTTP upgrade forwarding. Python Host, fetch, Agent, and Dispatcher APIs are not
 implemented.
 
+See [VWS/1 WebSockets](../../docs/websockets.md) for a complete Node Broker and
+Python ASGI example, runtime boundaries, and close/backpressure behavior.
+
 ## Python Broker usage
 
 The Python Broker connects outbound, registers as `broker`, and sends requests

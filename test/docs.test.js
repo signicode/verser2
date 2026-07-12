@@ -179,6 +179,7 @@ test('Bun package README documents handler and entrypoint semantics', () => {
 
 test('VWS/1 documentation names supported APIs and preserves boundaries', () => {
   const readme = fs.readFileSync(path.join(rootDirectory, 'README.md'), 'utf8');
+  const websocketDocs = fs.readFileSync(path.join(rootDirectory, 'docs/websockets.md'), 'utf8');
   const exposing = fs.readFileSync(path.join(rootDirectory, 'docs/exposing-http.md'), 'utf8');
   const making = fs.readFileSync(path.join(rootDirectory, 'docs/making-requests.md'), 'utf8');
   const federation = fs.readFileSync(path.join(rootDirectory, 'docs/host-federation.md'), 'utf8');
@@ -235,4 +236,9 @@ test('VWS/1 documentation names supported APIs and preserves boundaries', () => 
   assert.match(readme, /CONNECT\/RFC8441/);
   assert.match(readme, /L4 forwarding/);
   assert.doesNotMatch(readme, /generic HTTP\/1 upgrade forwarding is supported/i);
+  assert.match(readme, /docs\/websockets\.md/);
+  assert.match(websocketDocs, /guest\.attachWebSocket/);
+  assert.match(websocketDocs, /broker\.webSocket/);
+  assert.match(websocketDocs, /websocket\.accept/);
+  assert.match(websocketDocs, /Federated WebSocket routes are explicitly unsupported/);
 });

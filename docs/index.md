@@ -25,9 +25,8 @@ Three implemented roles work together:
   handlers without opening a port.
 - [Making requests](./making-requests.md) — send requests through a Broker using
   `request()`, Agent, Dispatcher, or fetch.
-- [VWS/1 WebSockets](./exposing-http.md#vws1-websockets) — explicit framed
-  WebSockets over TLS HTTP/2 for Node Guests; see the Python ASGI WebSockets
-  section below for Python Guest usage.
+- [VWS/1 WebSockets](./websockets.md) — explicit framed WebSockets over TLS
+  HTTP/2 for Node and Python ASGI Guests.
 - [Routes](./routes.md) — route advertisement, exact hostname matching, and route
   state.
 - [Host federation and upstreams](./host-federation.md) — Host IDs, upstream

@@ -79,6 +79,7 @@ response.body.pipe(process.stdout);
 - [Connecting](./docs/connecting.md) — create a Host, connect Guests and Brokers
 - [Exposing HTTP handlers](./docs/exposing-http.md) — attach Node, Bun, or Python handlers
 - [Making requests](./docs/making-requests.md) — Broker request, Agent, Dispatcher, Fetch
+- [VWS/1 WebSockets](./docs/websockets.md) — direct Node and Python ASGI WebSocket APIs
 - [Routes](./docs/routes.md) — route advertisement and exact hostname matching
 - [Host federation and upstreams](./docs/host-federation.md) — Host-to-Host links, topology, and HA limits
 - [Certificates](./docs/certificates.md) — TLS configuration, mTLS, self-signed certs
