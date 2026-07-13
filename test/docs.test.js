@@ -176,3 +176,71 @@ test('Bun package README documents handler and entrypoint semantics', () => {
     /upgrade forwarding is \*\*not\*\* implemented|server\.upgrade\(request\)[\s\S]*returns `false`/i,
   );
 });
+
+test('VWS/1 documentation names supported APIs and preserves boundaries', () => {
+  const readme = fs.readFileSync(path.join(rootDirectory, 'README.md'), 'utf8');
+  const websocketDocs = fs.readFileSync(path.join(rootDirectory, 'docs/websockets.md'), 'utf8');
+  const exposing = fs.readFileSync(path.join(rootDirectory, 'docs/exposing-http.md'), 'utf8');
+  const making = fs.readFileSync(path.join(rootDirectory, 'docs/making-requests.md'), 'utf8');
+  const federation = fs.readFileSync(path.join(rootDirectory, 'docs/host-federation.md'), 'utf8');
+  const nodeReadme = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-guest-node/README.md'),
+    'utf8',
+  );
+  const pythonReadme = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-guest-python/README.md'),
+    'utf8',
+  );
+  const hostTypes = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-host/src/lib/types.ts'),
+    'utf8',
+  );
+  const hostReadme = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-host/README.md'),
+    'utf8',
+  );
+  const hostCodemap = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-host/codemap.md'),
+    'utf8',
+  );
+  const pythonCodemap = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-guest-python/codemap.md'),
+    'utf8',
+  );
+  const bunReadme = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-guest-bun/README.md'),
+    'utf8',
+  );
+
+  for (const content of [readme, exposing, nodeReadme, pythonReadme]) {
+    assert.match(content, /VWS\/1/);
+    assert.match(content, /TLS HTTP\/2/);
+  }
+  assert.match(exposing, /attachWebSocket/);
+  assert.match(exposing, /broker\.webSocket/);
+  assert.match(pythonReadme, /ASGI websocket/);
+  assert.match(making, /Dispatcher rejects upgrade/);
+  assert.match(exposing, /server\.upgrade\(request\)[\s\S]*`false`/i);
+  assert.match(
+    federation,
+    /Federated WebSocket routes are not federated|federated WebSocket routes/i,
+  );
+  assert.match(hostTypes, /VWS\/1 framed WebSockets/);
+  assert.match(hostReadme, /Node or[\s\S]*Python/);
+  assert.match(hostCodemap, /guest\/websocket-lease/);
+  assert.match(hostCodemap, /\/verser\/websocket/);
+  assert.match(pythonCodemap, /test_websocket_asgi\.py/);
+  assert.match(bunReadme, /Node direct VWS\/1/);
+  assert.match(nodeReadme, /VerserWebSocket/);
+  assert.match(pythonReadme, /VwsAsgiConnection/);
+  assert.match(readme, /CONNECT\/RFC8441/);
+  assert.match(readme, /L4 forwarding/);
+  assert.doesNotMatch(readme, /generic HTTP\/1 upgrade forwarding is supported/i);
+  assert.match(readme, /docs\/websockets\.md/);
+  assert.match(websocketDocs, /guest\.attachWebSocket/);
+  assert.match(websocketDocs, /broker\.webSocket/);
+  assert.match(websocketDocs, /websocket\.accept/);
+  assert.match(websocketDocs, /encoded VWS\/1 frame is[\s\S]*1 MiB/);
+  assert.match(websocketDocs, /binary messages are base64 encoded[\s\S]*lower/);
+  assert.match(websocketDocs, /Federated WebSocket routes are explicitly unsupported/);
+});

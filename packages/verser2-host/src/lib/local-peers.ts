@@ -1,9 +1,11 @@
 import { EventEmitter } from 'node:events';
 import * as http from 'node:http';
+import * as http2 from 'node:http2';
 import { PassThrough, Readable } from 'node:stream';
 
 import {
   type RoutedDomainRegistration,
+  VerserError,
   type VerserPeerId,
   createRoutedResponseEnvelope,
   createVerserError,
@@ -39,6 +41,7 @@ export interface LocalDispatchRequest {
   readonly requestId: string;
   readonly sourceId: string;
   readonly targetId: string;
+  readonly routeDomain?: string;
   readonly method: string;
   readonly path: string;
   readonly headers: Record<string, string>;
@@ -54,6 +57,7 @@ type LocalRequest = Readable & {
 };
 
 class LocalIncomingMessage extends PassThrough implements LocalRequest {
+  private onAbortListener?: () => void;
   public readonly method: string;
 
   public readonly url: string;
@@ -71,12 +75,34 @@ class LocalIncomingMessage extends PassThrough implements LocalRequest {
       // headers does not surface as an unhandled stream error.
     });
     const onAbort = (): void => {
-      this.destroy(createDisconnectedError(request));
+      const error = createRequestAbortError(request);
+      // A federated request can be cancelled after the request pipe has
+      // already ended while the Guest handler is still running.  destroy()
+      // is then a no-op; explicitly deliver the structured error so the
+      // handler observes the cancellation without creating an unhandled error.
+      if (this.readableEnded || this.destroyed) {
+        this.emit('error', error);
+      } else {
+        this.destroy(error);
+      }
     };
+    this.onAbortListener = onAbort;
     request.signal?.addEventListener('abort', onAbort, { once: true });
-    this.once('close', () => request.signal?.removeEventListener('abort', onAbort));
-    request.body.once('error', (error) => this.destroy(error));
+    request.body.once('error', (error) => {
+      this.destroy(
+        request.signal?.aborted || isHttp2CancelError(error)
+          ? createRequestAbortError(request)
+          : error,
+      );
+    });
     request.body.pipe(this);
+  }
+
+  public disposeAbortListener(request: LocalDispatchRequest): void {
+    if (this.onAbortListener !== undefined) {
+      request.signal?.removeEventListener('abort', this.onAbortListener);
+      this.onAbortListener = undefined;
+    }
   }
 }
 
@@ -330,6 +356,7 @@ export function dispatchLocalGuestRequest(
       }
       settled = true;
       cleanup();
+      localRequest.disposeAbortListener(request);
       reject(error);
     };
     const resolveResponse = (): void => {
@@ -338,16 +365,26 @@ export function dispatchLocalGuestRequest(
       }
       settled = true;
       cleanup();
-      resolve(localResponse.toBrokerResponse(request.requestId));
+      const brokerResponse = localResponse.toBrokerResponse(request.requestId);
+      const dispose = (): void => localRequest.disposeAbortListener(request);
+      brokerResponse.body.once('end', dispose);
+      brokerResponse.body.once('close', dispose);
+      brokerResponse.body.once('error', dispose);
+      resolve(brokerResponse);
     };
     const failBeforeResponse = (error: unknown): void => {
       rejectBeforeResponse(createLocalHandlerError(request, error));
     };
     const failRequestStream = (error: unknown): void => {
-      const streamError = createVerserError('stream-failure', getErrorMessage(error), {
-        requestId: request.requestId,
-        targetId: request.targetId,
-      });
+      // Preserve VerserError instances so H2 cancel/disconnected-target errors
+      // are not swallowed by the generic stream-failure wrapper.
+      const streamError =
+        error instanceof VerserError
+          ? error
+          : createVerserError('stream-failure', getErrorMessage(error), {
+              requestId: request.requestId,
+              targetId: request.targetId,
+            });
       if (localResponse.headersStarted) {
         localResponse.fail(streamError);
         return;
@@ -355,7 +392,11 @@ export function dispatchLocalGuestRequest(
       rejectBeforeResponse(streamError);
     };
     const abort = (): void => {
-      const error = createDisconnectedError(request);
+      // Use the signal reason when available (set by controller.abort(reason)
+      // in the federation boundary), so structured errors like stream-failure
+      // propagate through dispatch rejection paths. Fall back to the default
+      // disconnected error for direct (non-federated) abort paths.
+      const error = createRequestAbortError(request);
       localRequest.destroy(error);
       if (localResponse.headersStarted) {
         localResponse.fail(error);
@@ -401,6 +442,36 @@ function createDisconnectedError(request: LocalDispatchRequest): Error {
     targetId: request.targetId,
     sourceId: request.sourceId,
   });
+}
+
+function createRequestAbortError(request: LocalDispatchRequest): Error {
+  const reason = request.signal?.reason;
+  if (reason instanceof VerserError && reason.code === 'stream-failure') {
+    return reason;
+  }
+  return createDisconnectedError(request);
+}
+
+function isHttp2CancelError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const err = error as { code?: unknown };
+  const code = err.code;
+
+  // Numeric H2 error codes (NGHTTP2_CANCEL, NGHTTP2_REFUSED_STREAM)
+  if (
+    code === http2.constants.NGHTTP2_CANCEL ||
+    code === http2.constants.NGHTTP2_REFUSED_STREAM ||
+    code === 20
+  ) {
+    return true;
+  }
+
+  // String error code emitted by Node.js http2 module
+  if (code === 'ERR_HTTP2_STREAM_ERROR') {
+    return true;
+  }
+
+  return false;
 }
 
 function createLocalHandlerError(request: LocalDispatchRequest, error: unknown): Error {

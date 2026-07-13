@@ -11,6 +11,7 @@ import {
   type RoutedDomainRegistration,
   VERSER_GUEST_REVOCATION_PATH,
   VERSER_LIFECYCLE_EVENTS,
+  VWS_MAX_FRAME_BYTES,
   type VerserBrokerRouteLifecycleControlFrame,
   type VerserCertificateIdentity,
   type VerserError,
@@ -40,6 +41,7 @@ import {
   normalizeServerTlsOptions,
   parseRegistrationRequest,
   readNdjsonLines,
+  readVwsLine,
 } from '@signicode/verser-common';
 import {
   type BrokerRoutingCallbacks,
@@ -148,6 +150,11 @@ export class NodeHttp2VerserHost implements VerserHost {
   private readonly sessions = new Set<http2.ServerHttp2Session>();
 
   private readonly leasePool = new LeasePool();
+
+  /** Idle WebSocket lease streams keyed by Guest peer ID. */
+  private readonly wsIdleLeases = new Map<VerserPeerId, http2.ServerHttp2Stream[]>();
+
+  private static readonly MAX_WS_IDLE_LEASES_PER_GUEST = 4;
 
   private readonly routeRegistry: HostRouteRegistry;
 
@@ -388,9 +395,11 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     this.leasePool.closeAllLeases();
     this.leasePool.failAllQueuedLeaseAcquisitions(reason);
+    this.failAllFederatedRequestStreamWaiters(`Host closing: ${reason}`);
 
     for (const link of this.inboundFederationHosts.values()) {
       link.routeStream?.close(http2.constants.NGHTTP2_NO_ERROR);
+      link.requestStream?.close(http2.constants.NGHTTP2_NO_ERROR);
     }
     for (const session of this.sessions) {
       session.destroy();
@@ -787,6 +796,16 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     if (path === federation.FEDERATION_DISPATCH_REQUEST_PATH) {
       this.handleHostFederationDispatchRequestStream(stream, headers);
+      return;
+    }
+
+    if (path === '/verser/guest/websocket-lease') {
+      this.attachGuestWsLeaseStream(stream, headers);
+      return;
+    }
+
+    if (path === '/verser/websocket') {
+      await this.handleBrokerWebSocket(stream, headers);
       return;
     }
 
@@ -1287,6 +1306,12 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected, peerId: hostId });
   }
 
+  private failAllFederatedRequestStreamWaiters(message: string): void {
+    for (const [hostId] of this.federatedRequestStreamWaiters) {
+      this.failFederatedRequestStreamWaiters(hostId, message);
+    }
+  }
+
   private failFederatedRequestStreamWaiters(hostId: string, message: string): void {
     const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
     this.federatedRequestStreamWaiters.delete(hostId);
@@ -1406,6 +1431,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.peers.delete(peerId);
 
     if (peer.role === 'guest') {
+      // Close/clear WS idle leases for this peer
+      this.clearWsIdleLeases(peerId);
+
       // Move routes to degraded state instead of removing immediately.
       // This matches the remote Guest disconnect behavior.
       this.routeRegistry.setDegraded(peerId);
@@ -1525,8 +1553,20 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     return new Promise<federation.AcquiredFederatedRequestStream>((resolve, reject) => {
-      const resolveStream = (stream: http2.ServerHttp2Stream): void =>
+      const resolveStream = (stream: http2.ServerHttp2Stream): void => {
+        const current = this.inboundFederationHosts.get(hostId);
+        if (current?.requestStream !== stream || stream.closed) {
+          reject(
+            createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
+              hostId,
+              direction: 'inbound-federation',
+            }),
+          );
+          return;
+        }
+        this.inboundFederationHosts.set(hostId, { ...current, requestBusy: true });
         resolve({ stream, via: 'inbound-federation', hostId });
+      };
       const timeout = setTimeout(() => {
         const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
         const remainingWaiters = waiters.filter((waiter) => waiter.resolve !== resolveStream);
@@ -1895,6 +1935,428 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.leasePool.addIdleLease(lease);
   }
 
+  /**
+   * Accepts a Guest WebSocket lease stream and stores it in the idle WS pool.
+   *
+   * Validates the Guest peer ID, requires the registered peer to be h2
+   * transport with the same session, responds with 200, and adds the stream
+   * to {@link wsIdleLeases}. Cleans up the lease on stream close/error
+   * and on peer disconnect.
+   */
+  private attachGuestWsLeaseStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): void {
+    const guestId = createPeerId(String(headers['x-verser-peer-id'] ?? ''));
+    const peer = this.peers.get(guestId);
+    if (peer === undefined || peer.role !== 'guest') {
+      throw createVerserError(
+        'disconnected-target',
+        'Guest WebSocket lease stream has no registered peer',
+        { targetId: guestId },
+      );
+    }
+
+    // Enforce session binding: the lease stream must belong to the same
+    // HTTP/2 session as the registered Guest peer.
+    if (peer.transport !== 'h2' || peer.session !== stream.session) {
+      throw createVerserError(
+        'disconnected-target',
+        'WebSocket lease stream rejected: session mismatch',
+        { targetId: guestId },
+      );
+    }
+
+    const leases = this.wsIdleLeases.get(guestId) ?? [];
+    if (leases.length >= NodeHttp2VerserHost.MAX_WS_IDLE_LEASES_PER_GUEST) {
+      throw createVerserError('timeout', 'Guest WebSocket lease capacity exceeded', {
+        targetId: guestId,
+        limit: NodeHttp2VerserHost.MAX_WS_IDLE_LEASES_PER_GUEST,
+      });
+    }
+    stream.respond({ ':status': 200 });
+    leases.push(stream);
+    this.wsIdleLeases.set(guestId, leases);
+
+    const removeLease = (): void => {
+      const arr = this.wsIdleLeases.get(guestId);
+      if (arr === undefined) {
+        return;
+      }
+      const idx = arr.indexOf(stream);
+      if (idx >= 0) {
+        arr.splice(idx, 1);
+      }
+      if (arr.length === 0) {
+        this.wsIdleLeases.delete(guestId);
+      }
+    };
+    stream.on('close', removeLease);
+    stream.on('error', (error) => {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+      removeLease();
+    });
+  }
+
+  /**
+   * Races reading a VWS accept line against a timeout and broker-stream
+   * close/error. The first settlement wins; all listeners/timers are
+   * cleaned up afterward to prevent leaks.
+   */
+  private raceVwsAccept(
+    wsStream: http2.ServerHttp2Stream,
+    brokerStream: http2.ServerHttp2Stream,
+    timeoutMs: number,
+    targetId: string,
+    domain: string,
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      let settled = false;
+      const settleOnce = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        fn();
+      };
+
+      // biome-ignore lint/style/useConst: timer must be let so cleanup() can clearTimeout before assignment
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        brokerStream.off('close', onBrokerClose);
+        brokerStream.off('error', onBrokerError);
+      };
+
+      const onBrokerClose = (): void => {
+        settleOnce(() => {
+          cleanup();
+          reject(
+            createVerserError('protocol-error', 'Broker stream closed before WebSocket handshake', {
+              targetId,
+              domain,
+            }),
+          );
+        });
+      };
+
+      const onBrokerError = (): void => {
+        settleOnce(() => {
+          cleanup();
+          reject(
+            createVerserError('protocol-error', 'Broker stream error before WebSocket handshake', {
+              targetId,
+              domain,
+            }),
+          );
+        });
+      };
+
+      timer = setTimeout(() => {
+        settleOnce(() => {
+          cleanup();
+          reject(
+            createVerserError('timeout', 'WebSocket handshake timed out', {
+              targetId,
+              domain,
+              timeoutMs,
+            }),
+          );
+        });
+      }, timeoutMs);
+
+      brokerStream.once('close', onBrokerClose);
+      brokerStream.once('error', onBrokerError);
+
+      readVwsLine(wsStream, VWS_MAX_FRAME_BYTES).then(
+        (line) => {
+          settleOnce(() => {
+            cleanup();
+            resolve(line);
+          });
+        },
+        (err) => {
+          settleOnce(() => {
+            cleanup();
+            reject(err);
+          });
+        },
+      );
+    });
+  }
+
+  /**
+   * Handles a Broker WebSocket open request at `/verser/websocket`.
+   *
+   * Validates the target Guest and route/domain through the route registry
+   * (revoked, degraded, missing, or federated routes are rejected). Acquires
+   * an idle WS lease, sends the VWS/1 `open` frame, waits for an `accept`
+   * (or `error`) frame from the Guest, responds to the Broker with the
+   * negotiated protocol, and bridges the streams bidirectionally with
+   * backpressure until one side closes.
+   */
+  private async handleBrokerWebSocket(
+    brokerStream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): Promise<void> {
+    const targetId = createPeerId(String(headers['x-verser-target-id'] ?? ''));
+    const domain = String(headers['x-verser-domain'] ?? '');
+    const protocol = String(headers['x-verser-ws-protocol'] ?? '');
+    const wsPath = String(headers['x-verser-ws-path'] ?? '/');
+    const sourceId = createPeerId(String(headers['x-verser-source-id'] ?? ''));
+    const source = this.peers.get(sourceId);
+    if (
+      source === undefined ||
+      source.role !== 'broker' ||
+      source.transport !== 'h2' ||
+      source.session !== brokerStream.session
+    ) {
+      throw createVerserError(
+        'authorization-denied',
+        'WebSocket source Broker is not authorized for this session',
+        {
+          sourceId,
+        },
+      );
+    }
+
+    // Validate target Guest
+    const target = this.peers.get(targetId);
+    if (target === undefined || target.role !== 'guest') {
+      throw createVerserError('missing-guest', 'Target Guest is not registered for WebSocket', {
+        targetId,
+      });
+    }
+
+    // Validate route/domain ownership and revocation through route registry.
+    // getCandidates returns only active (non-degraded, non-revoked) routes;
+    // an empty result means the route is missing, degraded, or was revoked.
+    const candidates = this.routeRegistry.getCandidates(targetId, domain);
+    if (candidates.length === 0) {
+      throw createVerserError(
+        'missing-guest',
+        'Target route is not available (revoked, degraded, or not found)',
+        { targetId, domain },
+      );
+    }
+
+    // Federated routes are not supported for WebSocket opens
+    if (candidates.some((r) => r.source !== 'local')) {
+      throw createVerserError('protocol-error', 'Federated WebSocket routes are not supported', {
+        targetId,
+        domain,
+      });
+    }
+
+    // Acquire an idle WS lease
+    const wsLeases = this.wsIdleLeases.get(targetId);
+    if (wsLeases === undefined || wsLeases.length === 0) {
+      throw createVerserError('missing-guest', 'No WebSocket lease available for target Guest', {
+        targetId,
+      });
+    }
+    const wsStream = wsLeases.shift() as http2.ServerHttp2Stream;
+    if (wsLeases.length === 0) {
+      this.wsIdleLeases.delete(targetId);
+    }
+
+    // Return the lease to idle pool on error (before accept handshake completes)
+    let leaseReturned = false;
+    const returnLease = (): void => {
+      if (leaseReturned) return;
+      leaseReturned = true;
+      const leases = this.wsIdleLeases.get(targetId) ?? [];
+      leases.push(wsStream);
+      this.wsIdleLeases.set(targetId, leases);
+    };
+
+    // VWS handshake timeout — Guest must respond within 30 seconds
+    const VWS_HANDSHAKE_TIMEOUT_MS = 30_000;
+
+    // Send VWS/1 open frame to Guest
+    const openFrame: Record<string, unknown> = { type: 'open', domain, path: wsPath };
+    if (protocol.length > 0) {
+      openFrame.protocol = protocol;
+    }
+    wsStream.write(`${JSON.stringify(openFrame)}\n`);
+
+    // Read the accept/error frame from Guest with timeout and
+    // broker-stream-close/error cancellation.
+    let acceptProtocol = '';
+    try {
+      const acceptLine = await this.raceVwsAccept(
+        wsStream,
+        brokerStream,
+        VWS_HANDSHAKE_TIMEOUT_MS,
+        targetId,
+        domain,
+      );
+      const acceptFrame: Record<string, unknown> = JSON.parse(acceptLine);
+      if (acceptFrame.type === 'error') {
+        if (typeof acceptFrame.message !== 'string') {
+          returnLease();
+          throw createVerserError('protocol-error', 'Malformed VWS error frame', {
+            targetId,
+            domain,
+          });
+        }
+        returnLease();
+        throw createVerserError('protocol-error', acceptFrame.message, {
+          targetId,
+          domain,
+        });
+      }
+      if (acceptFrame.type !== 'accept') {
+        returnLease();
+        throw createVerserError(
+          'protocol-error',
+          `Expected VWS accept frame, got ${String(acceptFrame.type)}`,
+          { targetId, domain },
+        );
+      }
+      if (acceptFrame.protocol !== undefined && typeof acceptFrame.protocol !== 'string') {
+        returnLease();
+        throw createVerserError('protocol-error', 'Malformed VWS accept protocol', {
+          targetId,
+          domain,
+        });
+      }
+      acceptProtocol = acceptFrame.protocol ?? '';
+      if (acceptProtocol.length > 0 && acceptProtocol !== protocol) {
+        returnLease();
+        throw createVerserError(
+          'protocol-error',
+          'Guest accepted a WebSocket subprotocol that the Broker did not offer',
+          { targetId, domain, offeredProtocol: protocol, acceptedProtocol: acceptProtocol },
+        );
+      }
+    } catch (error) {
+      // Cleanup: respond to Broker with error if not already responded.
+      // sendError calls respond() + end(), so do not close brokerStream
+      // afterward — that would send a redundant RST_STREAM.
+      if (!brokerStream.headersSent && !brokerStream.closed) {
+        sendError(brokerStream, toVerserError(error));
+      }
+      if (!wsStream.closed) {
+        wsStream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+      return;
+    }
+
+    // Respond to Broker with 200 and optional negotiated protocol
+    const responseHeaders: http2.OutgoingHttpHeaders = { ':status': 200 };
+    if (acceptProtocol.length > 0) {
+      responseHeaders['x-verser-ws-protocol'] = acceptProtocol;
+    }
+    brokerStream.respond(responseHeaders);
+
+    // Bridge streams bidirectionally with backpressure
+    this.bridgeWebSocketStreams(brokerStream, wsStream);
+  }
+
+  /**
+   * Closes and clears all idle WebSocket lease streams for the given peer.
+   */
+  private clearWsIdleLeases(peerId: string): void {
+    const leases = this.wsIdleLeases.get(peerId);
+    if (leases !== undefined) {
+      for (const stream of leases) {
+        if (!stream.closed && !stream.destroyed) {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+        }
+      }
+      this.wsIdleLeases.delete(peerId);
+    }
+  }
+
+  /**
+   * Bridges two HTTP/2 streams bidirectionally with backpressure.
+   *
+   * Data from `streamA` is written to `streamB` and vice versa. When
+   * `write()` returns `false`, the source stream is paused and resumed
+   * on the destination's `drain` event. When either stream closes or
+   * errors, both are cleaned up and all listeners are removed.
+   */
+  private bridgeWebSocketStreams(
+    streamA: http2.ServerHttp2Stream,
+    streamB: http2.ServerHttp2Stream,
+  ): void {
+    let closed = false;
+
+    const cleanup = (): void => {
+      if (closed) return;
+      closed = true;
+
+      streamA.off('data', forwardAtoB);
+      streamA.off('end', onEndA);
+      streamA.off('error', cleanup);
+      streamA.off('close', cleanup);
+
+      streamB.off('data', forwardBtoA);
+      streamB.off('end', onEndB);
+      streamB.off('error', cleanup);
+      streamB.off('close', cleanup);
+
+      if (!streamA.closed) {
+        streamA.close(http2.constants.NGHTTP2_NO_ERROR);
+      }
+      if (!streamB.closed) {
+        streamB.close(http2.constants.NGHTTP2_NO_ERROR);
+      }
+    };
+
+    const forwardAtoB = (chunk: Buffer): void => {
+      if (streamB.closed || streamB.destroyed) {
+        cleanup();
+        return;
+      }
+      const canContinue = streamB.write(chunk);
+      if (!canContinue) {
+        streamA.pause();
+        streamB.once('drain', () => {
+          if (!closed) streamA.resume();
+        });
+      }
+    };
+
+    const forwardBtoA = (chunk: Buffer): void => {
+      if (streamA.closed || streamA.destroyed) {
+        cleanup();
+        return;
+      }
+      const canContinue = streamA.write(chunk);
+      if (!canContinue) {
+        streamB.pause();
+        streamA.once('drain', () => {
+          if (!closed) streamB.resume();
+        });
+      }
+    };
+
+    const onEndA = (): void => {
+      streamA.off('data', forwardAtoB);
+      if (!streamB.closed && !streamB.destroyed) {
+        streamB.end();
+      }
+    };
+
+    const onEndB = (): void => {
+      streamB.off('data', forwardBtoA);
+      if (!streamA.closed && !streamA.destroyed) {
+        streamA.end();
+      }
+    };
+
+    streamA.on('data', forwardAtoB);
+    streamA.once('end', onEndA);
+    streamA.once('error', cleanup);
+    streamA.once('close', cleanup);
+
+    streamB.on('data', forwardBtoA);
+    streamB.once('end', onEndB);
+    streamB.once('error', cleanup);
+    streamB.once('close', cleanup);
+  }
+
   private async routeBrokerRequest(
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders,
@@ -1910,6 +2372,9 @@ export class NodeHttp2VerserHost implements VerserHost {
         this.peers.delete(peerId);
 
         if (peer.role === 'guest') {
+          // Close/clear WS idle leases for this peer
+          this.clearWsIdleLeases(peerId);
+
           // Move routes to degraded state instead of removing immediately
           this.routeRegistry.setDegraded(peerId);
           this.leasePool.closeGuestLeases(peerId);

@@ -125,6 +125,8 @@ fallback.
   lifecycle events, close behavior, and lease management are consistent.
 - WebSocket upgrade forwarding is **not** implemented — `server.upgrade(request)`
   returns `false`.
+- The Bun-facing Broker reuses the Node direct VWS/1 `webSocket()` API; Bun Guest
+  `server.upgrade()` remains unsupported.
 - Direct Broker request bodies use the Node Broker surface: omit the body, pass
   `Buffer` chunks, or stream with a Node `Readable`. Fetch-style request bodies
   are available through `createFetch()` / `createDispatcher()`.

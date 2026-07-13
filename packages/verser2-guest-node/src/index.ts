@@ -45,7 +45,16 @@ export type {
   VerserNodeGuestLifecycleEvent,
   /** Options for creating a Node Guest. */
   VerserNodeGuestOptions,
+  /** WebSocket request options for broker.webSocket(). */
+  VerserBrokerWebSocketRequest,
+  /** VWS/1 WebSocket handler type for guest.attachWebSocket(). */
+  VerserWebSocketHandler,
+  /** Result returned by a WebSocket handler to accept or reject. */
+  VerserWebSocketAcceptResult,
 } from './lib/types';
+
+export { VerserWebSocket } from './lib/verser-websocket';
+export type { VerserWebSocketEvents, VerserWebSocketSendOptions } from './lib/verser-websocket';
 
 import { Http2VerserBroker } from './lib/http2-verser-broker';
 import { Http2VerserNodeGuest } from './lib/http2-verser-node-guest';
@@ -63,6 +72,8 @@ import type {
  * of lease streams. Use {@link VerserNodeGuest.attach | attach()} to provide a local
  * HTTP handler **without** calling `server.listen()`. When no domain is supplied to
  * `attach()`, the route domain defaults to the Guest ID.
+ * Use {@link VerserNodeGuest.attachWebSocket | attachWebSocket()} for explicit
+ * VWS/1 WebSocket handlers.
  *
  * @param options - Guest configuration including the Host URL, Guest ID, and TLS options.
  * @returns A {@link VerserNodeGuest} instance.
@@ -84,6 +95,7 @@ export function createVerserNodeGuest(options: VerserNodeGuestOptions): VerserNo
  * {@link VerserBroker.createDispatcher | createDispatcher()}, and
  * {@link VerserBroker.createFetch | createFetch()} provide alternative routing
  * interfaces that resolve target hostnames from the advertised route table.
+ * {@link VerserBroker.webSocket | webSocket()} opens an explicit VWS/1 WebSocket.
  *
  * @param options - Broker configuration including the Host URL, Broker ID, and TLS options.
  * @returns A {@link VerserBroker} instance.

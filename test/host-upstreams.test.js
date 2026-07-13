@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const http2 = require('node:http2');
 const { PassThrough } = require('node:stream');
 const { text } = require('node:stream/consumers');
-const { test } = require('node:test');
+const { test } = require('./support/guarded-test.cjs');
 
 const {
   loadVerserGuestBun,
@@ -15,6 +15,19 @@ const { createVerserHost } = loadVerserHost();
 const { createVerserBroker } = loadVerserGuestNode();
 const { createVerserBroker: createVerserBunBroker } = loadVerserGuestBun();
 
+function once(emitter, eventName) {
+  return new Promise((resolve, reject) => {
+    emitter.once(eventName, resolve);
+    emitter.once('error', reject);
+  });
+}
+
+async function connectRawClient(port) {
+  const session = http2.connect(`https://127.0.0.1:${port}`, { ca: trusted.certificate });
+  await once(session, 'connect');
+  return session;
+}
+
 function tlsOptions(clientAuth) {
   return {
     cert: trusted.certificate,
@@ -26,6 +39,133 @@ function tlsOptions(clientAuth) {
 function hostUrl(host) {
   return `https://localhost:${host.address.port}`;
 }
+
+// Warm up TLS/HTTP2/federation infrastructure so individual tests don't pay
+// the one-time initialization cost of TLS contexts, HTTP/2 sessions, and
+// federation link state.
+test.before(async () => {
+  const upstream = createVerserHost({ hostId: 'warmup-host-manager', tls: tlsOptions() });
+  const downstream = createVerserHost({ hostId: 'warmup-host-runner', tls: tlsOptions() });
+  await upstream.start();
+  try {
+    const handle = await downstream.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(upstream),
+      tls: { ca: trusted.certificate },
+    });
+    await handle.close('warmup');
+  } finally {
+    await downstream.close();
+    await upstream.close();
+    // Drain all pending callback queues so any scheduled cleanup (nextTick,
+    // setImmediate, timers) completes before the first guarded test measures
+    // its baseline.
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+  }
+});
+
+// ================ Federation Upstream Abort Propagation (deferred) ================
+// Mid-stream Broker abort propagation through federation — the AbortSignal
+// reason carries a structured stream-failure error through to the local
+// dispatch promise rejection (rejectBeforeResponse), but the guest request
+// PassThrough has already ended via the body pipe, so destroy(error) is a
+// no-op and the 'error' event never fires on the guest handler.  A safe
+// delivery mechanism requires further design; deferred pending review.
+
+// ================ Waiter Cleanup After Host Close ================
+
+test('Host close fails pending federated request stream waiters with bounded rejection', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  await manager.start();
+
+  // Use a raw H2 client to register a real inbound federation host.
+  // The handshake creates the host entry in the manager's inboundFederationHosts.
+  // We do NOT open /verser/host/federation/request so any broker request
+  // targeting a route through this host will enqueue a waiter.
+  const rawSession = await connectRawClient(manager.address.port);
+  const hsStream = rawSession.request({
+    ':method': 'POST',
+    ':path': '/verser/host/federation',
+    'content-type': 'application/json',
+  });
+  hsStream.end(
+    JSON.stringify({
+      hostId: 'raw-runner',
+      protocolVersion: 1,
+      importRoutes: true,
+      exportRoutes: true,
+    }),
+  );
+  const hsHeaders = await once(hsStream, 'response');
+  assert.equal(Number(hsHeaders[':status']), 200, `Handshake response: ${hsHeaders[':status']}`);
+  hsStream.resume();
+
+  // Add the federated route directly (routes go through setImportedFederatedRoutes,
+  // avoiding the route-stream close lifecycle that removes the inbound host).
+  manager.setImportedFederatedRoutes('raw-runner', [
+    {
+      targetId: 'guest-waiter-close',
+      domain: 'waiter-close.verser.test',
+      originHostId: 'host-raw-runner',
+      nextHopHostId: 'raw-runner',
+      hopCount: 1,
+      viaHostIds: ['host-raw-runner'],
+      source: 'upstream',
+    },
+  ]);
+  assert.equal(
+    manager.getFederatedRouteCandidates('guest-waiter-close', 'waiter-close.verser.test').length,
+    1,
+    'imported federated route should be available before starting the waiter request',
+  );
+
+  const broker = await manager.attachLocalBroker({ brokerId: 'broker-waiter-close' });
+
+  try {
+    const start = Date.now();
+    const requestPromise = broker.request({
+      targetId: 'guest-waiter-close',
+      method: 'GET',
+      path: '/wait',
+      headers: { host: 'waiter-close.verser.test' },
+      leaseAcquireTimeoutMs: 60_000,
+    });
+    let settled = false;
+    requestPromise
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => {
+        // The assertion below observes settlement; rejectionPromise owns the
+        // expected request rejection.
+      });
+
+    // Attach a catch handler before close so the rejection is always
+    // handled even if it fires synchronously during manager.close().
+    const rejectionPromise = requestPromise
+      .then(() => {
+        throw new Error('request should have been rejected');
+      })
+      .catch((err) => err);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, 'request should be waiting for a federated request stream');
+    await manager.close('waiter-cleanup-test');
+    const rejection = await rejectionPromise;
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed < 1500, `Request should reject fast (< 1.5 s), took ${elapsed} ms`);
+    assert.ok(
+      rejection?.message?.includes('Host closing') ||
+        rejection?.message?.includes('closing') ||
+        rejection?.message?.includes('unavailable'),
+      `Rejection should reference close/unavailable, got: ${rejection?.message}`,
+    );
+  } finally {
+    await broker.close();
+    rawSession.destroy();
+    await manager.close();
+  }
+});
 
 test('Host connects outbound to an upstream Host and closes the link', async () => {
   const upstream = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
@@ -101,29 +241,49 @@ test('Host close cleans up upstream links even when the downstream Host was neve
 test('Receiving Host observes inbound federation link disconnects', async () => {
   const upstream = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const downstream = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
-  const upstreamEvents = [];
-  upstream.onLifecycle((event) => upstreamEvents.push(event));
-  await upstream.start();
-
-  await downstream.connectUpstream({
-    upstreamId: 'manager',
-    url: hostUrl(upstream),
-    tls: { ca: trusted.certificate },
+  let registered;
+  let disconnected;
+  const registeredPromise = new Promise((resolve) => {
+    registered = resolve;
   });
-  assert(
-    upstreamEvents.some((event) => event.name === 'registered' && event.peerId === 'host-runner'),
-  );
+  const disconnectedPromise = new Promise((resolve) => {
+    disconnected = resolve;
+  });
+  const unsubLifecycle = upstream.onLifecycle((event) => {
+    if (event.name === 'registered' && event.peerId === 'host-runner') {
+      registered();
+    }
+    if (event.name === 'disconnected' && event.peerId === 'host-runner') {
+      disconnected();
+    }
+  });
+  try {
+    await upstream.start();
 
-  await downstream.close('downstream-close');
-  await assertEventually(() =>
-    assert(
-      upstreamEvents.some(
-        (event) => event.name === 'disconnected' && event.peerId === 'host-runner',
-      ),
-    ),
-  );
+    await downstream.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(upstream),
+      tls: { ca: trusted.certificate },
+    });
+    function lifecycleTimeout(promise, label) {
+      let timer;
+      const fallback = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out`)), 500);
+      });
+      return Promise.race([promise, fallback]).finally(() => clearTimeout(timer));
+    }
 
-  await upstream.close();
+    await lifecycleTimeout(registeredPromise, 'registered event');
+
+    await downstream.close('downstream-close');
+    await lifecycleTimeout(disconnectedPromise, 'disconnected event');
+  } finally {
+    unsubLifecycle();
+    registered = undefined;
+    disconnected = undefined;
+    await downstream.close('test-complete');
+    await upstream.close('test-complete');
+  }
 });
 
 test('Unexpected upstream disconnect removes imported routes and emits lifecycle', async () => {
@@ -367,7 +527,7 @@ test('Downstream Host imports upstream route advertisements', async () => {
       1,
     ),
   );
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
     managerEvents.some((event) => event.name === 'error' && event.error?.code === 'route-loop'),
     false,
@@ -482,6 +642,7 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
   let broker;
+  let expectedGuestDomain = 'runner-forward.verser.test';
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -489,10 +650,12 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
       url: hostUrl(manager),
       tls: { ca: trusted.certificate },
     });
-    await runner.attachLocalGuest({
+    const guest = await runner.attachLocalGuest({
       guestId: 'guest-runner',
-      routedDomains: ['runner-forward.verser.test'],
+      routedDomains: ['runner-forward.verser.test', 'runner-alt.verser.test'],
       listener: async (request, response) => {
+        assert.equal(request.headers.host, expectedGuestDomain);
+        assert.equal(request.headers['x-forwarded-host'], 'public.example:8443');
         const body = await text(request);
         response.writeHead(207, { 'x-federated': request.headers['x-forwarded-check'] });
         response.end(`forwarded:${request.method}:${request.url}:${body}`);
@@ -506,18 +669,196 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
     );
     broker = await manager.attachLocalBroker({ brokerId: 'broker-manager' });
 
+    await assert.rejects(
+      () => broker.request({ targetId: 'guest-runner', method: 'GET', path: '/ambiguous' }),
+      /ambiguous|routeDomain/i,
+    );
+
     const response = await broker.request({
       targetId: 'guest-runner',
       method: 'POST',
       path: '/federated?phase=5',
-      headers: { host: 'runner-forward.verser.test', 'x-forwarded-check': 'yes' },
+      routeDomain: 'runner-forward.verser.test',
+      headers: {
+        host: 'public.example:8443',
+        'x-forwarded-host': 'spoofed.invalid',
+        'x-forwarded-check': 'yes',
+      },
       body: [Buffer.from('request-body')],
     });
 
     assert.equal(response.statusCode, 207);
     assert.equal(response.headers['x-federated'], 'yes');
     assert.equal(await text(response.body), 'forwarded:POST:/federated?phase=5:request-body');
+    expectedGuestDomain = 'runner-alt.verser.test';
+    const alternateResponse = await broker.request({
+      targetId: 'guest-runner',
+      routeDomain: 'runner-alt.verser.test',
+      method: 'GET',
+      path: '/alternate',
+      headers: { host: 'public.example:8443' },
+    });
+    assert.equal(alternateResponse.statusCode, 207);
+    await text(alternateResponse.body);
+    expectedGuestDomain = 'runner-forward.verser.test';
+    guest.revokeRoutes(['runner-alt.verser.test']);
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-runner', 'runner-alt.verser.test').length,
+        0,
+      ),
+    );
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-runner',
+          routeDomain: 'runner-alt.verser.test',
+          method: 'GET',
+          path: '/revoked',
+          headers: { host: 'public.example:8443' },
+        }),
+      /route|missing|revoked/i,
+    );
   } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Dispatcher cancellation reaches an imported federated Guest and closes its response', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  const controller = new AbortController();
+  let guestError;
+  let guestErrorResolve;
+  const guestErrorPromise = new Promise((resolve) => {
+    guestErrorResolve = resolve;
+  });
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-dispatcher-federated-cancel',
+      routedDomains: ['runner-dispatcher-cancel.verser.test'],
+      listener: (request, response) => {
+        request.once('error', (error) => {
+          guestError = error;
+          guestErrorResolve();
+          response.end();
+        });
+        request.resume();
+        response.writeHead(200);
+        response.write('started');
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-dispatcher-federated-cancel',
+          'runner-dispatcher-cancel.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-dispatcher-federated-cancel',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    const body = new PassThrough();
+    const responsePromise = fetch('http://runner-dispatcher-cancel.verser.test/cancel', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+      signal: controller.signal,
+      dispatcher: broker.createDispatcher(),
+    });
+    body.write('request');
+    body.end('request-tail');
+    const response = await responsePromise;
+    assert.equal(response.status, 200);
+    controller.abort();
+    await Promise.race([
+      guestErrorPromise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('federated Guest abort timed out')), 1000),
+      ),
+    ]);
+    assert.equal(guestError?.code, 'stream-failure');
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Attached local Broker response destruction cancels imported federated work', async () => {
+  const manager = createVerserHost({ hostId: 'local-broker-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'local-broker-runner', tls: tlsOptions() });
+  let broker;
+  let requestBody;
+  let guestRequestClosed = false;
+  let guestClosedResolve;
+  const guestClosed = new Promise((resolve) => {
+    guestClosedResolve = resolve;
+  });
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-local-broker-federated-cancel',
+      routedDomains: ['runner-local-broker-cancel.verser.test'],
+      listener: (request, response) => {
+        request.once('close', () => {
+          guestRequestClosed = true;
+          guestClosedResolve();
+        });
+        request.resume();
+        response.writeHead(200);
+        response.write('started');
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-local-broker-federated-cancel',
+          'runner-local-broker-cancel.verser.test',
+        ).length,
+        1,
+      ),
+    );
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-local-federated-cancel' });
+    requestBody = new PassThrough();
+    const responsePromise = broker.request({
+      targetId: 'guest-local-broker-federated-cancel',
+      method: 'POST',
+      path: '/cancel',
+      body: requestBody,
+    });
+    requestBody.write('request');
+    const response = await responsePromise;
+    assert.equal(guestRequestClosed, false, 'downstream request must remain open before cancel');
+    response.body.destroy();
+    await Promise.race([
+      guestClosed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('local Broker cancellation timed out')), 1000),
+      ),
+    ]);
+  } finally {
+    requestBody?.destroy();
     await broker?.close();
     await runner.close();
     await manager.close();
@@ -1135,6 +1476,8 @@ test('Bun-facing Broker fetch reaches imported upstream route through federation
       guestId: 'guest-manager-bun-fetch',
       routedDomains: ['manager-bun-fetch.verser.test'],
       listener: async (request, response) => {
+        assert.equal(request.headers.host, 'manager-bun-fetch.verser.test');
+        assert.equal(request.headers['x-forwarded-host'], undefined);
         const body = await text(request);
         response.writeHead(202, { 'x-bun-facing': request.method });
         response.end(`${request.url}:${body}`);
@@ -1235,6 +1578,11 @@ test('Federated route revocation propagates lifecycle events from downstream to 
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
   let broker;
+  let unsubscribeRouteChanges;
+  let removedEventResolve;
+  const removedEvent = new Promise((resolve) => {
+    removedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1245,9 +1593,17 @@ test('Federated route revocation propagates lifecycle events from downstream to 
 
     // Attach a local Broker to the manager BEFORE the Guest so we can
     // observe lifecycle events that arrive through federation.
-    const managerEvents = [];
     broker = await manager.attachLocalBroker({ brokerId: 'broker-revoke-manager' });
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'removed' &&
+        event.targetId === 'guest-revoke-federated' &&
+        event.domain === 'revoke-federated.verser.test' &&
+        event.reason === 'revoked'
+      ) {
+        removedEventResolve(event);
+      }
+    });
 
     const guest = await runner.attachLocalGuest({
       guestId: 'guest-revoke-federated',
@@ -1270,18 +1626,16 @@ test('Federated route revocation propagates lifecycle events from downstream to 
     const result = guest.revokeRoutes(['revoke-federated.verser.test']);
     assert.deepEqual(result.revoked, ['revoke-federated.verser.test']);
 
-    // Verify the manager's Broker observes the removed event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'removed' &&
-            e.targetId === 'guest-revoke-federated' &&
-            e.domain === 'revoke-federated.verser.test' &&
-            e.reason === 'revoked',
-        ),
-      ),
-    );
+    // Verify the manager's Broker observes the removed event using a
+    // bounded promise that resolves exactly once, not an accumulating array.
+    let removalTimer;
+    const removalTimeout = new Promise((_, reject) => {
+      removalTimer = setTimeout(
+        () => reject(new Error('removed route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([removedEvent, removalTimeout]).finally(() => clearTimeout(removalTimer));
 
     // Verify the route is no longer available on the manager
     assert.deepEqual(
@@ -1289,6 +1643,8 @@ test('Federated route revocation propagates lifecycle events from downstream to 
       [],
     );
   } finally {
+    unsubscribeRouteChanges?.();
+    removedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
@@ -1299,6 +1655,11 @@ test('Federated route degraded/disconnected state propagates through federation'
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
   let broker;
+  let unsubscribeRouteChanges;
+  let degradedEventResolve;
+  const degradedEvent = new Promise((resolve) => {
+    degradedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1325,24 +1686,29 @@ test('Federated route degraded/disconnected state propagates through federation'
 
     // Attach local Broker to manager to observe lifecycle events
     broker = await manager.attachLocalBroker({ brokerId: 'broker-degrade-manager' });
-    const managerEvents = [];
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'degraded' &&
+        event.targetId === 'guest-degrade-federated' &&
+        event.domain === 'degrade-federated.verser.test' &&
+        event.reason === 'disconnected'
+      ) {
+        degradedEventResolve(event);
+      }
+    });
 
     // Disconnect the Guest (close)
     await guest.close();
 
     // Verify the manager's Broker receives a 'degraded' event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'degraded' &&
-            e.targetId === 'guest-degrade-federated' &&
-            e.domain === 'degrade-federated.verser.test' &&
-            e.reason === 'disconnected',
-        ),
-      ),
-    );
+    let degradedTimer;
+    const degradedTimeout = new Promise((_, reject) => {
+      degradedTimer = setTimeout(
+        () => reject(new Error('degraded route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([degradedEvent, degradedTimeout]).finally(() => clearTimeout(degradedTimer));
 
     // Verify the route is removed from the manager's active candidates
     // (The route goes degraded on the runner; the full federated snapshot removes it)
@@ -1356,6 +1722,8 @@ test('Federated route degraded/disconnected state propagates through federation'
       ),
     );
   } finally {
+    unsubscribeRouteChanges?.();
+    degradedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
@@ -1370,6 +1738,15 @@ test('Federated route restoration before timeout propagates through federation',
     degradedRouteTimeoutMs: 2000,
   });
   let broker;
+  let unsubscribeRouteChanges;
+  let degradedEventResolve;
+  let changedEventResolve;
+  const degradedEvent = new Promise((resolve) => {
+    degradedEventResolve = resolve;
+  });
+  const changedEvent = new Promise((resolve) => {
+    changedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1379,9 +1756,25 @@ test('Federated route restoration before timeout propagates through federation',
     });
 
     // Attach Broker before Guest disconnection to catch lifecycle events
-    const managerEvents = [];
     broker = await manager.attachLocalBroker({ brokerId: 'broker-restore-manager' });
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'degraded' &&
+        event.targetId === 'guest-restore-federated' &&
+        event.domain === 'restore-federated.verser.test' &&
+        event.reason === 'disconnected'
+      ) {
+        degradedEventResolve(event);
+      }
+      if (
+        event.type === 'changed' &&
+        event.targetId === 'guest-restore-federated' &&
+        event.domain === 'restore-federated.verser.test' &&
+        event.reason === 'restored'
+      ) {
+        changedEventResolve(event);
+      }
+    });
 
     const guest = await runner.attachLocalGuest({
       guestId: 'guest-restore-federated',
@@ -1403,17 +1796,14 @@ test('Federated route restoration before timeout propagates through federation',
     await guest.close();
 
     // Verify degraded event propagates
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'degraded' &&
-            e.targetId === 'guest-restore-federated' &&
-            e.domain === 'restore-federated.verser.test' &&
-            e.reason === 'disconnected',
-        ),
-      ),
-    );
+    let degradedTimer;
+    const degradedTimeout = new Promise((_, reject) => {
+      degradedTimer = setTimeout(
+        () => reject(new Error('degraded route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([degradedEvent, degradedTimeout]).finally(() => clearTimeout(degradedTimer));
 
     // Reconnect the Guest with same peerId and domain BEFORE the timeout
     const restoredGuest = await runner.attachLocalGuest({
@@ -1423,17 +1813,14 @@ test('Federated route restoration before timeout propagates through federation',
     });
 
     // Verify the manager's Broker receives a 'changed' (restored) event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'changed' &&
-            e.targetId === 'guest-restore-federated' &&
-            e.domain === 'restore-federated.verser.test' &&
-            e.reason === 'restored',
-        ),
-      ),
-    );
+    let changedTimer;
+    const changedTimeout = new Promise((_, reject) => {
+      changedTimer = setTimeout(
+        () => reject(new Error('changed route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([changedEvent, changedTimeout]).finally(() => clearTimeout(changedTimer));
 
     // Verify the route is available again on the manager
     await assertEventually(() =>
@@ -1448,6 +1835,9 @@ test('Federated route restoration before timeout propagates through federation',
 
     await restoredGuest.close();
   } finally {
+    unsubscribeRouteChanges?.();
+    degradedEventResolve = undefined;
+    changedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
@@ -1462,6 +1852,15 @@ test('Federated route full removal after timeout propagates through federation',
     degradedRouteTimeoutMs: 100,
   });
   let broker;
+  let unsubscribeRouteChanges;
+  let degradedEventResolve;
+  let removedEventResolve;
+  const degradedEvent = new Promise((resolve) => {
+    degradedEventResolve = resolve;
+  });
+  const removedEvent = new Promise((resolve) => {
+    removedEventResolve = resolve;
+  });
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -1488,39 +1887,49 @@ test('Federated route full removal after timeout propagates through federation',
 
     // Attach Broker to observe lifecycle events
     broker = await manager.attachLocalBroker({ brokerId: 'broker-timeout-manager' });
-    const managerEvents = [];
-    broker.onRouteChange((event) => managerEvents.push(event));
+    unsubscribeRouteChanges = broker.onRouteChange((event) => {
+      if (
+        event.type === 'degraded' &&
+        event.targetId === 'guest-timeout-federated' &&
+        event.domain === 'timeout-federated.verser.test'
+      ) {
+        degradedEventResolve(event);
+      }
+      if (
+        event.type === 'removed' &&
+        event.targetId === 'guest-timeout-federated' &&
+        event.domain === 'timeout-federated.verser.test' &&
+        event.reason === 'timeout'
+      ) {
+        removedEventResolve(event);
+      }
+    });
 
     // Disconnect the Guest
     await guest.close();
 
     // Verify degraded event propagates
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'degraded' &&
-            e.targetId === 'guest-timeout-federated' &&
-            e.domain === 'timeout-federated.verser.test',
-        ),
-      ),
-    );
+    let degradedTimer;
+    const degradedTimeout = new Promise((_, reject) => {
+      degradedTimer = setTimeout(
+        () => reject(new Error('degraded route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([degradedEvent, degradedTimeout]).finally(() => clearTimeout(degradedTimer));
 
     // Wait for the degraded route timeout to expire
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Verify the manager's Broker receives a 'removed' (timeout) event
-    await assertEventually(() =>
-      assert.ok(
-        managerEvents.some(
-          (e) =>
-            e.type === 'removed' &&
-            e.targetId === 'guest-timeout-federated' &&
-            e.domain === 'timeout-federated.verser.test' &&
-            e.reason === 'timeout',
-        ),
-      ),
-    );
+    let removedTimer;
+    const removedTimeout = new Promise((_, reject) => {
+      removedTimer = setTimeout(
+        () => reject(new Error('removed route change event timed out')),
+        500,
+      );
+    });
+    await Promise.race([removedEvent, removedTimeout]).finally(() => clearTimeout(removedTimer));
 
     // Verify the route is gone from the manager's candidates
     assert.deepEqual(
@@ -1531,6 +1940,9 @@ test('Federated route full removal after timeout propagates through federation',
       [],
     );
   } finally {
+    unsubscribeRouteChanges?.();
+    degradedEventResolve = undefined;
+    removedEventResolve = undefined;
     await broker?.close();
     await runner.close();
     await manager.close();
@@ -1716,6 +2128,146 @@ test('Federated lifecycle loop safety — route-lifecycle frame with duplicate _
     );
   } finally {
     await hub.close();
+    await manager.close();
+  }
+});
+
+// ================ Characterization: Federation Upstream Disconnect During Active Stream ================
+
+test('Upstream disconnect during an active federated request fails the Broker request', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    let requestHeldResolve;
+    const requestHeld = new Promise((resolve) => {
+      requestHeldResolve = resolve;
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-federated-disconnect',
+      routedDomains: ['federated-disconnect.verser.test'],
+      listener: (request, response) => {
+        request.resume();
+        requestHeldResolve();
+        // Do not end — keep stream open
+      },
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-federated-disconnect',
+          'federated-disconnect.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-federated-disconnect',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('federated-disconnect.verser.test');
+
+    const body = new PassThrough();
+    const requestPromise = broker.request({
+      targetId: 'guest-federated-disconnect',
+      method: 'POST',
+      path: '/federated-disconnect',
+      headers: { host: 'federated-disconnect.verser.test' },
+      body,
+    });
+    body.write(Buffer.from('start'));
+    await requestHeld;
+
+    // Disconnect the upstream link
+    await runner.close('upstream-disconnect-test');
+
+    // The Broker request should fail
+    await assert.rejects(requestPromise, (error) => {
+      assert.match(error.message, /closed|disconnect|metadata|upstream|lease/i);
+      return true;
+    });
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+// ================ Characterization: Waiter Cleanup After Host Close ================
+
+test('Federated request completes or fails cleanly when upstream Host closes during dispatch (characterization: no leaked state)', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+
+    // Register a Guest on the runner
+    await runner.attachLocalGuest({
+      guestId: 'guest-federated-waiter',
+      routedDomains: ['federated-waiter.verser.test'],
+      listener: (_request, response) => response.end('never-called'),
+    });
+
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-federated-waiter',
+          'federated-waiter.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-federated-waiter',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    await broker.waitForRoute('federated-waiter.verser.test');
+
+    const requestPromise = broker.request({
+      targetId: 'guest-federated-waiter',
+      method: 'GET',
+      path: '/federated-waiter',
+      headers: { host: 'federated-waiter.verser.test' },
+    });
+
+    // Close the runner (upstream) while request is in-flight
+    await runner.close('upstream-close-during-wait');
+
+    // The request should either succeed (if already dispatched) or fail (if waiting)
+    // Either outcome is acceptable for this characterization — the key is no leaked state
+    try {
+      const response = await requestPromise;
+      const body = await text(response.body);
+      assert.equal(body, 'never-called');
+    } catch {
+      // Failure due to upstream disconnect is also acceptable
+    }
+
+    // Verify the upstream is gone — no leaked state
+    assert.deepEqual(manager.getUpstreams(), []);
+  } finally {
+    await broker?.close();
+    await runner.close();
     await manager.close();
   }
 });

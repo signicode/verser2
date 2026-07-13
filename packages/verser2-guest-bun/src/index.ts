@@ -46,6 +46,8 @@ export type {
   VerserBunGuestRequestHandler,
 } from './lib/types';
 
+import { Readable } from 'node:stream';
+
 import { resolveRouteForUrl } from '@signicode/verser-common';
 import type {
   VerserBroker,
@@ -147,51 +149,69 @@ export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
         throw new Error(`No Verser route advertised for host ${requestUrl.hostname}`);
       }
 
-      const requestBodyBuffer = await request.arrayBuffer();
+      const reqBodyStream = request.body;
       const hasBody =
-        requestBodyBuffer.byteLength > 0 && request.method !== 'GET' && request.method !== 'HEAD';
+        reqBodyStream !== null && request.method !== 'GET' && request.method !== 'HEAD';
 
+      let reqBody: readonly Buffer[] | Readable | undefined;
+      if (hasBody) {
+        // Convert the Web ReadableStream to a Node Readable for streaming
+        // instead of eagerly buffering with arrayBuffer().
+        reqBody = Readable.from(reqBodyStream);
+      }
+
+      const requestHeaders = Object.fromEntries(request.headers.entries());
+      if (!requestHeaders.host && !requestHeaders[':authority']) {
+        requestHeaders.host = requestUrl.host;
+      }
       const response = await nodeBroker.request({
         targetId: route.targetId,
+        routeDomain: route.domain,
         method: request.method,
         path: `${requestUrl.pathname}${requestUrl.search}`,
-        headers: Object.fromEntries(request.headers.entries()),
-        body: hasBody ? [Buffer.from(requestBodyBuffer)] : undefined,
+        headers: requestHeaders,
+        body: reqBody,
       });
 
       const body = response.body;
       const readableBody = new ReadableStream<Uint8Array>({
-        async start(controller) {
-          try {
-            for await (const chunk of body) {
-              if (typeof chunk === 'string') {
-                controller.enqueue(Buffer.from(chunk));
-                continue;
-              }
-              if (Buffer.isBuffer(chunk)) {
-                controller.enqueue(chunk);
-                continue;
-              }
-              if (chunk instanceof Uint8Array) {
-                controller.enqueue(chunk);
-                continue;
-              }
-              if (chunk instanceof ArrayBuffer) {
-                controller.enqueue(new Uint8Array(chunk));
-                continue;
-              }
-              if (chunk != null) {
-                controller.enqueue(Buffer.from(String(chunk)));
-              }
+        start(controller) {
+          const onData = (chunk: unknown) => {
+            try {
+              if (typeof chunk === 'string') controller.enqueue(Buffer.from(chunk));
+              else if (Buffer.isBuffer(chunk)) controller.enqueue(chunk);
+              else if (chunk instanceof Uint8Array) controller.enqueue(chunk);
+              else if (chunk instanceof ArrayBuffer) controller.enqueue(new Uint8Array(chunk));
+              else if (chunk != null) controller.enqueue(Buffer.from(String(chunk)));
+              body.pause();
+            } catch (error: unknown) {
+              body.destroy(error instanceof Error ? error : new Error(String(error)));
+              controller.error(error);
             }
+          };
+          const onEnd = () => {
+            cleanup();
             controller.close();
-          } catch (error: unknown) {
+          };
+          const onError = (error: unknown) => {
+            cleanup();
             controller.error(error);
-          }
+          };
+          const cleanup = () => {
+            body.off('data', onData);
+            body.off('end', onEnd);
+            body.off('error', onError);
+          };
+          body.on('data', onData);
+          body.once('end', onEnd);
+          body.once('error', onError);
+          body.pause();
+        },
+        pull() {
+          body.resume();
         },
         cancel(reason) {
-          const destroyReason: unknown = reason instanceof Error ? reason : String(reason);
-          body.destroy(destroyReason as Error);
+          body.destroy(reason instanceof Error ? reason : new Error(String(reason)));
         },
       });
 

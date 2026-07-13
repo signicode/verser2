@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import type * as http2 from 'node:http2';
+import * as http2 from 'node:http2';
 import { PassThrough, Readable } from 'node:stream';
 
 import {
@@ -48,6 +48,13 @@ export class MinimalIncomingMessage extends PassThrough {
     const bodySource = source ?? Readable.from(request.body);
     bodySource.once('error', (error) => this.destroy(error));
     bodySource.pipe(this);
+
+    // Default error handler to prevent process crashes from unhandled
+    // 'error' events (e.g. remote H2 stream cancellation arriving after
+    // the request stream has ended normally via the pipe).  Handlers
+    // that call `request.on('error', ...)` will still receive the event;
+    // handlers that don't listen for errors are protected from crashes.
+    this.on('error', () => {});
   }
 }
 
@@ -74,6 +81,13 @@ export class MinimalIncomingMessage extends PassThrough {
 export class MinimalServerResponse extends EventEmitter {
   /** HTTP response status code. Defaults to `200`. */
   public statusCode = 200;
+
+  /**
+   * Whether `end()` has been called on this response.
+   *
+   * Set to `true` by `end()`, used to detect premature output stream closure.
+   */
+  public finished = false;
 
   private readonly headers = new Map<string, string>();
 
@@ -105,6 +119,25 @@ export class MinimalServerResponse extends EventEmitter {
     this.maxResponseBytes = maxResponseBytes;
     output?.on('drain', () => this.emit('drain'));
     output?.on('error', (error) => this.emit('error', error));
+    // If the output stream closes (remote RST) before response ends, emit
+    // an error so handlers can detect premature stream closure.
+    output?.once('close', () => {
+      if (
+        !this.finished &&
+        output.rstCode !== undefined &&
+        output.rstCode !== http2.constants.NGHTTP2_NO_ERROR
+      ) {
+        const closeError = createVerserError(
+          'stream-failure',
+          'Output stream was closed by remote peer',
+          {
+            requestId: this.requestId ?? '',
+            rstCode: String(output.rstCode),
+          },
+        );
+        this.emit('error', closeError);
+      }
+    });
   }
 
   /**
@@ -226,6 +259,7 @@ export class MinimalServerResponse extends EventEmitter {
     } else if (this.output !== undefined) {
       this.startStreamingResponse();
     }
+    this.finished = true;
     this.output?.end();
     this.emit('finish');
     return this;

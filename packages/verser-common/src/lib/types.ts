@@ -163,6 +163,8 @@ export interface RoutedRequestEnvelope {
   readonly sourceId: VerserPeerId;
   /** The Guest that should handle this request. */
   readonly targetId: VerserGuestId;
+  /** Optional advertised route domain selected by the Host. */
+  readonly routeDomain?: string;
   /** HTTP method (e.g. `GET`, `POST`). */
   readonly method: string;
   /** Request path (e.g. `/api/users`). */
@@ -255,6 +257,8 @@ export interface VerserRequestEnvelopeMetadata {
   readonly sourceId: VerserPeerId;
   /** The Guest peer that should handle this request. */
   readonly targetId: VerserGuestId;
+  /** Optional advertised route domain selected by the Host. */
+  readonly routeDomain?: string;
   /** HTTP method (e.g. `GET`, `POST`). */
   readonly method: string;
   /** Request path (e.g. `/api/users`). */
@@ -396,6 +400,8 @@ export interface VerserEnvelopeStreamReadOptions extends VerserEnvelopeParserOpt
 export interface VerserCommonBrokerRequest<TBody = unknown> {
   /** The target Guest ID for this request. */
   readonly targetId: string;
+  /** Optional advertised route domain selected for the target Guest. */
+  readonly routeDomain?: string;
   /** HTTP method (e.g. `GET`, `POST`). */
   readonly method: string;
   /** Request path (e.g. `/api/users`). */

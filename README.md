@@ -79,6 +79,7 @@ response.body.pipe(process.stdout);
 - [Connecting](./docs/connecting.md) — create a Host, connect Guests and Brokers
 - [Exposing HTTP handlers](./docs/exposing-http.md) — attach Node, Bun, or Python handlers
 - [Making requests](./docs/making-requests.md) — Broker request, Agent, Dispatcher, Fetch
+- [VWS/1 WebSockets](./docs/websockets.md) — direct Node and Python ASGI WebSocket APIs
 - [Routes](./docs/routes.md) — route advertisement and exact hostname matching
 - [Host federation and upstreams](./docs/host-federation.md) — Host-to-Host links, topology, and HA limits
 - [Certificates](./docs/certificates.md) — TLS configuration, mTLS, self-signed certs
@@ -109,13 +110,18 @@ validation commands.
 
 - HTTP/3 is not implemented.
 - Browser, Rust, Go, Java, and Python Host implementations are not implemented.
-- WebSocket upgrade, CONNECT tunneling, trailers, and informational responses
-  are not forwarded through the verser transport.
+- VWS/1 WebSockets use explicit framed messages over the existing TLS HTTP/2
+  transport. Node exposes `broker.webSocket()` and `guest.attachWebSocket()`;
+  the Python Guest maps VWS leases to ASGI websocket scopes. Generic HTTP/1
+  upgrades, CONNECT/RFC8441, and L4 forwarding are unsupported.
+- Dispatcher/Agent upgrade handling remains unsupported. Bun
+  `server.upgrade()` returns `false`; Bun WebSocket Guest support is deferred.
 - verser2 is not a complete public gateway. Applications remain responsible for
   authentication, authorization, and routing policy.
 - Per-request Broker target authorization is not implemented.
 - Host-to-Host federation is route-aware; generic L4 tunneling and active
   in-flight request migration are not implemented.
+- Federated WebSocket routes are explicitly unsupported.
 
 ## Status
 

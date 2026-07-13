@@ -15,6 +15,8 @@ over TLS HTTP/2 and provides request routing without opening inbound ports.
 - `broker.onRouteChange(listener)` — observe route lifecycle events (`added`, `removed`,
   `changed`, `degraded`) with payload `{ type, targetId, domain, reason?, generation? }`
 - Constant: `VERSER2_GUEST_NODE_PACKAGE_NAME`
+- `VerserWebSocket` — VWS/1 WebSocket object; `webSocket()` and
+  `attachWebSocket()` provide the direct Broker/Guest APIs.
 
 ## Basic usage
 
@@ -51,6 +53,25 @@ const response = await broker.request({
   path: '/',
 });
 ```
+
+## VWS/1 WebSockets
+
+Node Broker and Guest WebSockets use explicit VWS/1 framed messages over the
+existing TLS HTTP/2 connection:
+
+```ts
+guest.attachWebSocket((_open, ws) => {
+  ws.on('message', async (data, options) => await ws.send(data, options));
+  ws.on('close', (code, reason) => console.log(code, reason));
+}, 'chat.local.test');
+
+const ws = await broker.webSocket({ targetId: 'client-a', domain: 'chat.local.test' });
+await ws.send('hello', { type: 'text' });
+```
+
+`send()` observes backpressure. This is not generic HTTP/1 upgrade forwarding;
+Agent/Dispatcher upgrades, CONNECT/RFC8441, L4 forwarding, and federated
+WebSocket routes are unsupported.
 
 ## Broker routing
 
@@ -114,8 +135,8 @@ The Host responds with `ack` (all revoked), `partial` (some failed), or `error`
   domain.
 - Minimal HTTP objects do not implement the full Node `IncomingMessage` /
   `ServerResponse` / socket surface.
-- WebSocket upgrade, CONNECT, trailers, and informational responses are not
-  forwarded.
+- Generic WebSocket upgrade, CONNECT/RFC8441, trailers, and informational
+  responses are not forwarded. VWS/1 is the only supported WebSocket surface.
 - Agent keep-alive pooling, HTTPS Agent behavior, and advanced socket features
   are not implemented.
 
@@ -125,4 +146,5 @@ The Host responds with `ack` (all revoked), `partial` (some failed), or `error`
 - [Docs: Connecting](../../docs/connecting.md)
 - [Docs: Exposing HTTP](../../docs/exposing-http.md)
 - [Docs: Making requests](../../docs/making-requests.md)
+- [Docs: VWS/1 WebSockets](../../docs/websockets.md)
 - [Docs: Lifecycle and errors](../../docs/lifecycle-and-errors.md)

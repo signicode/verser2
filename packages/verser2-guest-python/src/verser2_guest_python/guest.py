@@ -16,10 +16,13 @@ import h2.events
 from ._tls import create_client_ssl_context, load_pfx_client_identity, validate_h2_alpn
 from .asgi import (
     DEFAULT_MAX_RESPONSE_BYTES,
+    VWS_MAX_FRAME_BYTES,
     ASGIApp,
     DispatchResponse,
     build_http_scope,
     dispatch_asgi_request,
+    VwsAsgiConnection,
+    build_websocket_scope,
 )
 from .protocol import (
     VERSER_ENVELOPE_PREFIX_BYTES,
@@ -139,6 +142,7 @@ class VerserGuest:
         self._lease_counter = 0
         self._lease_tasks: list[asyncio.Task[None]] = []
         self._closed = False
+        self._window_waiters: dict[int, list[asyncio.Future[None]]] = {}
 
     def attach(self, app: ASGIApp, domain: str | None = None) -> "VerserGuest":
         """Attach an ASGI app to this Guest.
@@ -264,6 +268,8 @@ class VerserGuest:
         await self._open_control_stream()
         for _ in range(self.min_waiting_streams):
             self._start_lease_task()
+        if self.app is not None:
+            self._start_ws_lease_task()
 
     def _create_ssl_context(self) -> ssl.SSLContext:
         return create_client_ssl_context(
@@ -353,6 +359,8 @@ class VerserGuest:
         self._closed = True
         for task in self._lease_tasks:
             task.cancel()
+        await asyncio.gather(*self._lease_tasks, return_exceptions=True)
+        self._fail_window_waiters(RuntimeError("Guest closed while sending data"))
         if self._reader_task is not None:
             self._reader_task.cancel()
         writer = self._writer
@@ -413,6 +421,112 @@ class VerserGuest:
 
         task.add_done_callback(prune)
 
+    def _start_ws_lease_task(self) -> None:
+        task = asyncio.create_task(self._open_websocket_lease_stream())
+        self._lease_tasks.append(task)
+
+        def prune(completed_task: asyncio.Task[None]) -> None:
+            try:
+                self._lease_tasks.remove(completed_task)
+            except ValueError:
+                pass
+
+        task.add_done_callback(prune)
+
+    async def _open_websocket_lease_stream(self) -> None:
+        stream_id = await self._send_headers(
+            [
+                (":method", "POST"),
+                (":scheme", "https"),
+                (":authority", self._authority()),
+                (":path", "/verser/guest/websocket-lease"),
+                ("x-verser-peer-id", self.guest_id),
+            ],
+            end_stream=False,
+        )
+        cancelled = False
+        try:
+            await self._wait_for_success_response(stream_id)
+            await self._read_websocket_lease(stream_id)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            self._events.pop(stream_id, None)
+            if not self._closed and not cancelled:
+                self._start_ws_lease_task()
+
+    async def _read_websocket_lease(self, stream_id: int) -> None:
+        buffer = b""
+        while not self._closed:
+            event = await self._events[stream_id].get()
+            if isinstance(event, Exception):
+                return
+            if isinstance(event, h2.events.DataReceived):
+                await self._acknowledge_received_data(
+                    stream_id, int(event.flow_controlled_length)
+                )
+                buffer += event.data
+                if len(buffer) > VWS_MAX_FRAME_BYTES:
+                    await self._send_data(
+                        stream_id,
+                        b'{"type":"close","code":1009,"reason":"frame too large"}\n',
+                        False,
+                    )
+                    return
+                if b"\n" not in buffer:
+                    continue
+                line, buffer = buffer.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                try:
+                    frame = json.loads(line.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    await self._send_data(
+                        stream_id,
+                        b'{"type":"close","code":1002,"reason":"protocol error"}\n',
+                        False,
+                    )
+                    return
+                if not isinstance(frame, dict) or frame.get("type") != "open":
+                    await self._send_data(
+                        stream_id,
+                        b'{"type":"close","code":1002,"reason":"expected open"}\n',
+                        False,
+                    )
+                    return
+                # Validate VWS OPEN schema fields before scope construction.
+                domain = frame.get("domain")
+                if not isinstance(domain, str) or not domain:
+                    await self._send_data(
+                        stream_id,
+                        b'{"type":"close","code":1002,"reason":"protocol error"}\n',
+                        False,
+                    )
+                    return
+                path = frame.get("path")
+                if path is not None and not isinstance(path, str):
+                    await self._send_data(
+                        stream_id,
+                        b'{"type":"close","code":1002,"reason":"protocol error"}\n',
+                        False,
+                    )
+                    return
+                protocol = frame.get("protocol")
+                if protocol is not None and not isinstance(protocol, str):
+                    await self._send_data(
+                        stream_id,
+                        b'{"type":"close","code":1002,"reason":"protocol error"}\n',
+                        False,
+                    )
+                    return
+                await self._dispatch_leased_websocket_stream(
+                    stream_id, line + b"\n" + buffer
+                )
+                return
+            if isinstance(event, (h2.events.StreamReset, h2.events.StreamEnded)):
+                return
+
     async def _open_lease_stream(self) -> None:
         self._lease_counter += 1
         lease_id = f"{self.guest_id}-lease-{self._lease_counter}"
@@ -461,6 +575,8 @@ class VerserGuest:
         app_task: asyncio.Task[None] | None = None
         response_started = False
         response_ended = False
+        stream_reset = False
+        connection_error: Exception | None = None
 
         async def receive() -> dict[str, Any]:
             event = await request_events.get()
@@ -506,6 +622,9 @@ class VerserGuest:
             assert metadata is not None
             try:
                 await self.app(build_http_scope(metadata), receive, send)
+            except asyncio.CancelledError:
+                # Stream reset cancelled dispatch — clean exit, no further sends.
+                return
             except Exception as error:  # noqa: BLE001 - app exceptions become protocol errors.
                 if response_started:
                     if not response_ended:
@@ -561,16 +680,39 @@ class VerserGuest:
                     }
                 )
             elif pending_metadata_flow_controlled_length:
-                asyncio.create_task(
+                task = asyncio.create_task(
                     self._acknowledge_received_data(
                         stream_id, pending_metadata_flow_controlled_length
                     )
+                )
+                task.add_done_callback(
+                    lambda t: t.exception() if not t.cancelled() else None
                 )
             pending_metadata_flow_controlled_length = 0
             app_task = asyncio.create_task(run_app())
 
         while True:
             event = await self._events[stream_id].get()
+            # Connection-level errors from _fail_pending_streams — cancel
+            # the app task and propagate after cleanup.
+            if isinstance(event, Exception):
+                connection_error = event
+                request_events.put_nowait(
+                    {"type": "http.request", "body": b"", "more_body": False}
+                )
+                if app_task is not None and not app_task.done():
+                    app_task.cancel()
+                break
+            # Stream reset (e.g. remote cancellation) — unblock receive()
+            # and cancel the app dispatch cleanly rather than hanging.
+            if isinstance(event, h2.events.StreamReset):
+                stream_reset = True
+                request_events.put_nowait(
+                    {"type": "http.request", "body": b"", "more_body": False}
+                )
+                if app_task is not None and not app_task.done():
+                    app_task.cancel()
+                break
             if isinstance(event, h2.events.DataReceived):
                 if metadata is None:
                     pending_metadata_flow_controlled_length += int(
@@ -579,24 +721,227 @@ class VerserGuest:
                     buffer += event.data
                     try_start_app()
                 else:
-                    request_events.put_nowait(
-                        {
-                            "type": "http.request",
-                            "body": event.data,
-                            "more_body": True,
-                            "_flow_controlled_length": event.flow_controlled_length,
-                        }
-                    )
+                    # Guard: don't queue body data if app already finished
+                    if app_task is None or not app_task.done():
+                        request_events.put_nowait(
+                            {
+                                "type": "http.request",
+                                "body": event.data,
+                                "more_body": True,
+                                "_flow_controlled_length": event.flow_controlled_length,
+                            }
+                        )
+                    else:
+                        # App already finished — discard body but ack flow
+                        # control credit so the sender does not stall.
+                        # Await inline to avoid unobserved fire-and-forget tasks.
+                        await self._acknowledge_received_data(
+                            stream_id, int(event.flow_controlled_length)
+                        )
             if isinstance(event, h2.events.StreamEnded):
                 try_start_app()
-                request_events.put_nowait(
-                    {"type": "http.request", "body": b"", "more_body": False}
-                )
+                # Guard: don't queue final event if app already done/cancelled
+                if app_task is None or not app_task.done():
+                    request_events.put_nowait(
+                        {"type": "http.request", "body": b"", "more_body": False}
+                    )
                 break
 
+        if connection_error is not None:
+            # Connection/read-loop failure — cancel and clean up app task,
+            # then propagate the error so the lease stream is torn down.
+            if app_task is not None:
+                try:
+                    await app_task
+                except asyncio.CancelledError:
+                    pass
+            raise connection_error
+
         if app_task is None:
+            if stream_reset:
+                return  # Stream reset before app started — clean exit
             raise RuntimeError("Lease stream ended before request metadata arrived")
-        await app_task
+
+        try:
+            await app_task
+        except asyncio.CancelledError:
+            # App was cancelled due to stream reset — clean exit.
+            return
+
+        # Stream was reset but app finished before the cancellation took effect
+        # (or app_task was already done when StreamReset arrived).
+        if stream_reset:
+            return
+
+    async def _dispatch_leased_websocket_stream(
+        self, stream_id: int, initial: bytes
+    ) -> None:
+        """Dispatch a VWS/1 lease to an ASGI websocket application."""
+        if self.app is None:
+            await self._send_data(
+                stream_id,
+                b'{"type":"error","message":"No ASGI app is attached"}\n',
+                True,
+            )
+            return
+        if len(initial) > VWS_MAX_FRAME_BYTES:
+            raise RuntimeError("VWS frame exceeds maximum allowed size")
+        lines = initial.split(b"\n")
+        if not lines or not lines[0].strip():
+            raise RuntimeError("WebSocket lease did not begin with an open frame")
+        try:
+            opening = json.loads(lines[0].decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError("Malformed VWS open frame") from exc
+        if not isinstance(opening, dict) or opening.get("type") != "open":
+            raise RuntimeError("WebSocket lease did not begin with an open frame")
+        domain = opening.get("domain")
+        path = opening.get("path", "/")
+        requested_protocol = opening.get("protocol")
+        if (
+            not isinstance(domain, str)
+            or not domain
+            or not isinstance(path, str)
+            or (
+                requested_protocol is not None
+                and not isinstance(requested_protocol, str)
+            )
+        ):
+            raise RuntimeError("Malformed VWS open frame")
+
+        async def write(frame: dict[str, Any]) -> None:
+            await self._send_data(
+                stream_id,
+                (json.dumps(frame, separators=(",", ":")) + "\n").encode("utf-8"),
+                False,
+            )
+
+        offered_protocols = (
+            [
+                protocol.strip()
+                for protocol in requested_protocol.split(",")
+                if protocol.strip()
+            ]
+            if requested_protocol
+            else []
+        )
+        connection = VwsAsgiConnection(write, offered_protocols=offered_protocols)
+        metadata = {
+            "path": path,
+            "headers": (
+                {"sec-websocket-protocol": requested_protocol}
+                if requested_protocol
+                else {}
+            ),
+        }
+
+        async def run_websocket_app() -> None:
+            assert self.app is not None
+            await self.app(
+                build_websocket_scope(metadata), connection.receive, connection.send
+            )
+
+        app_task = asyncio.create_task(run_websocket_app())
+        h2_ended = False
+        transport_terminated = False
+        try:
+            await connection._events.put({"type": "websocket.connect"})
+            frame_buffer = lines[-1] if not initial.endswith(b"\n") else b""
+            complete_lines = lines[1:-1] if frame_buffer else lines[1:]
+            for line in complete_lines:
+                if len(frame_buffer) > VWS_MAX_FRAME_BYTES:
+                    raise RuntimeError("VWS frame exceeds maximum allowed size")
+                if line.strip():
+                    try:
+                        await connection.feed(json.loads(line.decode("utf-8")))
+                    except (ValueError, UnicodeError, json.JSONDecodeError):
+                        await connection._protocol_error()
+                        break
+            while not app_task.done() and not connection.closed:
+                event = await self._events[stream_id].get()
+                if isinstance(event, Exception):
+                    await connection.disconnect(1006)
+                    transport_terminated = True
+                    break
+                if isinstance(event, h2.events.DataReceived):
+                    await self._acknowledge_received_data(
+                        stream_id, int(event.flow_controlled_length)
+                    )
+                    frame_buffer += event.data
+                    if len(frame_buffer) > VWS_MAX_FRAME_BYTES:
+                        raise RuntimeError("VWS frame exceeds maximum allowed size")
+                    complete, separator, frame_buffer = frame_buffer.rpartition(b"\n")
+                    if not separator:
+                        continue
+                    for line in complete.split(b"\n"):
+                        if line.strip():
+                            try:
+                                await connection.feed(json.loads(line.decode("utf-8")))
+                            except (ValueError, UnicodeError, json.JSONDecodeError):
+                                await connection._protocol_error()
+                                break
+                elif isinstance(event, h2.events.StreamReset):
+                    await connection.disconnect(1006)
+                    h2_ended = True
+                    transport_terminated = True
+                    break
+                elif isinstance(event, h2.events.StreamEnded):
+                    await connection.disconnect(1006)
+                    h2_ended = True
+                    transport_terminated = True
+                    break
+            if not app_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(app_task), 0.25)
+                except asyncio.TimeoutError:
+                    app_task.cancel()
+                    await asyncio.gather(app_task, return_exceptions=True)
+            if not connection.closed and not connection.close_sent:
+                await connection.send({"type": "websocket.close", "code": 1000})
+            while not connection.closed and connection.close_sent:
+                try:
+                    event = await asyncio.wait_for(self._events[stream_id].get(), 1.0)
+                except asyncio.TimeoutError:
+                    await self._reset_stream(stream_id)
+                    h2_ended = True
+                    connection.closed = True
+                    break
+                if isinstance(event, h2.events.DataReceived):
+                    await self._acknowledge_received_data(
+                        stream_id, int(event.flow_controlled_length)
+                    )
+                    frame_buffer += event.data
+                    if len(frame_buffer) > VWS_MAX_FRAME_BYTES:
+                        await connection._protocol_error()
+                        await self._reset_stream(stream_id)
+                        h2_ended = True
+                        connection.closed = True
+                        break
+                    complete, separator, frame_buffer = frame_buffer.rpartition(b"\n")
+                    if separator:
+                        for line in complete.split(b"\n"):
+                            if line.strip():
+                                try:
+                                    await connection.feed(
+                                        json.loads(line.decode("utf-8"))
+                                    )
+                                except (ValueError, UnicodeError, json.JSONDecodeError):
+                                    await connection._protocol_error()
+                                    connection.closed = True
+                                    break
+                elif isinstance(
+                    event, (h2.events.StreamReset, h2.events.StreamEnded, Exception)
+                ):
+                    h2_ended = True
+                    connection.closed = True
+            if connection.closed and not h2_ended and not transport_terminated:
+                await self._send_data(stream_id, b"", True)
+                h2_ended = True
+        finally:
+            if not app_task.done():
+                app_task.cancel()
+                await asyncio.gather(app_task, return_exceptions=True)
+            self._events.pop(stream_id, None)
 
     async def _send_headers(
         self,
@@ -614,15 +959,75 @@ class VerserGuest:
             return stream_id
 
     async def _send_data(self, stream_id: int, data: bytes, end_stream: bool) -> None:
-        conn = self._require_conn()
-        async with self._io_lock:
-            conn.send_data(stream_id, data, end_stream=end_stream)
-            await self._flush_unlocked()
+        if not data:
+            async with self._io_lock:
+                self._require_conn().send_data(stream_id, b"", end_stream=end_stream)
+                await self._flush_unlocked()
+            return
+        offset = 0
+        while offset < len(data):
+            async with self._io_lock:
+                conn = self._require_conn()
+                window_function = getattr(conn, "local_flow_control_window", None)
+                if not callable(window_function):
+                    conn.send_data(stream_id, data[offset:], end_stream=end_stream)
+                    await self._flush_unlocked()
+                    return
+                window = int(window_function(stream_id))
+                frame_size = int(
+                    getattr(conn, "max_outbound_frame_size", 16384) or 16384
+                )
+                if window > 0:
+                    size = min(window, frame_size, len(data) - offset)
+                    offset += size
+                    conn.send_data(
+                        stream_id,
+                        data[offset - size : offset],
+                        end_stream=end_stream and offset == len(data),
+                    )
+                    await self._flush_unlocked()
+                    continue
+                waiter = asyncio.get_running_loop().create_future()
+                self._window_waiters.setdefault(stream_id, []).append(waiter)
+                await self._flush_unlocked()
+            await waiter
+
+    def _notify_window_waiters(self, stream_id: int | None = None) -> None:
+        if stream_id is None or stream_id == 0:
+            waiters = [
+                waiter for group in self._window_waiters.values() for waiter in group
+            ]
+            self._window_waiters.clear()
+        else:
+            waiters = self._window_waiters.pop(stream_id, [])
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def _fail_window_waiters(self, error: Exception) -> None:
+        waiters = [
+            waiter for group in self._window_waiters.values() for waiter in group
+        ]
+        self._window_waiters.clear()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_exception(error)
+
+    def _fail_window_waiters_for_stream(self, stream_id: int, error: Exception) -> None:
+        for waiter in self._window_waiters.pop(stream_id, []):
+            if not waiter.done():
+                waiter.set_exception(error)
 
     async def _collect_response_body(self, stream_id: int) -> bytes:
         chunks: list[bytes] = []
         while True:
             event = await self._events[stream_id].get()
+            if isinstance(event, Exception):
+                raise event
+            if isinstance(event, h2.events.StreamReset):
+                raise RuntimeError(
+                    f"Stream {stream_id} was reset before response completed"
+                )
             if isinstance(event, h2.events.DataReceived):
                 chunks.append(event.data)
             if isinstance(event, h2.events.StreamEnded):
@@ -631,6 +1036,12 @@ class VerserGuest:
     async def _wait_for_success_response(self, stream_id: int) -> None:
         while True:
             event = await self._events[stream_id].get()
+            if isinstance(event, Exception):
+                raise event
+            if isinstance(event, h2.events.StreamReset):
+                raise RuntimeError(
+                    f"Lease stream {stream_id} was reset before success response"
+                )
             if isinstance(event, h2.events.ResponseReceived):
                 status = dict(event.headers).get(":status")
                 if status != "200":
@@ -643,17 +1054,41 @@ class VerserGuest:
         reader = self._reader
         if reader is None:
             return
-        while not self._closed:
-            data = await reader.read(65535)
-            if not data:
-                return
-            async with self._io_lock:
-                events = self._require_conn().receive_data(data)
-                for event in events:
-                    stream_id = getattr(event, "stream_id", None)
-                    if stream_id in self._events:
-                        self._events[stream_id].put_nowait(event)
-                await self._flush_unlocked()
+        try:
+            while not self._closed:
+                data = await reader.read(65535)
+                if not data:
+                    self._fail_pending_streams(RuntimeError("Guest connection closed"))
+                    return
+                async with self._io_lock:
+                    events = self._require_conn().receive_data(data)
+                    for event in events:
+                        if isinstance(event, h2.events.WindowUpdated):
+                            self._notify_window_waiters(getattr(event, "stream_id", 0))
+                        if isinstance(event, h2.events.StreamReset):
+                            self._fail_window_waiters_for_stream(
+                                getattr(event, "stream_id", 0),
+                                RuntimeError("VWS stream reset while sending"),
+                            )
+                        elif isinstance(event, h2.events.StreamEnded):
+                            self._fail_window_waiters_for_stream(
+                                getattr(event, "stream_id", 0),
+                                RuntimeError("VWS stream ended while sending"),
+                            )
+                        stream_id = getattr(event, "stream_id", None)
+                        if stream_id in self._events:
+                            self._events[stream_id].put_nowait(event)
+                    await self._flush_unlocked()
+        except Exception as exc:
+            self._fail_pending_streams(
+                RuntimeError(f"Guest connection read loop failed: {exc}")
+            )
+
+    def _fail_pending_streams(self, error: Exception) -> None:
+        """Fail every pending stream and flow-control operation with *error*."""
+        self._fail_window_waiters(error)
+        for queue in list(self._events.values()):
+            queue.put_nowait(error)
 
     async def _acknowledge_received_data(
         self, stream_id: int, flow_controlled_length: int
@@ -662,6 +1097,17 @@ class VerserGuest:
             self._require_conn().acknowledge_received_data(
                 flow_controlled_length, stream_id
             )
+            await self._flush_unlocked()
+
+    async def _reset_stream(self, stream_id: int) -> None:
+        async with self._io_lock:
+            conn = self._conn
+            if conn is None:
+                return
+            try:
+                conn.reset_stream(stream_id)
+            except Exception:
+                return
             await self._flush_unlocked()
 
     async def _flush(self) -> None:

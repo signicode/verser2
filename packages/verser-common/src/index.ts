@@ -201,3 +201,22 @@ export {
   getCertificateFingerprint,
   verifyPinnedCertificate,
 } from './lib/tls';
+
+export type {
+  VwsFrame,
+  VwsFrameType,
+  VwsOpenFrame,
+  VwsAcceptFrame,
+  VwsTextFrame,
+  VwsBinaryFrame,
+  VwsPingFrame,
+  VwsPongFrame,
+  VwsCloseFrame,
+  VwsErrorFrame,
+} from './lib/vws';
+export {
+  VWS_MAX_FRAME_BYTES,
+  encodeVwsFrame,
+  decodeVwsFrame,
+  readVwsLine,
+} from './lib/vws';

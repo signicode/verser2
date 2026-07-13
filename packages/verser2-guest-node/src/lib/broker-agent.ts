@@ -35,7 +35,13 @@ export class VerserBrokerAgent extends http.Agent {
       return;
     }
 
-    const socket = new VerserBrokerSocket(this.broker, route.targetId, options, this.options);
+    const socket = new VerserBrokerSocket(
+      this.broker,
+      route.targetId,
+      route.domain,
+      options,
+      this.options,
+    );
     request.onSocket(socket as unknown as never);
     request.once('finish', () => {
       socket.forwardRequestOnce();

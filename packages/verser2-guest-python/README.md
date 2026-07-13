@@ -12,6 +12,10 @@ It is recognized by the repository's npm workspace tooling through
 - `VerserGuest` / `create_verser_guest` — Python ASGI Guest
 - `VerserBroker` / `create_verser_broker` — Python Broker
 - `VerserBrokerResponse` — Broker response type
+- `VwsAsgiConnection` and `build_websocket_scope` — ASGI VWS/1 websocket
+  helper types used by the live Python Guest path
+- `dispatch_asgi_websocket` — test helper for exercising a synthetic ASGI
+  websocket lifecycle; applications should use `VerserGuest` instead
 - `guest.revoke_routes(domains)` — revoke advertised route domains via
   `POST /verser/guest/revoke`; returns `dict` with `"status"` (`"ack"`, `"partial"`, or `"error"`)
 - `broker.on_route_change(listener)` — register a listener for route lifecycle
@@ -100,6 +104,28 @@ guest = create_verser_guest(
     tls_ca_file="/etc/verser/ca.crt",
 )
 ```
+
+## Python ASGI WebSockets
+
+The Python Guest maps dedicated VWS/1 leases to ASGI websocket scopes:
+
+```py
+async def app(scope, receive, send):
+    if scope["type"] == "websocket":
+        await receive()  # websocket.connect
+        await send({"type": "websocket.accept"})
+        event = await receive()
+        if event["type"] == "websocket.receive":
+            await send({"type": "websocket.send", "text": "echo"})
+        return
+```
+
+This is explicit framing over the existing TLS HTTP/2 transport, not generic
+HTTP upgrade forwarding. Python Host, fetch, Agent, and Dispatcher APIs are not
+implemented.
+
+See [VWS/1 WebSockets](../../docs/websockets.md) for a complete Node Broker and
+Python ASGI example, runtime boundaries, and close/backpressure behavior.
 
 ## Python Broker usage
 
@@ -228,10 +254,12 @@ types, reasons, and degraded-route behavior.
 - Python Host, Python-side fetch helper APIs, and Python-side Agent/Dispatcher
   are not implemented.
 - HTTP/3, complete application authentication, public gateway policy,
-  per-request Broker target authorization, WebSockets, upgrades, trailers, and
-  advanced ASGI lifespan behavior are not implemented.
-- The transport is intentionally minimal: one outbound TLS HTTP/2 session with a
-  replenished pool of one-use Guest lease streams.
+  per-request Broker target authorization, generic upgrades, CONNECT/RFC8441,
+  trailers, Python Host/fetch/Agent/Dispatcher, and advanced ASGI lifespan
+  behavior are not implemented.
+- The HTTP transport is intentionally minimal: one outbound TLS HTTP/2 session
+  with a replenished pool of one-use HTTP Guest lease streams. Long-lived VWS/1
+  WebSocket leases are dedicated streams and are not one-use request leases.
 
 ## Links
 

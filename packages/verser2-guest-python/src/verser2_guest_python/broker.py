@@ -488,12 +488,15 @@ class VerserBroker:
         body: Any = None,
         json: Any = None,
         text: str | None = None,
+        route_domain: str | None = None,
         **kwargs: Any,
     ) -> VerserBrokerResponse:
         """Send a routed HTTP request to a target Guest via the Host.
 
         The URL's hostname is matched exactly against the Host-advertised
-        route table.  If no route matches, ``RuntimeError`` is raised.
+        route table unless ``route_domain`` explicitly selects another
+        advertised route. If no selected route matches, ``RuntimeError`` is
+        raised. The URL authority remains the public ``Host`` value.
 
         Body can be provided in several forms:
 
@@ -521,6 +524,9 @@ class VerserBroker:
             Convenience — serialised as JSON body with content-type hint.
         text : str
             Convenience — encoded as UTF-8 body with content-type hint.
+        route_domain : str or None
+            Optional advertised route domain. Use this when the URL authority
+            is external or when the target Guest has multiple domains.
 
         Returns
         -------
@@ -542,8 +548,9 @@ class VerserBroker:
         path = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
 
         target_id: str | None = None
+        advertised_domain = route_domain or hostname
         for route in self._routes:
-            if route.get("domain") == hostname:
+            if route.get("domain") == advertised_domain:
                 target_id = route.get("targetId")
                 break
 
@@ -551,6 +558,14 @@ class VerserBroker:
             raise RuntimeError(f"No advertised route found for domain '{hostname}'")
 
         user_headers = dict(headers or {})
+        has_host = any(key.lower() in {"host", ":authority"} for key in user_headers)
+        if not has_host:
+            authority = parsed.hostname or ""
+            if ":" in authority and not authority.startswith("["):
+                authority = f"[{authority}]"
+            if parsed.port is not None:
+                authority = f"{authority}:{parsed.port}"
+            user_headers["host"] = authority
         self._request_counter += 1
         request_id = f"{self.broker_id}-req-{self._request_counter}"
 
@@ -599,6 +614,7 @@ class VerserBroker:
             ("x-verser-request-id", request_id),
             ("x-verser-source-id", self.broker_id),
             ("x-verser-target-id", target_id),
+            ("x-verser-route-domain", advertised_domain),
             ("x-verser-method", method),
             ("x-verser-path", path),
             ("x-verser-headers", _json.dumps(user_headers, ensure_ascii=False)),

@@ -47,7 +47,7 @@ Future package targets:
 - Package consumer validation command: `npm run test:package-consumers -- --source=<source|staging|tarball|github>`.
 - Package tarball behavior validation command: `npm run test:package-tarballs`, which packs staged packages, installs the tarballs into an isolated temporary consumer project, and runs reusable automated tests against package-name imports from `node_modules`.
 - Package version policy command: `npm run package:version-policy`, which maps stable tag releases to `latest`, prerelease tag releases to `next`, computes SHA-labeled merged-PR builds for the non-channel `main-sha` dist-tag, computes deterministic nightly builds for the non-channel `nightly` dist-tag, and supports manually gated npmjs candidates with stable/prerelease dist-tag safeguards without running `npm publish` itself.
-- Test command: `npm run test` (builds, stages packages, then runs `node:test`).
+- Test command: `npm run test` / `npm test` (runs the bounded-memory test flow: builds, stages packages, then runs `node:test` with guarded per-test memory-growth checks).
 - Lint command: `npm run lint`.
 - Formatting/linting: Biome.
 - Test runner: Node.js built-in `node:test` smoke tests.

@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { PassThrough } = require('node:stream');
-const test = require('node:test');
+const { Readable } = require('node:stream');
+const test = require('./support/guarded-test.cjs');
 const { fetch } = require('undici');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
@@ -68,85 +70,120 @@ async function closeRoute(route) {
   await withTimeout(route.host.close('test-complete'), 'host close');
 }
 
-test('Broker exposes an Undici Dispatcher that routes fetch by advertised hostname', async () => {
-  const route = await createConnectedRoute(
-    'dispatcher.local.test',
-    (request, response) => {
-      const chunks = [];
-      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-      request.on('end', () => {
-        response.writeHead(208, { 'x-dispatcher': 'verser' });
-        response.end(
-          `${request.method} ${request.url} ${request.headers['x-input']} ${Buffer.concat(chunks).toString('utf8')}`,
-        );
-      });
-    },
-    { brokerId: 'broker-dispatcher-1', guestId: 'guest-dispatcher-1' },
-  );
-
-  try {
-    const dispatcher = route.broker.createDispatcher();
-    assert.equal(typeof dispatcher.dispatch, 'function');
-
-    const response = await fetch('http://dispatcher.local.test/fetch-path?query=1', {
-      method: 'POST',
-      headers: { 'x-input': 'fetch' },
-      body: 'payload',
-      dispatcher,
-    });
-
-    assert.equal(response.status, 208);
-    assert.equal(response.headers.get('x-dispatcher'), 'verser');
-    assert.equal(await response.text(), 'POST /fetch-path?query=1 fetch payload');
-  } finally {
-    await closeRoute(route);
-  }
-});
-
-test('Broker Dispatcher follows internal redirects for advertised route targets', async () => {
+// Warm up TLS/HTTP2/Undici infrastructure so individual tests don't pay
+// the one-time initialization cost of TLS contexts, HTTP/2 sessions, and
+// Undici dispatcher internals.
+test.before(async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-dispatcher-redirect' });
-  const redirectGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-a' });
-  const targetGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-b' });
-  redirectGuest.attach((_request, response) => {
-    response.writeHead(307, { location: 'http://dispatcher-target.local.test/final?fetch=1' });
-    response.end('redirecting');
-  }, 'dispatcher-redirect.local.test');
-  targetGuest.attach((request, response) => {
-    const chunks = [];
-    request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-    request.on('end', () => {
-      response.writeHead(211, { 'x-dispatcher-redirect': request.url });
-      response.end(`${request.method}:${Buffer.concat(chunks).toString('utf8')}`);
-    });
-  }, 'dispatcher-target.local.test');
-
+  const broker = createBroker({ hostUrl, brokerId: 'warmup-broker' });
+  const guest = createGuest({ hostUrl, guestId: 'warmup-guest' });
+  guest.attach((_request, response) => response.end('warmup'), 'warmup.local.test');
   try {
-    await withTimeout(broker.connect(), 'broker-dispatcher-redirect connect');
-    await withTimeout(redirectGuest.connect(), 'guest-dispatcher-redirect-a connect');
-    await withTimeout(targetGuest.connect(), 'guest-dispatcher-redirect-b connect');
-    await withTimeout(broker.waitForRoute('dispatcher-redirect.local.test'), 'redirect route');
-    await withTimeout(broker.waitForRoute('dispatcher-target.local.test'), 'target route');
-
-    const response = await fetch('http://dispatcher-redirect.local.test/start', {
-      method: 'POST',
-      body: 'payload',
-      dispatcher: broker.createDispatcher(),
-      redirect: 'manual',
-    });
-
-    assert.equal(response.status, 211);
-    assert.equal(response.headers.get('x-dispatcher-redirect'), '/final?fetch=1');
-    assert.equal(await response.text(), 'POST:payload');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('warmup.local.test');
+    const dispatcher = broker.createDispatcher();
+    const response = await fetch('http://warmup.local.test/warmup', { dispatcher });
+    await response.text();
   } finally {
-    await withTimeout(broker.close('test-complete'), 'broker-dispatcher-redirect close');
-    await withTimeout(redirectGuest.close('test-complete'), 'guest-dispatcher-redirect-a close');
-    await withTimeout(targetGuest.close('test-complete'), 'guest-dispatcher-redirect-b close');
-    await withTimeout(host.close('test-complete'), 'host-dispatcher-redirect close');
+    await broker.close('warmup');
+    await guest.close('warmup');
+    await host.close('warmup');
   }
 });
+
+test(
+  'Broker exposes an Undici Dispatcher that routes fetch by advertised hostname',
+  { memoryLeakBytes: 512 * 1024 },
+  async () => {
+    const route = await createConnectedRoute(
+      'dispatcher.local.test',
+      (request, response) => {
+        const chunks = [];
+        request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        request.on('end', () => {
+          response.writeHead(208, { 'x-dispatcher': 'verser' });
+          response.end(
+            `${request.method} ${request.url} ${request.headers.host} ${request.headers['x-input']} ${Buffer.concat(chunks).toString('utf8')}`,
+          );
+        });
+      },
+      { brokerId: 'broker-dispatcher-1', guestId: 'guest-dispatcher-1' },
+    );
+
+    try {
+      const dispatcher = route.broker.createDispatcher();
+      assert.equal(typeof dispatcher.dispatch, 'function');
+
+      const response = await fetch('http://dispatcher.local.test/fetch-path?query=1', {
+        method: 'POST',
+        headers: { 'x-input': 'fetch' },
+        body: 'payload',
+        dispatcher,
+      });
+
+      assert.equal(response.status, 208);
+      assert.equal(response.headers.get('x-dispatcher'), 'verser');
+      assert.equal(
+        await response.text(),
+        'POST /fetch-path?query=1 dispatcher.local.test fetch payload',
+      );
+    } finally {
+      await closeRoute(route);
+    }
+  },
+);
+
+test(
+  'Broker Dispatcher follows internal redirects for advertised route targets',
+  { memoryLeakBytes: 512 * 1024 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-dispatcher-redirect' });
+    const redirectGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-a' });
+    const targetGuest = createGuest({ hostUrl, guestId: 'guest-dispatcher-redirect-b' });
+    redirectGuest.attach((_request, response) => {
+      response.writeHead(307, { location: 'http://dispatcher-target.local.test/final?fetch=1' });
+      response.end('redirecting');
+    }, 'dispatcher-redirect.local.test');
+    targetGuest.attach((request, response) => {
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on('end', () => {
+        response.writeHead(211, { 'x-dispatcher-redirect': request.url });
+        response.end(`${request.method}:${Buffer.concat(chunks).toString('utf8')}`);
+      });
+    }, 'dispatcher-target.local.test');
+
+    try {
+      await withTimeout(broker.connect(), 'broker-dispatcher-redirect connect');
+      await withTimeout(redirectGuest.connect(), 'guest-dispatcher-redirect-a connect');
+      await withTimeout(targetGuest.connect(), 'guest-dispatcher-redirect-b connect');
+      await withTimeout(broker.waitForRoute('dispatcher-redirect.local.test'), 'redirect route');
+      await withTimeout(broker.waitForRoute('dispatcher-target.local.test'), 'target route');
+
+      const response = await fetch('http://dispatcher-redirect.local.test/start', {
+        method: 'POST',
+        body: 'payload',
+        dispatcher: broker.createDispatcher(),
+        redirect: 'manual',
+      });
+
+      assert.equal(response.status, 211);
+      assert.equal(response.headers.get('x-dispatcher-redirect'), '/final?fetch=1');
+      assert.equal(await response.text(), 'POST:payload');
+    } finally {
+      await withTimeout(broker.close('test-complete'), 'broker-dispatcher-redirect close');
+      await withTimeout(redirectGuest.close('test-complete'), 'guest-dispatcher-redirect-a close');
+      await withTimeout(targetGuest.close('test-complete'), 'guest-dispatcher-redirect-b close');
+      await withTimeout(host.close('test-complete'), 'host-dispatcher-redirect close');
+    }
+  },
+);
 
 test('Broker Dispatcher rejects fetch requests for non-advertised hostnames', async () => {
   const broker = createVerserBroker({
@@ -284,4 +321,249 @@ test('Broker Dispatcher propagates fetch aborts without dangling response stream
   } finally {
     await closeRoute(route);
   }
+});
+
+// ================ Characterization: Slow Consumer Backpressure ================
+
+test('Broker Dispatcher streams large response bodies with controlled backpressure', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-large-response.local.test',
+    (_request, response) => {
+      const chunkSize = 64 * 1024;
+      const totalSize = 512 * 1024;
+      response.writeHead(200, { 'content-type': 'application/octet-stream' });
+      let offset = 0;
+      const writeNext = () => {
+        if (offset >= totalSize) {
+          response.end();
+          return;
+        }
+        offset += chunkSize;
+        if (!response.write(Buffer.alloc(chunkSize, 0x78))) {
+          response.once('drain', writeNext);
+        } else {
+          setImmediate(writeNext);
+        }
+      };
+      writeNext();
+    },
+    { brokerId: 'broker-dispatcher-large-response', guestId: 'guest-dispatcher-large-response' },
+  );
+
+  try {
+    const response = await fetch('http://dispatcher-large-response.local.test/large', {
+      dispatcher: route.broker.createDispatcher(),
+    });
+    const reader = response.body.getReader();
+    let totalBytes = 0;
+    let chunkCount = 0;
+    const hash = createHash('sha256');
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.length;
+      hash.update(value);
+      chunkCount += 1;
+      // Simulate slow consumer — small delay every few chunks
+      if (chunkCount % 4 === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(totalBytes, 512 * 1024);
+    const expectedHash = createHash('sha256');
+    for (let offset = 0; offset < 512 * 1024; offset += 64 * 1024) {
+      expectedHash.update(Buffer.alloc(64 * 1024, 0x78));
+    }
+    assert.equal(hash.digest('hex'), expectedHash.digest('hex'));
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+// ================ Characterization: Dispatcher Cancel During Streamed Response ================
+
+test('Broker Dispatcher fetch cancel during streamed POST response propagates to Guest-side request stream', async () => {
+  let requestEndResolve;
+  const requestEnded = new Promise((resolve) => {
+    requestEndResolve = resolve;
+  });
+  let requestEndedBeforeCancel = false;
+
+  const route = await createConnectedRoute(
+    'dispatcher-cancel-post.test',
+    (request, response) => {
+      // Consume request body in flowing mode so pipe data is drained and
+      // the stream can close when the source lease stream is destroyed.
+      request.resume();
+
+      // Write first response chunk early while the streaming request body
+      // is still being sent (keeps the Guest handler live).
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.write(Buffer.from('first-chunk'));
+
+      // Track end/close — with a streaming request body that never ends on
+      // its own, neither event fires until the remote response cancellation
+      // (reader.cancel()) destroys the lease and the pipe completes.
+      request.once('end', () => {
+        requestEndResolve();
+      });
+      request.once('close', () => {
+        requestEndResolve();
+      });
+    },
+    { brokerId: 'broker-dispatcher-cancel-post', guestId: 'guest-dispatcher-cancel-post' },
+  );
+
+  try {
+    // POST with a streaming request body that stays open — the handler's
+    // request stream will NOT end on its own because the body is never
+    // closed.  Only response-stream cancellation will terminate it.
+    const reqBody = new PassThrough();
+    reqBody.write(Buffer.from('streaming-body'));
+
+    const response = await fetch('http://dispatcher-cancel-post.test/cancel-post', {
+      method: 'POST',
+      body: reqBody,
+      duplex: 'half',
+      dispatcher: route.broker.createDispatcher(),
+    });
+    const reader = response.body.getReader();
+    const first = await reader.read();
+    assert.equal(Buffer.from(first.value).toString('utf8'), 'first-chunk');
+
+    // At this point the request body stream is still open (never ended),
+    // so the Guest request stream should NOT have ended yet.  Prove it by
+    // racing a short timeout; if the promise already resolved it means
+    // the stream ended for reasons other than our cancel.
+    await Promise.race([
+      requestEnded.then(() => {
+        requestEndedBeforeCancel = true;
+      }),
+      new Promise((resolve) => setTimeout(resolve, 30)),
+    ]);
+    assert.equal(
+      requestEndedBeforeCancel,
+      false,
+      'Guest request stream ended before reader.cancel() — test design invalid',
+    );
+
+    // Cancel the reader — this sends RST_STREAM back through the Host,
+    // which destroys the Guest lease stream.  The pipe in
+    // MinimalIncomingMessage detects the source close and ends the
+    // PassThrough, firing end/close on the handler's request object.
+    await reader.cancel();
+
+    await Promise.race([
+      requestEnded,
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Guest request stream did not end after fetch reader cancel')),
+          150,
+        ),
+      ),
+    ]);
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher propagates abort signal during request body upload', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-abort-upload.local.test',
+    (request, response) => {
+      request.on('data', () => {});
+      request.on('end', () => response.end('ok'));
+    },
+    { brokerId: 'broker-dispatcher-abort-upload', guestId: 'guest-dispatcher-abort-upload' },
+  );
+
+  const body = new PassThrough();
+  try {
+    const controller = new AbortController();
+    const responsePromise = fetch('http://dispatcher-abort-upload.local.test/abort-upload', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+      signal: controller.signal,
+      dispatcher: route.broker.createDispatcher(),
+    });
+
+    // Write some body data
+    body.write(Buffer.from('starting-body-data'));
+    // Give the body pipe a moment to start flowing, then abort
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+
+    await assert.rejects(() => responsePromise, /abort/i);
+  } finally {
+    body.destroy();
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher streams large request body through fetch', async () => {
+  const largeBodySize = 256 * 1024;
+  let receivedSize = 0;
+
+  const route = await createConnectedRoute(
+    'dispatcher-large-upload.local.test',
+    (request, response) => {
+      request.on('data', (chunk) => {
+        receivedSize += Buffer.from(chunk).length;
+      });
+      request.on('end', () => {
+        response.end(String(receivedSize));
+      });
+    },
+    { brokerId: 'broker-dispatcher-large-upload', guestId: 'guest-dispatcher-large-upload' },
+  );
+
+  try {
+    const response = await fetch('http://dispatcher-large-upload.local.test/large-upload', {
+      method: 'POST',
+      body: Readable.from(
+        (async function* generateBody() {
+          for (let offset = 0; offset < largeBodySize; offset += 32 * 1024) {
+            yield Buffer.alloc(Math.min(32 * 1024, largeBodySize - offset), 'L');
+          }
+        })(),
+      ),
+      duplex: 'half',
+      dispatcher: route.broker.createDispatcher(),
+    });
+
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.equal(Number(text), largeBodySize);
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+// ================ Regression Guard: Upgrade Rejection ================
+
+test('Broker Dispatcher rejects upgrade requests as unsupported', async () => {
+  const broker = createVerserBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'broker-dispatcher-upgrade-reject',
+  });
+  const dispatcher = broker.createDispatcher();
+
+  const error = await new Promise((resolve) => {
+    dispatcher.dispatch(
+      {
+        path: '/',
+        method: 'GET',
+        upgrade: 'websocket',
+      },
+      {
+        onConnect: () => {},
+        onError: (err) => resolve(err),
+        onHeaders: () => true,
+        onData: () => {},
+        onComplete: () => {},
+      },
+    );
+  });
+
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /Verser Dispatcher does not support upgrade requests/i);
 });

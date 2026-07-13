@@ -9,8 +9,8 @@
 - Use npm only. Node requirement is `>=20`.
 - Install: `npm ci` for clean installs; `npm install` when updating `package-lock.json` or workspaces.
 - Build all packages: `npm run build`.
-- Test: `npm test` (builds, stages packages, then runs `node --test test/*.test.js`).
-- Focused test file after building/staging when package artifacts are needed: `npm run build && npm run stage:packages && node --test test/<name>.test.js`.
+- Test: `npm test` (runs `npm run test:bounded`, which builds, stages packages, then runs `node --test test/*.test.js` with bounded memory settings and guarded per-test growth checks).
+- Focused bounded test file after building/staging when package artifacts are needed: `npm run test:bounded -- -- test/<name>.test.js`.
 - Lint/format check: `npm run lint` (`biome check .`).
 
 ## Monorepo layout
@@ -28,6 +28,11 @@
 - Each package has a composite `tsconfig.json`; build output and `.tsbuildinfo` go under that package's `dist/`.
 - Biome ignores `conductor/setup_state.json`, `dist`, `node_modules`, and `package-lock.json`.
 - Biome enforces single quotes, semicolons, trailing commas, and no explicit `any`.
+
+## Streaming test rules
+- Tests that generate request/response bodies must stream-process them. Do not retain generated bodies with `Buffer.concat`, `text()`, unbounded `chunks.push`, or whole-body inspection.
+- Generated-body writers must respect `write()`/`drain`; readers must implement pause/resume or equivalent backpressure.
+- Use bounded counters/hashes/Writable sinks for assertions, close all streams/sessions/timers in `finally`, and import `test/support/guarded-test.cjs` for streaming suites so bounded runs fail on post-test memory growth above the configured tens-of-kilobytes threshold.
 
 ## Product terminology
 - Use the repo terms precisely: Host accepts guest connections and routes requests; Guest connects outbound to a Host; Broker is the guest-side component that connects to hosts; Peer is any connected client that can send/receive through the host or directly when supported.

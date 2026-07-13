@@ -7,7 +7,10 @@ TLS HTTP/2 server implementation of the Verser Host — accepts outbound connect
 ## Design / Patterns
 
 - **Node `http2.createSecureServer`** — the Host is a secure HTTP/2 server only. No HTTP/1, no plaintext, no HTTP/3. Connections are outbound-initiated (peers connect *to* the Host).
-- **Protocol paths** — `/verser/register` (registration), `/verser/guest/control` (Guest coordination), `/verser/guest/lease` (Guest request/response body streams), `/verser/request` (Broker request dispatch), `/verser/host/federation` (Host-to-Host handshake), `/verser/host/federation/routes` (federated route stream), `/verser/host/federation/request` (idle federated request stream), and `/verser/host/federation/dispatch-request` (one-shot federated dispatch stream). Any other path is rejected.
+- **Protocol paths** — `/verser/register`, `/verser/guest/control`,
+  `/verser/guest/lease`, dedicated `/verser/guest/websocket-lease` VWS/1 leases,
+  `/verser/request`, `/verser/websocket`, and Host federation paths. Any other
+  path is rejected.
 - **Lease stream pool** — each Guest establishes one or more lease streams. The Host acquires an idle lease for each incoming Broker request. If none is available, the request is queued with a configurable timeout. Lease acquisition uses `parseLeaseAcquireTimeoutMs` (default 5000 ms).
 - **Peer session tracking** — `Map<peerId, RegisteredPeer>` tracks all connected peers. Duplicate peer IDs rejected at registration. Sessions tracked in a `Set` for lifecycle cleanup on disconnect.
 - **Local Host peers** — `attachLocalGuest()` and `attachLocalBroker()` register colocated in-process peers into the same Host peer/route tables as TLS HTTP/2 peers. Local Brokers receive the same full route-table replacement semantics and route through the Host target checks.
@@ -31,4 +34,6 @@ TLS HTTP/2 server implementation of the Verser Host — accepts outbound connect
 - **Depends on**: `@signicode/verser-common` (envelope encoding, registration parsing, TLS normalization, lifecycle events, header validation, stream reading, route control frames, error types). No external npm dependencies.
 - **Consumed by**: Applications that create a Host via `createVerserHost(options)`. The `VerserHost` interface is the public API surface.
 - **Internal modules**: `node-http2-verser-host.ts` (orchestration), `lease-pool.ts` (Guest lease stream pool management), `degraded-route-cleanup.ts` (degraded route expiration timer), `broker-routing.ts` (Broker request dispatch, lease routing, federated fallback), `federation.ts` (federation handshake, route frames, lifecycle forwarding, upstream/inbound stream helpers), `local-peers.ts` (local Guest/Broker route, stream, request, and waiter helpers), `http2-io.ts` (stream write helpers), `types.ts` (options + interface types), `utils.ts` (error wrapping), `constants.ts` (package name).
-- **Not provided**: Authentication, authorization, rate limiting, logging, metrics, WebSocket/upgrade/tunneling support. Applications integrate those layers themselves.
+- **Not provided**: Authentication, authorization, rate limiting, logging, metrics,
+  generic upgrade/tunneling, or federated WebSocket support. VWS/1 is explicit
+  framed WebSocket over the existing TLS HTTP/2 transport.

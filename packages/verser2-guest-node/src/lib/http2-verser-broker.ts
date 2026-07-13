@@ -25,7 +25,9 @@ import type {
   VerserBrokerRequest,
   VerserBrokerResponse,
   VerserBrokerRouteChangeEvent,
+  VerserBrokerWebSocketRequest,
 } from './types';
+import { VerserWebSocket } from './verser-websocket';
 
 const DEFAULT_INTERNAL_REDIRECT_REPLAY_BUFFER_BYTES = 16 * 1024;
 const DEFAULT_MAX_INTERNAL_REDIRECTS = 3;
@@ -33,6 +35,7 @@ const DEFAULT_MAX_INTERNAL_REDIRECTS = 3;
 interface ReplayableRequestBody {
   readonly body?: readonly Buffer[] | nodeStream.Readable;
   readonly getReplayBody: () => Promise<readonly Buffer[] | undefined>;
+  readonly abort: () => void;
 }
 
 export class Http2VerserBroker implements VerserBroker {
@@ -100,11 +103,27 @@ export class Http2VerserBroker implements VerserBroker {
     if (session === undefined) {
       return;
     }
-    this.controlStream?.close();
-    session.close();
-    session.destroy();
-    await once(session, 'close');
     this.session = undefined;
+    this.controlStream?.close();
+    session.destroy();
+    // Await close event to ensure the underlying session handles are
+    // released before the caller considers the broker shut down.
+    // Use a short timeout to guard against the rare case where 'close'
+    // was already emitted (e.g. session already destroyed by an error).
+    if (session.closed) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const onClose = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        session.off('close', onClose);
+        resolve();
+      }, 2000);
+      session.once('close', onClose);
+    });
   }
 
   public getRoutes(): { targetId: string; domain: string }[] {
@@ -161,7 +180,10 @@ export class Http2VerserBroker implements VerserBroker {
       { ...request, body: replayableBody.body },
       replayableBody,
       maxInternalRedirects,
-    );
+    ).catch((error: unknown) => {
+      replayableBody.abort();
+      throw error;
+    });
   }
 
   private async requestWithInternalRedirects(
@@ -190,12 +212,14 @@ export class Http2VerserBroker implements VerserBroker {
     }
 
     response.body.destroy();
+    const redirectedHeaders = request.headers;
     return this.requestWithInternalRedirects(
       {
         targetId: redirectTarget.route.targetId,
+        routeDomain: redirectTarget.route.domain,
         method: request.method,
         path: `${redirectTarget.url.pathname}${redirectTarget.url.search}`,
-        headers: request.headers,
+        headers: redirectedHeaders,
         body: replayBody,
       },
       replayableBody,
@@ -218,6 +242,9 @@ export class Http2VerserBroker implements VerserBroker {
         'x-verser-request-id': requestId,
         'x-verser-source-id': this.options.brokerId,
         'x-verser-target-id': request.targetId,
+        ...(request.routeDomain === undefined
+          ? {}
+          : { 'x-verser-route-domain': request.routeDomain }),
         'x-verser-method': request.method,
         'x-verser-path': request.path,
         'x-verser-headers': JSON.stringify(validateVerserHeaders(request.headers ?? {})),
@@ -256,11 +283,30 @@ export class Http2VerserBroker implements VerserBroker {
       }
 
       if (body instanceof nodeStream.Readable) {
+        const cleanupBodyPipe = (): void => {
+          body.unpipe(stream);
+          body.destroy();
+        };
         body.once('error', (error) => {
+          cleanupBodyPipe();
           if (!stream.closed && !stream.destroyed) {
             stream.close(http2.constants.NGHTTP2_CANCEL);
           }
           reject(error);
+        });
+        // If the H2 stream is closed (e.g. by remote RST) while the body
+        // is still being piped, stop forwarding body data to the closed
+        // stream and reject the pending promise if no response arrived.
+        stream.once('close', () => {
+          cleanupBodyPipe();
+          if (stream.rstCode !== undefined && stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR) {
+            reject(
+              createVerserError('stream-failure', 'Stream was reset by remote peer', {
+                targetId: request.targetId,
+                rstCode: String(stream.rstCode),
+              }),
+            );
+          }
         });
         body.pipe(stream);
         return;
@@ -278,7 +324,7 @@ export class Http2VerserBroker implements VerserBroker {
     replayBufferLimit: number,
   ): ReplayableRequestBody {
     if (body === undefined) {
-      return { body: undefined, getReplayBody: async () => [] };
+      return { body: undefined, getReplayBody: async () => [], abort: () => {} };
     }
 
     if (!(body instanceof nodeStream.Readable)) {
@@ -297,6 +343,7 @@ export class Http2VerserBroker implements VerserBroker {
       return {
         body,
         getReplayBody: async () => (replayable ? replayChunks : undefined),
+        abort: () => {},
       };
     }
 
@@ -307,6 +354,8 @@ export class Http2VerserBroker implements VerserBroker {
     let streamError: Error | undefined;
     let resolveReplayBody: (body: readonly Buffer[] | undefined) => void = () => {};
     let replayDecisionSettled = false;
+    let sourceEnded = false;
+    let sourceAborted = false;
     const replayDecision = new Promise<readonly Buffer[] | undefined>((resolve) => {
       resolveReplayBody = resolve;
     });
@@ -317,7 +366,7 @@ export class Http2VerserBroker implements VerserBroker {
       replayDecisionSettled = true;
       resolveReplayBody(replayBody);
     };
-    body.on('data', (chunk: Buffer | string) => {
+    const onData = (chunk: Buffer | string): void => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       totalBytes += buffer.length;
       if (totalBytes > replayBufferLimit) {
@@ -330,16 +379,47 @@ export class Http2VerserBroker implements VerserBroker {
         body.pause();
         tee.once('drain', () => body.resume());
       }
-    });
-    body.once('end', () => {
+    };
+    const removeSourceListeners = (): void => {
+      body.off('data', onData);
+      body.off('end', onEnd);
+      body.off('error', onError);
+    };
+    const removeSourceFlowListeners = (): void => {
+      body.off('data', onData);
+      body.off('end', onEnd);
+    };
+    const abortSource = (): void => {
+      if (sourceAborted || sourceEnded) {
+        return;
+      }
+      sourceAborted = true;
+      // Keep the error listener installed until destroy() has emitted its
+      // error. AbortController may destroy the original source concurrently
+      // with tee termination, and removing it here would make that error
+      // uncaught (notably for DOMException abort reasons).
+      removeSourceFlowListeners();
+      settleReplayDecision(undefined);
+      body.once('close', () => body.off('error', onError));
+      body.destroy();
+    };
+    const onEnd = (): void => {
+      sourceEnded = true;
+      removeSourceListeners();
       tee.end();
       settleReplayDecision(replayable ? replayChunks : undefined);
-    });
-    body.once('error', (error) => {
+    };
+    const onError = (error: Error): void => {
       streamError = error;
+      sourceAborted = true;
+      removeSourceListeners();
       tee.destroy(error);
       settleReplayDecision(undefined);
-    });
+    };
+    body.on('data', onData);
+    body.once('end', onEnd);
+    body.once('error', onError);
+    tee.once('close', abortSource);
 
     return {
       body: tee,
@@ -348,6 +428,10 @@ export class Http2VerserBroker implements VerserBroker {
           return undefined;
         }
         return replayDecision;
+      },
+      abort: () => {
+        abortSource();
+        tee.destroy();
       },
     };
   }
@@ -380,6 +464,93 @@ export class Http2VerserBroker implements VerserBroker {
       return undefined;
     }
     return { route, url };
+  }
+
+  public async webSocket(options: VerserBrokerWebSocketRequest): Promise<VerserWebSocket> {
+    const session = this.session;
+    if (session === undefined) {
+      throw createVerserError('disconnected-target', 'Broker is not connected');
+    }
+
+    return new Promise<VerserWebSocket>((resolve, reject) => {
+      const requestHeaders: http2.OutgoingHttpHeaders = {
+        ':method': 'POST',
+        ':path': '/verser/websocket',
+        'x-verser-target-id': options.targetId,
+        'x-verser-domain': options.domain,
+        'x-verser-source-id': this.options.brokerId,
+      };
+      if (options.protocol !== undefined && options.protocol.length > 0) {
+        requestHeaders['x-verser-ws-protocol'] = options.protocol;
+      }
+      if (options.path !== undefined && options.path.length > 0) {
+        requestHeaders['x-verser-ws-path'] = options.path;
+      }
+
+      const stream = session.request(requestHeaders);
+      let settled = false;
+      const settleOnce = (fn: () => void): void => {
+        if (!settled) {
+          settled = true;
+          fn();
+        }
+      };
+
+      stream.on('response', (headers) => {
+        const status = Number(headers[':status'] ?? 0);
+        if (status !== 200) {
+          // Collect body for error details
+          const maxErrorBodyBytes = 64 * 1024;
+          let body = '';
+          let bodyBytes = 0;
+          stream.setEncoding('utf8');
+          stream.on('data', (chunk: string) => {
+            if (bodyBytes < maxErrorBodyBytes) {
+              const remaining = maxErrorBodyBytes - bodyBytes;
+              const bounded = chunk.slice(0, remaining);
+              body += bounded;
+              bodyBytes += Buffer.byteLength(bounded, 'utf8');
+            }
+          });
+          stream.on('end', () => {
+            settleOnce(() => {
+              const msg = body.length > 0 ? body : `WebSocket request failed with status ${status}`;
+              reject(createVerserError('protocol-error', msg, { targetId: options.targetId }));
+            });
+          });
+          return;
+        }
+
+        // 200 OK — handshake complete, resolve with a VerserWebSocket
+        settleOnce(() => {
+          const acceptProtocol = String(headers['x-verser-ws-protocol'] ?? '');
+          const ws = new VerserWebSocket(stream, acceptProtocol, true);
+          resolve(ws);
+        });
+      });
+
+      stream.on('error', (err) => {
+        settleOnce(() => reject(err));
+      });
+
+      // Reject if the stream closes before the response settles
+      stream.on('close', () => {
+        settleOnce(() =>
+          reject(
+            createVerserError(
+              'protocol-error',
+              'WebSocket stream closed before handshake response',
+              {
+                targetId: options.targetId,
+              },
+            ),
+          ),
+        );
+      });
+
+      // Do NOT call stream.end() — the H2 stream must remain open for
+      // bidirectional VWS/1 frame exchange after the handshake.
+    });
   }
 
   private async register(session: http2.ClientHttp2Session): Promise<void> {

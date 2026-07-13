@@ -1,4 +1,5 @@
 import * as http from 'node:http';
+import { Readable } from 'node:stream';
 
 import { resolveRouteForUrl } from '@signicode/verser-common';
 import {
@@ -63,11 +64,19 @@ export class VerserBrokerDispatcher extends Dispatcher {
     }
 
     const body = toBrokerRequestBody(options.body ?? null, controller);
+    if (body instanceof Readable) {
+      controller.attachRequestBody(body);
+    }
+    const requestHeaders = normalizeCommonHeaders(options.headers ?? undefined);
+    if (requestHeaders.host === undefined && requestHeaders[':authority'] === undefined) {
+      requestHeaders.host = requestUrl.host;
+    }
     const response = await this.nodeBroker.request({
       targetId: route.targetId,
+      routeDomain: route.domain,
       method: options.method,
       path: `${requestUrl.pathname}${requestUrl.search}`,
-      headers: normalizeCommonHeaders(options.headers ?? undefined),
+      headers: requestHeaders,
       body,
     });
     if (controller.aborted) {

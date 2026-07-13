@@ -39,7 +39,7 @@ The implemented foundation includes the TypeScript/Node.js package path, a Bun G
 - A minimal plain `node:http` Agent path for Host-advertised domains.
 - End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
 
-Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Java guests, Python Host behavior, advanced Agent behavior, Broker per-request authorization, complete authentication/authorization systems, WebSocket forwarding for Bun, and public gateway policy are future track work.
+Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Java guests, advanced Agent behavior, Broker per-request authorization, complete authentication/authorization systems, WebSocket forwarding for Bun, and public gateway policy are future track work. Python Host is not implemented and is not on the current roadmap.
 
 ## Product Principles
 

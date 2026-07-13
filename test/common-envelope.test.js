@@ -6,6 +6,36 @@ const { loadVerserCommon } = require('./support/verser-package-imports.cjs');
 
 const common = loadVerserCommon();
 
+test('readVwsLine preserves split UTF-8 bytes and trailing frames', async () => {
+  const stream = new PassThrough();
+  const payload = Buffer.from('{"type":"open","path":"/😀"}\n{"type":"accept"}\n');
+  const split = payload.indexOf(Buffer.from('😀')) + 2;
+  const linePromise = common.readVwsLine(stream);
+  stream.write(payload.subarray(0, split));
+  stream.write(payload.subarray(split));
+  const line = await linePromise;
+  assert.equal(JSON.parse(line).path, '/😀');
+  assert.equal(await common.readVwsLine(stream), '{"type":"accept"}');
+  stream.destroy();
+});
+
+test('decodeVwsFrame validates VWS control and payload schemas', () => {
+  assert.deepEqual(common.decodeVwsFrame('{"type":"ping","data":"x"}'), {
+    type: 'ping',
+    data: 'x',
+  });
+  assert.throws(
+    () => common.decodeVwsFrame('{"type":"close","code":1006}'),
+    /Invalid VWS close code/,
+  );
+  assert.throws(() => common.decodeVwsFrame('{"type":"text","data":42}'), /Invalid VWS text frame/);
+  assert.throws(
+    () => common.decodeVwsFrame('{"type":"binary","data":"not-base64"}'),
+    /Invalid VWS binary frame/,
+  );
+  assert.throws(() => common.decodeVwsFrame('{"type":"unknown"}'), /Unknown VWS frame type/);
+});
+
 test('shared envelope helpers encode request, response, and error metadata', () => {
   const requestEnvelope = common.encodeVerserEnvelope({
     type: 'request',

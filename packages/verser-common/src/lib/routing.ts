@@ -110,6 +110,7 @@ export function createRoutedRequestEnvelope(
     requestId: requireNonEmpty(envelope.requestId, 'request id'),
     sourceId: createPeerId(envelope.sourceId),
     targetId: createGuestId(envelope.targetId),
+    ...(envelope.routeDomain === undefined ? {} : { routeDomain: envelope.routeDomain }),
     method: requireNonEmpty(envelope.method, 'request method'),
     path: requireNonEmpty(envelope.path, 'request path'),
     headers: { ...envelope.headers },

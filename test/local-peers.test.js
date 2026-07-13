@@ -91,14 +91,26 @@ async function readNextChunk(stream) {
 }
 
 async function waitForRoutes(peer, expectedRoutes) {
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    if (JSON.stringify(peer.getRoutes()) === JSON.stringify(expectedRoutes)) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.deepEqual(peer.getRoutes(), expectedRoutes);
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      unsubscribe();
+      error === undefined ? resolve() : reject(error);
+    };
+    const unsubscribe = peer.onRouteChange(() => {
+      if (JSON.stringify(peer.getRoutes()) === JSON.stringify(expectedRoutes)) {
+        finish();
+      }
+    });
+    const timeout = setTimeout(
+      () => finish(new Error('Timed out waiting for expected route snapshot')),
+      5000,
+    );
+    if (JSON.stringify(peer.getRoutes()) === JSON.stringify(expectedRoutes)) finish();
+  });
 }
 
 test('Host attaches local Guests and Brokers with route advertisement, degradation, and retraction', async () => {
@@ -227,6 +239,16 @@ test('Local Guest revokes a subset of its route domains', async () => {
       .map((r) => r.domain)
       .sort();
     assert.deepEqual(brokerDomains, ['also-keep.test', 'keep.test']);
+
+    await assert.rejects(
+      () => localBroker.request({ targetId: 'revoke-subset-guest', method: 'GET', path: '/' }),
+      /ambiguous|routeDomain/i,
+    );
+    localGuest.revokeRoutes(['keep.test', 'also-keep.test']);
+    await assert.rejects(
+      () => localBroker.request({ targetId: 'revoke-subset-guest', method: 'GET', path: '/' }),
+      /no active route|missing-guest/i,
+    );
   } finally {
     if (localBroker !== undefined) await localBroker.close('test-complete');
     if (localGuest !== undefined) await localGuest.close('test-complete');
@@ -765,6 +787,132 @@ test('Local Broker uses configurable lease acquire timeout for HTTP/2 Guests', a
   } finally {
     if (localBroker !== undefined) await localBroker.close('test-complete');
     h2Guest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Direct H2 cancel body error maps to disconnected-target (not stream-failure)', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-h2-cancel-mapping',
+      routedDomains: ['h2-cancel-mapping.local.test'],
+      listener: (request, response) => {
+        request.resume();
+        request.on('end', () => response.end('unexpected'));
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-h2-cancel-mapping-broker' });
+    await localBroker.waitForRoute('h2-cancel-mapping.local.test');
+
+    const body = new PassThrough();
+    const responsePromise = localBroker.request({
+      targetId: 'local-h2-cancel-mapping',
+      method: 'POST',
+      path: '/body-h2-cancel',
+      body,
+    });
+
+    // Error with numeric NGHTTP2_CANCEL code
+    const h2Error = new Error('stream closed with NGHTTP2_CANCEL');
+    h2Error.code = http2.constants.NGHTTP2_CANCEL;
+    body.destroy(h2Error);
+
+    await assert.rejects(responsePromise, (error) => {
+      assert.equal(error.code, 'disconnected-target');
+      return true;
+    });
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Direct H2 cancel body error with ERR_HTTP2_STREAM_ERROR maps to disconnected-target', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-h2-cancel-mapping-2',
+      routedDomains: ['h2-cancel-mapping-2.local.test'],
+      listener: (request, response) => {
+        request.resume();
+        request.on('end', () => response.end('unexpected'));
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-h2-cancel-mapping-broker-2' });
+    await localBroker.waitForRoute('h2-cancel-mapping-2.local.test');
+
+    const body = new PassThrough();
+    const responsePromise = localBroker.request({
+      targetId: 'local-h2-cancel-mapping-2',
+      method: 'POST',
+      path: '/body-h2-cancel-2',
+      body,
+    });
+
+    // Error with string code from Node H2
+    const h2Error = new Error('stream reset by remote');
+    h2Error.code = 'ERR_HTTP2_STREAM_ERROR';
+    body.destroy(h2Error);
+
+    await assert.rejects(responsePromise, (error) => {
+      assert.equal(error.code, 'disconnected-target');
+      return true;
+    });
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Ordinary local body stream error still maps to stream-failure (not disconnected-target)', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localBroker;
+  let localGuest;
+
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-body-stream-ordinary',
+      routedDomains: ['local-body-stream-ordinary.local.test'],
+      listener: (request, response) => {
+        request.resume();
+        request.on('end', () => response.end('unexpected'));
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-body-stream-ordinary-broker' });
+    await localBroker.waitForRoute('local-body-stream-ordinary.local.test');
+
+    const body = new PassThrough();
+    const responsePromise = localBroker.request({
+      targetId: 'local-body-stream-ordinary',
+      method: 'POST',
+      path: '/body-stream-ordinary',
+      body,
+    });
+
+    // Plain Error with no H2 cancel characteristics
+    body.destroy(new Error('ordinary stream failure'));
+
+    await assert.rejects(responsePromise, (error) => {
+      assert.equal(error.code, 'stream-failure');
+      assert.match(error.message, /ordinary stream failure/);
+      assert.equal(error.context.targetId, 'local-body-stream-ordinary');
+      return true;
+    });
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
     await host.close('test-complete');
   }
 });

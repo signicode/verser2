@@ -9,6 +9,8 @@ export class VerserDispatchController {
 
   private responseBody?: Readable;
 
+  private requestBody?: Readable;
+
   private abortedState = false;
 
   private pausedState = false;
@@ -40,12 +42,20 @@ export class VerserDispatchController {
     }
   }
 
+  /** Track the request body stream so it can be destroyed when the controller is aborted. */
+  public attachRequestBody(body: Readable): void {
+    this.requestBody = body;
+  }
+
   public abort(reason: Error): void {
     if (this.abortedState) {
       return;
     }
     this.abortedState = true;
     this.abortReason = reason;
+    // Destroy the request body to stop sending data upstream when abort fires
+    // mid-upload. Destroy the response body to stop consuming downstream data.
+    this.requestBody?.destroy(reason);
     this.responseBody?.destroy(reason);
     this.fail(reason);
   }

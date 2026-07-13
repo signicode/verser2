@@ -25,6 +25,8 @@ Three implemented roles work together:
   handlers without opening a port.
 - [Making requests](./making-requests.md) — send requests through a Broker using
   `request()`, Agent, Dispatcher, or fetch.
+- [VWS/1 WebSockets](./websockets.md) — explicit framed WebSockets over TLS
+  HTTP/2 for Node and Python ASGI Guests.
 - [Routes](./routes.md) — route advertisement, exact hostname matching, and route
   state.
 - [Host federation and upstreams](./host-federation.md) — Host IDs, upstream
@@ -51,8 +53,9 @@ Three implemented roles work together:
   handlers, or Python ASGI apps. They never call `listen()` for this routing
   path.
 - HTTP/3 is roadmap work and is not implemented.
-- WebSocket upgrade, CONNECT tunneling, trailers, and informational responses are
-  not forwarded.
+- VWS/1 WebSockets use explicit framed messages over TLS HTTP/2; this is not
+  generic HTTP/1 upgrade forwarding. CONNECT/RFC8441, L4 forwarding, and
+  federation WebSocket routes are unsupported.
 
 ## Terminology
 

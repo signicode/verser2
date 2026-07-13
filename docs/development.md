@@ -30,11 +30,16 @@ npm run test:coverage
 npm run lint
 ```
 
-`npm test` builds all packages, stages publish-ready packages under
-`dist/packages`, then runs the Node source test suite. The default source suite
-skips redundant package-consumer matrix wrappers and pack dry-runs that are
-covered by the explicit package-validation commands below; this keeps ordinary
-test iteration focused while preserving package validation as a first-class path.
+`npm test` runs `npm run test:bounded`. It builds all packages, stages
+publish-ready packages under `dist/packages`, then runs the Node source test
+suite in two deterministic partitions with bounded memory settings, a hard
+10-second timeout per individual test, and guarded per-test memory-growth checks.
+Each partition prints its file list and Node's per-test durations; timeout
+failures include partition/file/test context.
+The default source suite skips redundant package-consumer matrix wrappers and
+pack dry-runs that are covered by the explicit package-validation commands
+below; this keeps ordinary test iteration focused while preserving package
+validation as a first-class path.
 
 `npm run test:bounded` preserves the same full validation flow while running the
 Node-based build, staging, and test commands with a default 512 MiB V8 old-space
@@ -43,6 +48,15 @@ when diagnosing memory growth, validating suspected OOM fixes, or running the
 full suite on memory-constrained developer machines. It intentionally avoids a
 low virtual-memory cap because Node and npm wrappers may reserve more address
 space than they actively use.
+The 10-second test timeout is fixed by the canonical runner and cannot be
+disabled or overridden through compatibility options.
+
+Default repository tests must remain compatible with the bounded runner. New or
+changed tests should pass with the default bounded heap and the guarded per-test
+growth threshold. If a test needs a larger per-test growth allowance, document
+the bounded infrastructure cost in the test or track notes and set an explicit
+`memoryLeakBytes` option on the guarded test instead of raising the global
+threshold.
 
 Run a focused repository test file after building and staging when package
 artifacts are needed:
@@ -66,6 +80,47 @@ they should use runtime-specific timeouts and cleanup behavior rather than an
 unsafe inherited virtual-memory cap. Prefer focused Bun or Python validation when
 diagnosing those paths, and keep output/timeouts bounded so failed subprocesses do
 not leak handles or accumulate unbounded logs.
+
+### Streaming test resource rules
+
+Streaming tests must prove streaming behavior without retaining generated bodies
+for inspection. These rules are mandatory for tests that generate request or
+response bodies, keep streams open, exercise abort/cancel behavior, or use raw
+HTTP/2 sessions:
+
+- Process generated request and response bodies incrementally. Do not use
+  `text()`, `readBody()`, `Buffer.concat()`, unbounded `chunks.push(...)`, or
+  whole-body equality assertions for generated payloads.
+- Prefer `Writable` sinks, byte counters, hashes, or immediate `data` handlers on
+  the read side. Keep only scalar totals, hashes, or the last bounded diagnostic
+  sample.
+- Writers must observe flow-control signals. If `write()` returns `false`, wait
+  for `drain` before writing more. Do not loop writes into a stream without a
+  drain path.
+- Readers must implement pause/resume or equivalent backpressure behavior when
+  testing slow consumers. Do not let a generated producer write faster than the
+  test reader can consume.
+- Every `PassThrough`, raw HTTP/2 stream/session, request, response, Host, Guest,
+  Broker, Agent, Dispatcher body, and timer must be ended, destroyed, closed, or
+  cleared in `finally`.
+- Intentionally open streams require a deterministic rendezvous promise, a hard
+  watchdog, and an explicit cancellation path. Avoid sleeps as flow-control or
+  setup synchronization.
+- Event collectors must be bounded. Store counts and the last few events instead
+  of unbounded arrays, and never stringify complete event histories in assertion
+  messages.
+- Streaming suites should import `test/support/guarded-test.cjs` instead of raw
+  `node:test`. The bounded runner enables this guard with `--expose-gc` and fails
+  a guarded test when post-GC memory growth exceeds the configured per-test
+  threshold, defaulting to 1 MiB. Individual guarded tests may use
+  `{ memoryLeakBytes: <bytes> }` only for documented, bounded runtime
+  infrastructure costs.
+
+Use `npm run test:bounded -- --memory-leak-bytes <bytes> -- test/<name>.test.js`
+to run guarded focused tests with a different global leak threshold. Prefer the
+256 KiB review target for streaming/resource-sensitive tests. Tests that require
+512 KiB must have a specific, reviewed infrastructure reason and should use a
+per-test `memoryLeakBytes` allowance rather than weakening the whole suite.
 
 ## Package staging
 
@@ -115,4 +170,7 @@ and version/dist-tag policy.
 - Task-focused usage docs live under `docs/`.
 - Release and packaging process docs remain separate from API usage docs.
 - Do not describe HTTP/3, browser/Rust/Go/Java Guests, Python Host behavior,
-  WebSocket forwarding, or complete gateway authorization as implemented.
+  generic WebSocket upgrade forwarding, CONNECT/RFC8441/L4 forwarding, or
+  complete gateway authorization as implemented. VWS/1 is the explicit framed
+  WebSocket protocol over existing TLS HTTP/2; Agent/Dispatcher upgrades and Bun
+  `server.upgrade()` remain unsupported.

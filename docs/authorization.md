@@ -152,3 +152,24 @@ Guest request handlers or by wrapping the Broker request path.
 | Local peer attach | In-process registration hook with Host-owned metadata |
 | Request routing | No per-request authorization                           |
 | Guest handler   | Application-controlled (token validation, etc.)        |
+
+## Route authority and trusted proxies
+
+The Host authorizes routing using the exact `(targetId, routeDomain)` pair. It
+rewrites the Guest-facing `Host` to the authorized advertised route. When the
+caller supplied a distinct original authority, the Host sets
+`X-Forwarded-Host` to that authority; caller-supplied `X-Forwarded-Host` is
+never trusted. `X-Forwarded-For` and `Forwarded` remain application headers and
+are not authorization inputs.
+
+Only place a public trusted-proxy layer in front of a Host when that proxy is
+authenticated and configured to set the original authority. Strip untrusted
+forwarding headers at that boundary. If an application needs a stronger claim,
+it may attach a signed Host/authority assertion and verify it itself; verser2
+does not verify application-specific signatures, and such assertions do not
+replace Host route authorization.
+
+Python callers should use `route_domain=` when the URL authority is external or
+when a Guest advertises multiple domains. The Python Broker sends the URL
+authority as `Host`, including its port, and sends the selected advertised route
+separately.

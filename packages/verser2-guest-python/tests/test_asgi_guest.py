@@ -29,10 +29,11 @@ class FakeReader:
 
 
 class FakeConn:
-    def __init__(self, events=None):
+    def __init__(self, events=None, window=65535):
         self.events = list(events or [])
         self.acknowledged = []
         self.sent_data = []
+        self.window = window
 
     def receive_data(self, _data):
         return list(self.events)
@@ -45,6 +46,17 @@ class FakeConn:
 
     def data_to_send(self):
         return b""
+
+    def local_flow_control_window(self, _stream_id):
+        return self.window
+
+
+class FakeWriter:
+    def write(self, _data):
+        pass
+
+    async def drain(self):
+        pass
 
 
 class AsgiDispatchTest(unittest.TestCase):
@@ -448,6 +460,23 @@ class LeaseTaskTest(unittest.TestCase):
             return conn.acknowledged
 
         self.assertEqual(asyncio.run(run()), [])
+
+    def test_zero_window_sender_fails_when_connection_reaches_eof(self) -> None:
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="zero-window-eof"
+            )
+            guest._conn = FakeConn(window=0)
+            guest._writer = FakeWriter()
+            guest._reader = FakeReader([b""])
+
+            send_task = asyncio.create_task(guest._send_data(1, b"blocked", False))
+            await asyncio.sleep(0)
+            await guest._read_loop()
+            with self.assertRaisesRegex(RuntimeError, "Guest connection closed"):
+                await send_task
+
+        asyncio.run(run())
 
     def test_leased_receive_acks_body_data_after_asgi_consumes_event(self) -> None:
         async def run() -> list[tuple[int, int]]:
@@ -921,6 +950,532 @@ class VerserGuestTlsConfigTest(unittest.TestCase):
 
         message = str(context.exception).lower()
         self.assertTrue(any(word in message for word in ("tls", "handshake")))
+
+
+class LeaseStreamResetTest(unittest.TestCase):
+    """Tests for stream reset/cancellation handling in leased dispatch."""
+
+    def test_stream_reset_during_dispatch_unblocks_and_returns_cleanly(self) -> None:
+        """StreamReset unblocks ASGI receive() and cancels app without hanging."""
+        app_started = asyncio.Event()
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            app_started.set()
+            _ = await receive()
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        envelope = encode_envelope(
+            "request",
+            {
+                "requestId": "req-reset-unblock",
+                "sourceId": "broker-unit",
+                "targetId": "reset-unblock-guest",
+                "method": "POST",
+                "path": "/reset",
+                "headers": {},
+            },
+        )
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="reset-unblock-guest",
+                app=app,
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            # Send request envelope to start the app
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=envelope,
+                    flow_controlled_length=len(envelope),
+                )
+            )
+            await asyncio.wait_for(app_started.wait(), timeout=5)
+            # Send StreamReset — must unblock receive() and cancel app dispatch
+            await guest._events[1].put(h2.events.StreamReset(stream_id=1, error_code=0))
+            # Task completes cleanly within timeout — no hang from hanging receive()
+            await asyncio.wait_for(task, timeout=5)
+            # The terminator event may or may not be consumed before cancellation,
+            # but the key assertion is that dispatch returns without hanging.
+
+        asyncio.run(run())
+
+    def test_stream_reset_before_app_start_returns_cleanly(self) -> None:
+        """StreamReset before the envelope is fully received returns cleanly."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="reset-before-start",
+                app=lambda scope, receive, send: None,
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            # Send StreamReset before any data arrives
+            await guest._events[1].put(h2.events.StreamReset(stream_id=1, error_code=0))
+            await asyncio.wait_for(task, timeout=5)
+            # Task completed cleanly without raising RuntimeError
+
+        asyncio.run(run())
+
+    def test_fail_pending_streams_unblocks_dispatch(self) -> None:
+        """_fail_pending_streams via read-loop connection close unblocks dispatch
+        and does NOT leave the ASGI app task pending."""
+        app_exited = asyncio.Event()
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            try:
+                event = await receive()
+                _ = event
+            finally:
+                app_exited.set()
+
+        envelope = encode_envelope(
+            "request",
+            {
+                "requestId": "req-fail-streams",
+                "sourceId": "broker-unit",
+                "targetId": "fail-streams-guest",
+                "method": "GET",
+                "path": "/fail",
+                "headers": {},
+            },
+        )
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="fail-streams-guest",
+                app=app,
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            # Queue envelope to start the app
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=envelope,
+                    flow_controlled_length=len(envelope),
+                )
+            )
+            await asyncio.sleep(0.02)
+            # Simulate connection close — fails pending streams
+            guest._fail_pending_streams(RuntimeError("connection lost"))
+            # Dispatch should raise after cleaning up the app task
+            with self.assertRaises(RuntimeError):
+                await task
+            # Prove the app task was cleaned up (finally ran) and did not
+            # remain pending until event-loop shutdown.
+            await asyncio.wait_for(app_exited.wait(), timeout=5)
+
+        asyncio.run(run())
+
+
+class PendingStreamFailureTest(unittest.TestCase):
+    """Tests for _collect_response_body and _wait_for_success_response
+    handling of Exception and StreamReset events."""
+
+    def test_collect_response_body_raises_on_connection_error(self) -> None:
+        """Exception from _fail_pending_streams propagates through _collect_response_body."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="collect-exc"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            # Put an Exception event into the queue
+            guest._events[1].put_nowait(RuntimeError("connection lost"))
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._collect_response_body(1)
+            self.assertIn("connection lost", str(ctx.exception))
+
+        asyncio.run(run())
+
+    def test_collect_response_body_raises_on_stream_reset(self) -> None:
+        """StreamReset propagates through _collect_response_body as RuntimeError."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="collect-reset"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(
+                h2.events.StreamReset(stream_id=1, error_code=0)
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._collect_response_body(1)
+            self.assertIn("reset", str(ctx.exception).lower())
+
+        asyncio.run(run())
+
+    def test_wait_for_success_response_raises_on_connection_error(self) -> None:
+        """Exception from _fail_pending_streams propagates through _wait_for_success_response."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="wait-exc"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(RuntimeError("connection gone"))
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._wait_for_success_response(1)
+            self.assertIn("connection gone", str(ctx.exception))
+
+        asyncio.run(run())
+
+    def test_wait_for_success_response_raises_on_stream_reset(self) -> None:
+        """StreamReset propagates through _wait_for_success_response as RuntimeError."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="wait-reset"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(
+                h2.events.StreamReset(stream_id=1, error_code=0)
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                await guest._wait_for_success_response(1)
+            self.assertIn("reset", str(ctx.exception).lower())
+
+        asyncio.run(run())
+
+    def test_collect_response_body_normal_path_unchanged(self) -> None:
+        """Normal DataReceived + StreamEnded still works after exception handling."""
+
+        async def run() -> bytes:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="collect-normal"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            guest._events[1].put_nowait(
+                h2.events.DataReceived(
+                    stream_id=1, data=b"hello", flow_controlled_length=5
+                )
+            )
+            guest._events[1].put_nowait(h2.events.StreamEnded(stream_id=1))
+            return await guest._collect_response_body(1)
+
+        result = asyncio.run(run())
+        self.assertEqual(result, b"hello")
+
+    def test_wait_for_success_response_normal_path_unchanged(self) -> None:
+        """Normal 200 ResponseReceived still works after exception handling."""
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="wait-normal"
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            from unittest.mock import MagicMock
+
+            mock_response = MagicMock(spec=h2.events.ResponseReceived)
+            mock_response.headers = [(":status", "200")]
+            mock_response.stream_id = 1
+            guest._events[1].put_nowait(mock_response)
+            await guest._wait_for_success_response(1)
+
+        asyncio.run(run())
+
+
+class LeasedStreamingTest(unittest.TestCase):
+    """Tests for streaming request/response bodies through lease dispatch."""
+
+    def test_lease_dispatch_streams_large_response_in_chunks(self) -> None:
+        """Lease dispatch forwards a multi-chunk response without buffering."""
+        chunk_size = 4096
+        num_chunks = 16
+        sends_received: list[tuple[int, bytes, bool]] = []
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            await receive()
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            for i in range(num_chunks):
+                chunk = b"x" * chunk_size
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": chunk,
+                        "more_body": i < num_chunks - 1,
+                    }
+                )
+
+        class InspectConn(FakeConn):
+            def send_data(
+                self, stream_id: int, data: bytes, end_stream: bool = False
+            ) -> None:
+                sends_received.append((stream_id, data, end_stream))
+                super().send_data(stream_id, data, end_stream)
+
+        envelope = encode_envelope(
+            "request",
+            {
+                "requestId": "req-large-resp",
+                "sourceId": "broker-unit",
+                "targetId": "large-resp-guest",
+                "method": "GET",
+                "path": "/large",
+                "headers": {},
+            },
+        )
+
+        async def run() -> int:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="large-resp-guest",
+                app=app,
+            )
+            conn = InspectConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=envelope,
+                    flow_controlled_length=len(envelope),
+                )
+            )
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await asyncio.wait_for(task, timeout=10)
+            return len(sends_received)
+
+        total_sends = asyncio.run(run())
+        # 1 response envelope + num_chunks body sends
+        self.assertEqual(total_sends, 1 + num_chunks)
+        # Last body send should have end_stream=True
+        body_sends = [s for s in sends_received if s[1] != b"" or s[2]]
+        last_body = body_sends[-1]
+        self.assertTrue(last_body[2], "last body send must end stream")
+        # Since body_chunks are 4096 each, total should be num_chunks * 4096
+        # But the first http.response.body send might have the data embedded
+        # Let's just verify the count is right
+        self.assertEqual(
+            sum(len(s[1]) for s in sends_received[1:]),  # all sends after first = body
+            chunk_size * num_chunks,
+        )
+
+    def test_lease_dispatch_streams_large_request_body_in_chunks(self) -> None:
+        """Lease dispatch forwards a large request body as multiple http.request events."""
+        received_bytes = 0
+        event_count = 0
+        app_ready = asyncio.Event()
+        chunk_size = 8192
+        num_chunks = 12
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            nonlocal received_bytes, event_count
+            app_ready.set()
+            while True:
+                event = await receive()
+                received_bytes += len(event.get("body", b""))
+                event_count += 1
+                if not event.get("more_body", False):
+                    break
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        envelope = encode_envelope(
+            "request",
+            {
+                "requestId": "req-large-body",
+                "sourceId": "broker-unit",
+                "targetId": "large-body-guest",
+                "method": "POST",
+                "path": "/large-body",
+                "headers": {},
+            },
+        )
+
+        async def run() -> tuple[int, int]:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="large-body-guest",
+                app=app,
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            # Send envelope
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=envelope,
+                    flow_controlled_length=len(envelope),
+                )
+            )
+            await asyncio.wait_for(app_ready.wait(), timeout=5)
+            # Send body chunks one at a time (simulating H2 DATA frames)
+            for _ in range(num_chunks):
+                await guest._events[1].put(
+                    h2.events.DataReceived(
+                        stream_id=1,
+                        data=b"x" * chunk_size,
+                        flow_controlled_length=chunk_size,
+                    )
+                )
+            # End stream
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await asyncio.wait_for(task, timeout=10)
+            return received_bytes, event_count
+
+        total_bytes, total_events = asyncio.run(run())
+        self.assertEqual(total_bytes, chunk_size * num_chunks)
+        # Events: body chunks + 1 terminal (more_body=False) from StreamEnded
+        self.assertEqual(total_events, num_chunks + 1)
+
+    def test_app_early_finish_does_not_hang(self) -> None:
+        """App that finishes without consuming full request body does not hang/leak."""
+        received_events = 0
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            nonlocal received_events
+            # Consume only the first body event, then respond early
+            event = await receive()
+            received_events += 1
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"early-response"})
+
+        envelope = encode_envelope(
+            "request",
+            {
+                "requestId": "req-early-finish",
+                "sourceId": "broker-unit",
+                "targetId": "early-finish-guest",
+                "method": "POST",
+                "path": "/early",
+                "headers": {},
+            },
+        )
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="early-finish-guest",
+                app=app,
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            # Send envelope with first body chunk (remainder)
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=envelope + b"first-chunk",
+                    flow_controlled_length=len(envelope) + 11,
+                )
+            )
+            await asyncio.sleep(0.02)
+            # Send more body data and StreamEnded — app already finished
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=b"second-chunk",
+                    flow_controlled_length=11,
+                )
+            )
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await asyncio.wait_for(task, timeout=5)
+            # App only consumed one event (more_body from remainder)
+            self.assertEqual(received_events, 1)
+
+        asyncio.run(run())
+
+    def test_data_received_after_early_finish_is_acknowledged(self) -> None:
+        """DataReceived after app finishes is discarded but flow control is acked."""
+        app_done = asyncio.Event()
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            # Consume first body, then finish the response
+            await receive()
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+            app_done.set()
+
+        envelope = encode_envelope(
+            "request",
+            {
+                "requestId": "req-early-ack",
+                "sourceId": "broker-unit",
+                "targetId": "early-ack-guest",
+                "method": "POST",
+                "path": "/early-ack",
+                "headers": {},
+            },
+        )
+
+        async def run() -> list[tuple[int, int]]:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="early-ack-guest",
+                app=app,
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            # Send envelope with first body chunk (remainder triggers receive)
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1,
+                    data=envelope + b"first",
+                    flow_controlled_length=len(envelope) + 5,
+                )
+            )
+            # Wait for app to consume the first event and finish
+            await asyncio.wait_for(app_done.wait(), timeout=5)
+            # Send more body data — app already finished, must ack and discard
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1, data=b"second", flow_controlled_length=6
+                )
+            )
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1, data=b"third", flow_controlled_length=5
+                )
+            )
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await asyncio.wait_for(task, timeout=5)
+            # ACKs are now inline, so conn.acknowledged is populated before task completes
+            return conn.acknowledged
+
+        acknowledged = asyncio.run(run())
+        # ack #1: receive() acks envelope+first (pending_metadata_flow_controlled_length)
+        # ack #2: discard ack for "second" (6 bytes)
+        # ack #3: discard ack for "third" (5 bytes)
+        self.assertEqual(len(acknowledged), 3)
+        # total acked bytes: envelope + "first" + "second" + "third"
+        total_acked = sum(fcl for _, fcl in acknowledged)
+        self.assertEqual(total_acked, len(envelope) + 5 + 6 + 5)
+
+
+def _is_envelope(data: bytes) -> bool:
+    """Check if *data* looks like a Verser envelope (vs raw body bytes)."""
+    return len(data) > 6 and data[0] == 1 and data[1] in (1, 2, 3)
 
 
 if __name__ == "__main__":

@@ -88,7 +88,7 @@ npm run test:package-consumers -- --source=tarball
 npm run test:package-tarballs
 ```
 
-The default test command also stages packages before running the repository test suite:
+The default test command also stages packages before running the repository test suite under the bounded-memory runner:
 
 ```sh
 npm test

@@ -17,10 +17,7 @@ test('root package declares npm workspace commands', () => {
     packageManifest.scripts.build,
     'npm run build --workspace=@signicode/verser-common && npm run build --workspace=@signicode/verser2-guest-js-common && npm run build --workspace=@signicode/verser2-guest-node && npm run build --workspace=@signicode/verser2-host && npm run build --workspace=@signicode/verser2-guest-bun && npm run build --workspace=@signicode/verser2-guest-python',
   );
-  assert.equal(
-    packageManifest.scripts.test,
-    'npm run build && npm run stage:packages && node --test test/*.test.js',
-  );
+  assert.equal(packageManifest.scripts.test, 'npm run test:bounded');
   assert.equal(packageManifest.scripts['test:bounded'], 'node ./scripts/run-bounded-tests.js');
   assert.equal(
     packageManifest.scripts['test:bounded:coverage'],
@@ -40,9 +37,47 @@ test('bounded test runner preserves full validation flow with default heap limit
   assert.match(runnerSource, /--max-old-space-size=\$\{oldSpaceSizeMb\}/);
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*build/);
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*stage:packages/);
-  assert.match(runnerSource, /DEFAULT_TEST_FILES\s*=\s*\['test\/\*\.test\.js'\]/);
-  assert.match(runnerSource, /testArgs\s*=\s*\['--test'\]/);
+  assert.match(runnerSource, /readdirSync\([\s\S]*test[\s\S]*\.test\.js/);
+  assert.match(runnerSource, /DEFAULT_MEMORY_LEAK_BYTES\s*=\s*1024\s*\*\s*1024/);
+  assert.match(runnerSource, /'--test-concurrency=1'[\s\S]*test-timeout=\$\{TEST_TIMEOUT_MS\}/);
+  assert.match(runnerSource, /TEST_TIMEOUT_MS\s*=\s*10_000/);
+  assert.match(runnerSource, /partitionTestFiles/);
+  assert.match(runnerSource, /VERSER_TEST_MEMORY_GUARD:\s*'1'/);
+  assert.match(runnerSource, /VERSER_TEST_MEMORY_LEAK_BYTES:\s*String\(options\.memoryLeakBytes\)/);
   assert.match(runnerSource, /runCommand\(process\.execPath, testArgs/);
+});
+
+test('bounded runner partitions one and two focused files without discovery', () => {
+  const runner = require('../scripts/run-bounded-tests.js');
+  assert.deepEqual(
+    runner.partitionTestFiles(['test/one.test.js']).filter((p) => p.length > 0),
+    [['test/one.test.js']],
+  );
+  assert.deepEqual(runner.partitionTestFiles(['test/a.test.js', 'test/b.test.js']), [
+    ['test/a.test.js'],
+    ['test/b.test.js'],
+  ]);
+});
+
+test('bounded runner rejects timeout bypasses and option-like test paths', () => {
+  const runner = require('../scripts/run-bounded-tests.js');
+  assert.throws(() => runner.parseArgs(['--test-timeout=1']), /timeout bypasses/i);
+  assert.throws(() => runner.parseArgs(['--', '--test-timeout=1']), /hyphen|timeout/i);
+});
+
+test('guarded test wrapper supports per-test memory allowances', () => {
+  const guardedTestPath = path.join(rootDirectory, 'test/support/guarded-test.cjs');
+
+  assert.ok(fs.existsSync(guardedTestPath), 'Expected test/support/guarded-test.cjs to exist.');
+
+  const guardedTestSource = fs.readFileSync(guardedTestPath, 'utf8');
+
+  assert.match(
+    guardedTestSource,
+    /memoryLeakBytes\s*\?\?\s*process\.env\.VERSER_TEST_MEMORY_LEAK_BYTES/,
+  );
+  assert.match(guardedTestSource, /const \{ memoryLeakBytes, \.\.\.nodeTestOptions \} = options/);
+  assert.match(guardedTestSource, /nodeTest\.test\(name, nodeTestOptions/);
 });
 
 test('root TypeScript configuration targets strict CommonJS ES2019 declarations', () => {

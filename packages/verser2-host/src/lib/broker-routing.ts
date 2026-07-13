@@ -36,6 +36,96 @@ import type {
 } from './types';
 import { toVerserError } from './utils';
 
+function normalizeRequestedDomain(value: string): string {
+  const authority = value.trim();
+  try {
+    const hostname = new URL(`http://${authority}`).hostname.toLowerCase();
+    return hostname.replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
+  } catch {
+    return authority.toLowerCase().replace(/\.$/, '');
+  }
+}
+
+function normalizeAuthority(value: string): string {
+  const authority = value.trim();
+  const explicitPort = authority.startsWith('[')
+    ? authority.match(/^\[[^\]]+\]:(\d+)$/)?.[1]
+    : authority.match(/:(\d+)$/)?.[1];
+  try {
+    const parsed = new URL(`http://${authority}`);
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+    return explicitPort === undefined ? hostname : `${hostname}:${explicitPort}`;
+  } catch {
+    return authority.toLowerCase().replace(/\.$/, '');
+  }
+}
+
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
+  return entry?.[1];
+}
+
+function resolveRouteDomain(
+  targetId: string,
+  explicitDomain: string | undefined,
+  requestedHeaders: Record<string, string>,
+  callbacks: BrokerRoutingCallbacks,
+): string | undefined {
+  const requested =
+    explicitDomain ??
+    headerValue(requestedHeaders, 'host') ??
+    headerValue(requestedHeaders, ':authority');
+  const candidates = Array.from(callbacks.getRouteCandidates(targetId));
+  if (requested === undefined) {
+    const domains = [
+      ...new Set(candidates.map((candidate) => normalizeRequestedDomain(candidate.domain))),
+    ];
+    if (domains.length === 0) {
+      throw createVerserError('missing-guest', 'Target Guest has no active route', { targetId });
+    }
+    if (domains.length !== 1) {
+      throw createVerserError(
+        'missing-guest',
+        'Target-only request is ambiguous; routeDomain is required',
+        {
+          targetId,
+        },
+      );
+    }
+    return domains[0];
+  }
+  const normalized = normalizeRequestedDomain(requested);
+  if (!candidates.some((candidate) => normalizeRequestedDomain(candidate.domain) === normalized)) {
+    throw createVerserError('missing-guest', 'Target Guest route is not available', {
+      targetId,
+      domain: normalized,
+    });
+  }
+  return normalized;
+}
+
+function rewriteGuestHeaders(
+  requestedHeaders: Record<string, string>,
+  routeDomain: string | undefined,
+): Record<string, string> {
+  if (routeDomain === undefined) {
+    return requestedHeaders;
+  }
+  const originalHost =
+    headerValue(requestedHeaders, 'host') ?? headerValue(requestedHeaders, ':authority');
+  const rewritten = Object.fromEntries(
+    Object.entries(requestedHeaders).filter(([name]) => name.toLowerCase() !== 'x-forwarded-host'),
+  );
+  rewritten.host = routeDomain;
+  if (
+    originalHost !== undefined &&
+    normalizeAuthority(originalHost) !== normalizeAuthority(routeDomain)
+  ) {
+    rewritten['x-forwarded-host'] = originalHost;
+  }
+  return rewritten;
+}
+
 /** Minimal peer info needed by the routing functions. */
 export interface PeerInfo {
   readonly role: string;
@@ -142,6 +232,7 @@ async function routeH2BrokerRequestOverFederationStream(
   requestStream: FederationRequestStream,
   requestId: string,
   targetId: string,
+  routeDomain: string | undefined,
 ): Promise<void> {
   let completed = false;
   const cancelForwarding = (): void => {
@@ -155,9 +246,11 @@ async function routeH2BrokerRequestOverFederationStream(
     stream.off('error', cancelForwarding);
   };
   const cancelOnReset = (): void => {
-    if (stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR) {
-      cancelForwarding();
-    }
+    // Once response metadata has been delivered, a Broker close can be a
+    // graceful-looking HTTP/2 close rather than an `aborted` event.  The
+    // federation request is still live in that case, so close it unless the
+    // forwarding operation has already completed.
+    cancelForwarding();
   };
   stream.once('aborted', cancelForwarding);
   stream.once('close', cancelOnReset);
@@ -173,6 +266,7 @@ async function routeH2BrokerRequestOverFederationStream(
         requestId,
         sourceId: String(headers['x-verser-source-id'] ?? ''),
         targetId,
+        routeDomain,
         method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
         path: String(headers['x-verser-path'] ?? '/'),
         headers: flattenVerserHeaders(
@@ -224,21 +318,36 @@ async function routeBrokerRequestOverLease(
   lease: GuestLeaseStream,
   requestId: string,
   targetId: string,
+  routeDomain: string | undefined,
 ): Promise<void> {
   let completed = false;
+
+  const cleanupCancellation = (): void => {
+    stream.off('aborted', cancelLease);
+    stream.off('error', cancelLease);
+  };
+
   const cancelLease = (): void => {
-    if (!completed && !lease.stream.closed) {
+    if (completed || lease.stream.closed) {
+      return;
+    }
+    cleanupCancellation();
+    // Unpipe so the lease stream no longer receives body data from the
+    // cancelled Broker stream before we close it.
+    stream.unpipe(lease.stream);
+    if (!lease.stream.closed) {
       lease.stream.close(http2.constants.NGHTTP2_CANCEL);
     }
   };
+
   stream.once('aborted', cancelLease);
   stream.once('error', cancelLease);
-  stream.once('close', cancelLease);
 
   const responsePromise = readLeaseResponseMetadataFromStream(lease.stream, {
     requestId,
     targetId,
   });
+  const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
   lease.stream.write(
     encodeVerserEnvelope({
       type: 'request',
@@ -249,7 +358,7 @@ async function routeBrokerRequestOverLease(
         method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
         path: String(headers['x-verser-path'] ?? '/'),
         headers: flattenVerserHeaders(
-          validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+          validateVerserHeaders(rewriteGuestHeaders(requestedHeaders, routeDomain)),
         ),
       },
     }),
@@ -261,14 +370,28 @@ async function routeBrokerRequestOverLease(
     ':status': responseMetadata.statusCode,
     ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
   });
+
+  // After response headers are sent, pipe the response body.
+  // Guest-side errors during response use NGHTTP2_INTERNAL_ERROR to
+  // distinguish from Broker-originated CANCEL in diagnostics.
   lease.stream.once('error', () => {
+    completed = true;
     if (!stream.closed) {
-      stream.close(http2.constants.NGHTTP2_CANCEL);
+      stream.close(http2.constants.NGHTTP2_INTERNAL_ERROR);
     }
+  });
+  lease.stream.once('close', () => {
+    completed = true;
+    cleanupCancellation();
   });
   lease.stream.pipe(stream);
   stream.once('finish', () => {
     completed = true;
+    cleanupCancellation();
+  });
+  stream.once('error', () => {
+    completed = true;
+    cleanupCancellation();
   });
 }
 
@@ -289,6 +412,7 @@ async function routeH2BrokerRequestToLocalGuest(
   headers: http2.IncomingHttpHeaders,
   requestId: string,
   targetId: VerserPeerId,
+  routeDomain: string | undefined,
   callbacks: BrokerRoutingCallbacks,
 ): Promise<void> {
   const controller = new AbortController();
@@ -316,7 +440,12 @@ async function routeH2BrokerRequestToLocalGuest(
         method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
         path: String(headers['x-verser-path'] ?? '/'),
         headers: flattenVerserHeaders(
-          validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+          validateVerserHeaders(
+            rewriteGuestHeaders(
+              decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}')),
+              routeDomain,
+            ),
+          ),
         ),
         body: stream,
         leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs(headers),
@@ -376,12 +505,22 @@ export async function routeBrokerRequest(
   if (target.role !== 'guest') {
     throw createVerserError('missing-guest', 'Target peer is not a Guest', { targetId });
   }
+  const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
+  const routeDomain = resolveRouteDomain(
+    targetId,
+    headers['x-verser-route-domain'] === undefined
+      ? undefined
+      : String(headers['x-verser-route-domain']),
+    requestedHeaders,
+    callbacks,
+  );
   if (target.transport === 'local') {
     await routeH2BrokerRequestToLocalGuest(
       stream,
       headers,
       requestId,
       createPeerId(targetId),
+      routeDomain,
       callbacks,
     );
     return;
@@ -392,7 +531,7 @@ export async function routeBrokerRequest(
     parseLeaseAcquireTimeoutMs(headers),
   );
   if (lease !== undefined) {
-    await routeBrokerRequestOverLease(stream, headers, lease, requestId, targetId);
+    await routeBrokerRequestOverLease(stream, headers, lease, requestId, targetId, routeDomain);
     return;
   }
 
@@ -401,7 +540,7 @@ export async function routeBrokerRequest(
     requestId,
     parseLeaseAcquireTimeoutMs(headers),
   );
-  await routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
+  await routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId, routeDomain);
 }
 
 // ---------------------------------------------------------------------------
@@ -428,14 +567,39 @@ async function tryRouteH2BrokerRequestToFederatedHost(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<boolean> {
   let hadUpstreamCandidate = false;
+  const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
+  const requestedValue =
+    headers['x-verser-route-domain'] ??
+    headerValue(requestedHeaders, 'host') ??
+    headerValue(requestedHeaders, ':authority');
+  const requestedDomain =
+    requestedValue === undefined ? undefined : normalizeRequestedDomain(String(requestedValue));
+  const candidates = Array.from(callbacks.getRouteCandidates(targetId)).filter(
+    (candidate) => candidate.source === 'upstream',
+  );
+  if (
+    requestedDomain === undefined &&
+    new Set(candidates.map((candidate) => normalizeRequestedDomain(candidate.domain))).size > 1
+  ) {
+    throw createVerserError(
+      'missing-guest',
+      'Target-only request is ambiguous; routeDomain is required',
+      {
+        targetId,
+      },
+    );
+  }
   const unavailableCandidates: Array<{
     readonly domain: string;
     readonly originHostId: string;
     readonly nextHopHostId: string;
     readonly hopCount: number;
   }> = [];
-  for (const candidate of callbacks.getRouteCandidates(targetId)) {
-    if (candidate.source !== 'upstream') {
+  for (const candidate of candidates) {
+    if (
+      requestedDomain !== undefined &&
+      normalizeRequestedDomain(candidate.domain) !== requestedDomain
+    ) {
       continue;
     }
     hadUpstreamCandidate = true;
@@ -459,6 +623,7 @@ async function tryRouteH2BrokerRequestToFederatedHost(
       acquired.stream,
       requestId,
       targetId,
+      candidate.domain,
     );
     return true;
   }
@@ -505,6 +670,7 @@ export async function routeLocalBrokerRequest(
       requestId,
       sourceId,
       targetId,
+      routeDomain: request.routeDomain,
       method: request.method,
       path: request.path,
       headers: flattenVerserHeaders(validateVerserHeaders(request.headers ?? {})),
@@ -535,58 +701,69 @@ export async function routeLocalRequestDispatch(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<VerserLocalBrokerResponse> {
   const target = callbacks.getPeer(request.targetId);
-  if (target === undefined || target.role !== 'guest') {
-    const forwarded = await tryRouteLocalRequestToFederatedHost(request, callbacks);
-    if (forwarded !== undefined) {
-      return forwarded;
-    }
-    throw createVerserError('missing-guest', 'Target Guest is not registered', {
-      targetId: request.targetId,
-    });
-  }
-
-  callbacks.emitLifecycle({
-    name: VERSER_LIFECYCLE_EVENTS.requestStarted,
-    peerId: request.targetId,
-    role: 'guest',
-  });
   const controller = new AbortController();
-  const cancelFromUpstream = (): void => controller.abort();
+  const cancelFromUpstream = (): void => controller.abort(request.signal?.reason);
   if (request.signal?.aborted) {
-    controller.abort();
+    controller.abort(request.signal.reason);
   } else {
     request.signal?.addEventListener('abort', cancelFromUpstream, { once: true });
   }
   callbacks.trackController(request.sourceId, controller);
   callbacks.trackController(request.targetId, controller);
+  const dispatchRequest = { ...request, signal: controller.signal };
   let response: VerserLocalBrokerResponse | undefined;
   const untrackController = (): void => {
     request.signal?.removeEventListener('abort', cancelFromUpstream);
     callbacks.untrackController(request.sourceId, controller);
     callbacks.untrackController(request.targetId, controller);
   };
+
   try {
-    if (target.transport === 'local') {
-      if (target.localGuest === undefined) {
-        throw createVerserError('disconnected-target', 'Target local Guest is not attached', {
+    if (target === undefined || target.role !== 'guest') {
+      const forwarded = await tryRouteLocalRequestToFederatedHost(dispatchRequest, callbacks);
+      if (forwarded !== undefined) {
+        response = forwarded;
+      } else {
+        throw createVerserError('missing-guest', 'Target Guest is not registered', {
           targetId: request.targetId,
         });
       }
-      response = await routeLocalRequestToAttachedGuest(
-        { ...request, signal: controller.signal },
-        target.localGuest.listener,
-      );
     } else {
-      response = await routeLocalRequestToH2Guest(
-        { ...request, signal: controller.signal },
+      const routeDomain = resolveRouteDomain(
+        request.targetId,
+        request.routeDomain,
+        request.headers,
         callbacks,
       );
+      const localDispatchRequest = {
+        ...dispatchRequest,
+        routeDomain,
+        headers: rewriteGuestHeaders(request.headers, routeDomain),
+      };
+      callbacks.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.requestStarted,
+        peerId: request.targetId,
+        role: 'guest',
+      });
+      if (target.transport === 'local') {
+        if (target.localGuest === undefined) {
+          throw createVerserError('disconnected-target', 'Target local Guest is not attached', {
+            targetId: request.targetId,
+          });
+        }
+        response = await routeLocalRequestToAttachedGuest(
+          localDispatchRequest,
+          target.localGuest.listener,
+        );
+      } else {
+        response = await routeLocalRequestToH2Guest(localDispatchRequest, callbacks);
+      }
+      callbacks.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
+        peerId: request.targetId,
+        role: 'guest',
+      });
     }
-    callbacks.emitLifecycle({
-      name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
-      peerId: request.targetId,
-      role: 'guest',
-    });
     const cancelResponse = (): void => {
       response?.body.destroy(
         createVerserError('disconnected-target', 'Local peer disconnected during request', {
@@ -676,6 +853,7 @@ async function routeLocalRequestToH2Guest(
         requestId: request.requestId,
         sourceId: request.sourceId,
         targetId: request.targetId,
+        routeDomain: request.routeDomain,
         method: request.method,
         path: request.path,
         headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
@@ -719,14 +897,37 @@ async function tryRouteLocalRequestToFederatedHost(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<VerserLocalBrokerResponse | undefined> {
   let hadUpstreamCandidate = false;
+  const requested =
+    request.routeDomain ??
+    headerValue(request.headers, 'host') ??
+    headerValue(request.headers, ':authority');
+  const requestedDomain = requested === undefined ? undefined : normalizeRequestedDomain(requested);
+  const candidates = Array.from(callbacks.getRouteCandidates(request.targetId)).filter(
+    (candidate) => candidate.source === 'upstream',
+  );
+  if (
+    requestedDomain === undefined &&
+    new Set(candidates.map((candidate) => normalizeRequestedDomain(candidate.domain))).size > 1
+  ) {
+    throw createVerserError(
+      'missing-guest',
+      'Target-only request is ambiguous; routeDomain is required',
+      {
+        targetId: request.targetId,
+      },
+    );
+  }
   const unavailableCandidates: Array<{
     readonly domain: string;
     readonly originHostId: string;
     readonly nextHopHostId: string;
     readonly hopCount: number;
   }> = [];
-  for (const candidate of callbacks.getRouteCandidates(request.targetId)) {
-    if (candidate.source !== 'upstream') {
+  for (const candidate of candidates) {
+    if (
+      requestedDomain !== undefined &&
+      normalizeRequestedDomain(candidate.domain) !== requestedDomain
+    ) {
       continue;
     }
     hadUpstreamCandidate = true;
@@ -744,7 +945,10 @@ async function tryRouteLocalRequestToFederatedHost(
       continue;
     }
 
-    return routeLocalRequestOverFederationStream(request, acquired.stream);
+    return routeLocalRequestOverFederationStream(
+      { ...request, routeDomain: candidate.domain },
+      acquired.stream,
+    );
   }
 
   if (hadUpstreamCandidate) {
@@ -776,6 +980,48 @@ async function routeLocalRequestOverFederationStream(
   requestStream: FederationRequestStream,
 ): Promise<VerserLocalBrokerResponse> {
   const body = new PassThrough();
+  const destroyBody = body.destroy.bind(body);
+  body.destroy = (error?: Error): PassThrough => {
+    if (error !== undefined && !(error instanceof Error)) {
+      return destroyBody(
+        createVerserError('stream-failure', 'Federated response stream failed', {
+          requestId: request.requestId,
+          targetId: request.targetId,
+          cause: String(error),
+        }),
+      );
+    }
+    return destroyBody(error);
+  };
+  let settled = false;
+  let responseBodyActive = false;
+  let responseData: ((chunk: Buffer) => void) | undefined;
+  let responseEnd: (() => void) | undefined;
+  let responseError: ((error: Error) => void) | undefined;
+  let responseClose: (() => void) | undefined;
+  let bodyEnded = false;
+  let bodyErrored = false;
+  const requestBodyError = (error: Error): void => {
+    requestStream.destroy(error);
+  };
+  const abortFederatedRequest = (): void => {
+    if (settled || requestStream.closed) {
+      return;
+    }
+    const reason = request.signal?.reason;
+    request.body.unpipe(requestStream);
+    request.body.destroy(reason instanceof Error ? reason : undefined);
+    requestStream.close(http2.constants.NGHTTP2_CANCEL);
+    body.destroy(
+      reason instanceof Error
+        ? reason
+        : createVerserError('stream-failure', 'Federated request was cancelled', {
+            requestId: request.requestId,
+            targetId: request.targetId,
+          }),
+    );
+  };
+  request.signal?.addEventListener('abort', abortFederatedRequest, { once: true });
   const responsePromise = readFederatedResponseMetadata(requestStream, {
     requestId: request.requestId,
     targetId: request.targetId,
@@ -787,26 +1033,98 @@ async function routeLocalRequestOverFederationStream(
         requestId: request.requestId,
         sourceId: request.sourceId,
         targetId: request.targetId,
+        routeDomain: request.routeDomain,
         method: request.method,
         path: request.path,
         headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
       },
     }),
   );
-  request.body.once('error', (error) => requestStream.destroy(error));
+  request.body.once('error', requestBodyError);
   request.body.pipe(requestStream);
-  const metadata = await responsePromise;
-  requestStream.pipe(body);
-  requestStream.once('end', () => body.end());
-  requestStream.once('error', (error) => body.destroy(error));
-  requestStream.once('close', () => body.end());
+  try {
+    const metadata = await responsePromise;
+    responseBodyActive = true;
+    const cleanup = (): void => {
+      settled = true;
+      request.signal?.removeEventListener('abort', abortFederatedRequest);
+      if (responseData !== undefined) requestStream.off('data', responseData);
+      if (responseEnd !== undefined) requestStream.off('end', responseEnd);
+      if (responseError !== undefined) requestStream.off('error', responseError);
+      if (responseClose !== undefined) requestStream.off('close', responseClose);
+      request.body.off('error', requestBodyError);
+      request.body.unpipe(requestStream);
+    };
+    body.once('end', () => {
+      bodyEnded = true;
+      cleanup();
+    });
+    body.once('close', () => {
+      if (!bodyEnded && !bodyErrored && !requestStream.closed) {
+        requestStream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+      cleanup();
+    });
+    body.once('error', () => {
+      bodyErrored = true;
+      if (!requestStream.closed) {
+        requestStream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+      cleanup();
+    });
+    responseData = (chunk: Buffer): void => {
+      if (!body.write(chunk)) {
+        requestStream.pause();
+        body.once('drain', () => requestStream.resume());
+      }
+    };
+    responseEnd = (): void => {
+      body.end();
+    };
+    responseError = (error: Error): void => {
+      body.destroy(
+        createVerserError('stream-failure', 'Federated response stream failed', {
+          requestId: request.requestId,
+          targetId: request.targetId,
+          cause: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    };
+    responseClose = (): void => {
+      if (
+        'rstCode' in requestStream &&
+        (requestStream as http2.ServerHttp2Stream).rstCode !== http2.constants.NGHTTP2_NO_ERROR
+      ) {
+        body.destroy(
+          createVerserError('stream-failure', 'Federated response stream was reset', {
+            requestId: request.requestId,
+            targetId: request.targetId,
+            rstCode: String((requestStream as http2.ServerHttp2Stream).rstCode),
+          }),
+        );
+      } else {
+        body.end();
+      }
+    };
+    requestStream.on('data', responseData);
+    requestStream.once('end', responseEnd);
+    requestStream.once('error', responseError);
+    requestStream.once('close', responseClose);
 
-  return {
-    requestId: request.requestId,
-    statusCode: metadata.statusCode,
-    headers: flattenVerserHeaders(
-      validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
-    ),
-    body,
-  };
+    return {
+      requestId: request.requestId,
+      statusCode: metadata.statusCode,
+      headers: flattenVerserHeaders(
+        validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
+      ),
+      body,
+    };
+  } finally {
+    // Keep the abort listener installed while the response body is being
+    // consumed.  It is removed by the body terminal events above.
+    if (!settled && !responseBodyActive) {
+      settled = true;
+      request.signal?.removeEventListener('abort', abortFederatedRequest);
+    }
+  }
 }
