@@ -504,7 +504,7 @@ local route waits.
     - [x] Update CHANGELOG and package/docs guidance with Host-first Python upgrade order, interface additions, and stream ownership/lifecycle changes from Phase 6.
 - [x] Task: Validate and review forwarded-authority phase
     - [x] Run affected builds, focused cross-runtime tests, `npm test`, and `npm run lint`.
-    - [ ] Request Oracle review; commit and push completed work.
+    - [x] Oracle approved with no actionable P0–P2 findings; committed and pushed as `6cfbd2b`.
 
 ## Phase 8: Canonical Bounded Test Execution and Performance
 
@@ -526,4 +526,4 @@ lint pass.
     - [x] Preserve memory guards and simplify runner/test synchronization where safely feasible.
 - [x] Task: Validate and review canonical test performance
     - [x] Run both canonical partitions, focused affected tests, `npm test`, and `npm run lint`.
-    - [ ] Request Oracle review; commit and push completed work.
+    - [x] Oracle approved with no actionable P0–P2 findings; committed and pushed as `6cfbd2b`.
