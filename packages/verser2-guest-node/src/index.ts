@@ -54,7 +54,7 @@ export type {
 } from './lib/types';
 
 export { VerserWebSocket } from './lib/verser-websocket';
-export type { VerserWebSocketSendOptions } from './lib/verser-websocket';
+export type { VerserWebSocketEvents, VerserWebSocketSendOptions } from './lib/verser-websocket';
 
 import { Http2VerserBroker } from './lib/http2-verser-broker';
 import { Http2VerserNodeGuest } from './lib/http2-verser-node-guest';

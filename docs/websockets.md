@@ -74,8 +74,10 @@ ws.close(1000, 'done');
 It emits `message`, `pong`, `close`, and `error`. `close(code?, reason?)`
 performs a close handshake. Invalid close codes and close reasons longer than
 123 UTF-8 bytes are rejected; abnormal transport loss is reported locally as
-close code `1006` and is never sent on the wire. Messages are limited to 1 MiB;
-larger messages close the connection with `1009`.
+close code `1006` and is never sent on the wire. The encoded VWS/1 frame is
+limited to 1 MiB; because binary messages are base64 encoded, their usable
+binary capacity is lower than 1 MiB. Larger messages close the connection with
+`1009`.
 
 ## Python ASGI Guest example
 

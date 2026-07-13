@@ -680,6 +680,16 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     if (acceptProtocol !== undefined && typeof acceptProtocol !== 'string') {
       throw createVerserError('protocol-error', 'Malformed WebSocket accept protocol');
     }
+    if (
+      acceptProtocol !== undefined &&
+      acceptProtocol !== '' &&
+      acceptProtocol !== requestedProtocol
+    ) {
+      throw createVerserError(
+        'protocol-error',
+        'Guest-selected WebSocket subprotocol was not offered by the Broker',
+      );
+    }
     ws.sendAccept(acceptProtocol);
     this.maintainWsLeasePool();
   }

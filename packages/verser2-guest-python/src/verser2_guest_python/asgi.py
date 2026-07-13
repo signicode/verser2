@@ -1,9 +1,11 @@
 """ASGI 3 dispatch helpers for the Python Guest.
 
-This module is not a public top-level export of the package.  It is used
-internally by :class:`verser2_guest_python.guest.VerserGuest` to convert
-Verser envelope metadata into ASGI 3 scope dictionaries and to drive the ASGI
-application lifecycle.
+The VWS support helpers :class:`VwsAsgiConnection`,
+:func:`build_websocket_scope`, and :func:`dispatch_asgi_websocket` are public
+top-level package exports.  The HTTP dispatch and scope helpers are used
+internally by :class:`verser2_guest_python.guest.VerserGuest` to convert Verser
+envelope metadata into ASGI 3 scope dictionaries and drive the ASGI application
+lifecycle.
 
 ASGI 3 HTTP scope
     The HTTP scope dict follows the ASGI 3.0 specification
@@ -94,8 +96,13 @@ class ResponseBodyTooLargeError(RuntimeError):
 class VwsAsgiConnection:
     """Bounded VWS/1 frame adapter used by the live ASGI Guest path."""
 
-    def __init__(self, write: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
+    def __init__(
+        self,
+        write: Callable[[dict[str, Any]], Awaitable[None]],
+        offered_protocols: list[str] | tuple[str, ...] = (),
+    ) -> None:
         self._write = write
+        self._offered_protocols = frozenset(offered_protocols)
         self._events: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
             maxsize=VWS_MAX_QUEUE_MESSAGES
         )
@@ -112,13 +119,14 @@ class VwsAsgiConnection:
     async def send(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == "websocket.accept":
-            if event.get("subprotocol") is not None and not isinstance(
-                event.get("subprotocol"), str
-            ):
+            subprotocol = event.get("subprotocol")
+            if subprotocol is not None and not isinstance(subprotocol, str):
                 raise ValueError("Invalid WebSocket subprotocol")
-            await self._write(
-                {"type": "accept", "protocol": event.get("subprotocol") or ""}
-            )
+            if subprotocol and subprotocol not in self._offered_protocols:
+                raise ValueError(
+                    "ASGI selected a WebSocket subprotocol that was not offered"
+                )
+            await self._write({"type": "accept", "protocol": subprotocol or ""})
         elif event_type == "websocket.send":
             has_text = "text" in event and event["text"] is not None
             has_bytes = "bytes" in event and event["bytes"] is not None

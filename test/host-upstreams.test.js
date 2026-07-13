@@ -684,6 +684,145 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
   }
 });
 
+test('Dispatcher cancellation reaches an imported federated Guest and closes its response', async () => {
+  const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
+  let broker;
+  const controller = new AbortController();
+  let guestError;
+  let guestErrorResolve;
+  const guestErrorPromise = new Promise((resolve) => {
+    guestErrorResolve = resolve;
+  });
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-dispatcher-federated-cancel',
+      routedDomains: ['runner-dispatcher-cancel.verser.test'],
+      listener: (request, response) => {
+        request.once('error', (error) => {
+          guestError = error;
+          guestErrorResolve();
+          response.end();
+        });
+        request.resume();
+        response.writeHead(200);
+        response.write('started');
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-dispatcher-federated-cancel',
+          'runner-dispatcher-cancel.verser.test',
+        ).length,
+        1,
+      ),
+    );
+
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'broker-dispatcher-federated-cancel',
+      tls: { ca: trusted.certificate },
+    });
+    await broker.connect();
+    const body = new PassThrough();
+    const responsePromise = fetch('http://runner-dispatcher-cancel.verser.test/cancel', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+      signal: controller.signal,
+      dispatcher: broker.createDispatcher(),
+    });
+    body.write('request');
+    body.end('request-tail');
+    const response = await responsePromise;
+    assert.equal(response.status, 200);
+    controller.abort();
+    await Promise.race([
+      guestErrorPromise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('federated Guest abort timed out')), 1000),
+      ),
+    ]);
+    assert.equal(guestError?.code, 'stream-failure');
+  } finally {
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('Attached local Broker response destruction cancels imported federated work', async () => {
+  const manager = createVerserHost({ hostId: 'local-broker-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'local-broker-runner', tls: tlsOptions() });
+  let broker;
+  let requestBody;
+  let guestRequestClosed = false;
+  let guestClosedResolve;
+  const guestClosed = new Promise((resolve) => {
+    guestClosedResolve = resolve;
+  });
+  await manager.start();
+  try {
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'guest-local-broker-federated-cancel',
+      routedDomains: ['runner-local-broker-cancel.verser.test'],
+      listener: (request, response) => {
+        request.once('close', () => {
+          guestRequestClosed = true;
+          guestClosedResolve();
+        });
+        request.resume();
+        response.writeHead(200);
+        response.write('started');
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates(
+          'guest-local-broker-federated-cancel',
+          'runner-local-broker-cancel.verser.test',
+        ).length,
+        1,
+      ),
+    );
+    broker = await manager.attachLocalBroker({ brokerId: 'broker-local-federated-cancel' });
+    requestBody = new PassThrough();
+    const responsePromise = broker.request({
+      targetId: 'guest-local-broker-federated-cancel',
+      method: 'POST',
+      path: '/cancel',
+      body: requestBody,
+    });
+    requestBody.write('request');
+    const response = await responsePromise;
+    assert.equal(guestRequestClosed, false, 'downstream request must remain open before cancel');
+    response.body.destroy();
+    await Promise.race([
+      guestClosed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('local Broker cancellation timed out')), 1000),
+      ),
+    ]);
+  } finally {
+    requestBody?.destroy();
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
 test('Remote Broker request is forwarded through an upstream Host to a downstream Guest', async () => {
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });

@@ -240,5 +240,7 @@ test('VWS/1 documentation names supported APIs and preserves boundaries', () => 
   assert.match(websocketDocs, /guest\.attachWebSocket/);
   assert.match(websocketDocs, /broker\.webSocket/);
   assert.match(websocketDocs, /websocket\.accept/);
+  assert.match(websocketDocs, /encoded VWS\/1 frame is[\s\S]*1 MiB/);
+  assert.match(websocketDocs, /binary messages are base64 encoded[\s\S]*lower/);
   assert.match(websocketDocs, /Federated WebSocket routes are explicitly unsupported/);
 });

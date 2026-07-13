@@ -29,10 +29,11 @@ class FakeReader:
 
 
 class FakeConn:
-    def __init__(self, events=None):
+    def __init__(self, events=None, window=65535):
         self.events = list(events or [])
         self.acknowledged = []
         self.sent_data = []
+        self.window = window
 
     def receive_data(self, _data):
         return list(self.events)
@@ -45,6 +46,17 @@ class FakeConn:
 
     def data_to_send(self):
         return b""
+
+    def local_flow_control_window(self, _stream_id):
+        return self.window
+
+
+class FakeWriter:
+    def write(self, _data):
+        pass
+
+    async def drain(self):
+        pass
 
 
 class AsgiDispatchTest(unittest.TestCase):
@@ -448,6 +460,23 @@ class LeaseTaskTest(unittest.TestCase):
             return conn.acknowledged
 
         self.assertEqual(asyncio.run(run()), [])
+
+    def test_zero_window_sender_fails_when_connection_reaches_eof(self) -> None:
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="zero-window-eof"
+            )
+            guest._conn = FakeConn(window=0)
+            guest._writer = FakeWriter()
+            guest._reader = FakeReader([b""])
+
+            send_task = asyncio.create_task(guest._send_data(1, b"blocked", False))
+            await asyncio.sleep(0)
+            await guest._read_loop()
+            with self.assertRaisesRegex(RuntimeError, "Guest connection closed"):
+                await send_task
+
+        asyncio.run(run())
 
     def test_leased_receive_acks_body_data_after_asgi_consumes_event(self) -> None:
         async def run() -> list[tuple[int, int]]:

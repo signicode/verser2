@@ -35,6 +35,7 @@ const DEFAULT_MAX_INTERNAL_REDIRECTS = 3;
 interface ReplayableRequestBody {
   readonly body?: readonly Buffer[] | nodeStream.Readable;
   readonly getReplayBody: () => Promise<readonly Buffer[] | undefined>;
+  readonly abort: () => void;
 }
 
 export class Http2VerserBroker implements VerserBroker {
@@ -109,10 +110,20 @@ export class Http2VerserBroker implements VerserBroker {
     // released before the caller considers the broker shut down.
     // Use a short timeout to guard against the rare case where 'close'
     // was already emitted (e.g. session already destroyed by an error).
-    await Promise.race([
-      once(session, 'close'),
-      new Promise<void>((resolve) => setTimeout(resolve, 2000)),
-    ]);
+    if (session.closed) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const onClose = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        session.off('close', onClose);
+        resolve();
+      }, 2000);
+      session.once('close', onClose);
+    });
   }
 
   public getRoutes(): { targetId: string; domain: string }[] {
@@ -169,7 +180,10 @@ export class Http2VerserBroker implements VerserBroker {
       { ...request, body: replayableBody.body },
       replayableBody,
       maxInternalRedirects,
-    );
+    ).catch((error: unknown) => {
+      replayableBody.abort();
+      throw error;
+    });
   }
 
   private async requestWithInternalRedirects(
@@ -198,12 +212,16 @@ export class Http2VerserBroker implements VerserBroker {
     }
 
     response.body.destroy();
+    const redirectedHeaders: Record<string, string> = {
+      ...(request.headers ?? {}),
+      host: redirectTarget.route.domain,
+    };
     return this.requestWithInternalRedirects(
       {
         targetId: redirectTarget.route.targetId,
         method: request.method,
         path: `${redirectTarget.url.pathname}${redirectTarget.url.search}`,
-        headers: request.headers,
+        headers: redirectedHeaders,
         body: replayBody,
       },
       replayableBody,
@@ -305,7 +323,7 @@ export class Http2VerserBroker implements VerserBroker {
     replayBufferLimit: number,
   ): ReplayableRequestBody {
     if (body === undefined) {
-      return { body: undefined, getReplayBody: async () => [] };
+      return { body: undefined, getReplayBody: async () => [], abort: () => {} };
     }
 
     if (!(body instanceof nodeStream.Readable)) {
@@ -324,6 +342,7 @@ export class Http2VerserBroker implements VerserBroker {
       return {
         body,
         getReplayBody: async () => (replayable ? replayChunks : undefined),
+        abort: () => {},
       };
     }
 
@@ -334,6 +353,8 @@ export class Http2VerserBroker implements VerserBroker {
     let streamError: Error | undefined;
     let resolveReplayBody: (body: readonly Buffer[] | undefined) => void = () => {};
     let replayDecisionSettled = false;
+    let sourceEnded = false;
+    let sourceAborted = false;
     const replayDecision = new Promise<readonly Buffer[] | undefined>((resolve) => {
       resolveReplayBody = resolve;
     });
@@ -344,7 +365,7 @@ export class Http2VerserBroker implements VerserBroker {
       replayDecisionSettled = true;
       resolveReplayBody(replayBody);
     };
-    body.on('data', (chunk: Buffer | string) => {
+    const onData = (chunk: Buffer | string): void => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       totalBytes += buffer.length;
       if (totalBytes > replayBufferLimit) {
@@ -357,16 +378,47 @@ export class Http2VerserBroker implements VerserBroker {
         body.pause();
         tee.once('drain', () => body.resume());
       }
-    });
-    body.once('end', () => {
+    };
+    const removeSourceListeners = (): void => {
+      body.off('data', onData);
+      body.off('end', onEnd);
+      body.off('error', onError);
+    };
+    const removeSourceFlowListeners = (): void => {
+      body.off('data', onData);
+      body.off('end', onEnd);
+    };
+    const abortSource = (): void => {
+      if (sourceAborted || sourceEnded) {
+        return;
+      }
+      sourceAborted = true;
+      // Keep the error listener installed until destroy() has emitted its
+      // error. AbortController may destroy the original source concurrently
+      // with tee termination, and removing it here would make that error
+      // uncaught (notably for DOMException abort reasons).
+      removeSourceFlowListeners();
+      settleReplayDecision(undefined);
+      body.once('close', () => body.off('error', onError));
+      body.destroy();
+    };
+    const onEnd = (): void => {
+      sourceEnded = true;
+      removeSourceListeners();
       tee.end();
       settleReplayDecision(replayable ? replayChunks : undefined);
-    });
-    body.once('error', (error) => {
+    };
+    const onError = (error: Error): void => {
       streamError = error;
+      sourceAborted = true;
+      removeSourceListeners();
       tee.destroy(error);
       settleReplayDecision(undefined);
-    });
+    };
+    body.on('data', onData);
+    body.once('end', onEnd);
+    body.once('error', onError);
+    tee.once('close', abortSource);
 
     return {
       body: tee,
@@ -375,6 +427,10 @@ export class Http2VerserBroker implements VerserBroker {
           return undefined;
         }
         return replayDecision;
+      },
+      abort: () => {
+        abortSource();
+        tee.destroy();
       },
     };
   }

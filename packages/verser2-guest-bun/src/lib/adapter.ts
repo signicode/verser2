@@ -72,9 +72,9 @@ const isResponseLike = (value: unknown): value is Response => {
   return value instanceof Response;
 };
 
-const resolveResponse = (value: unknown): Promise<Response> => {
+const resolveResponse = (value: unknown, reuseStaticResponse = false): Promise<Response> => {
   if (isResponseLike(value)) {
-    return Promise.resolve(value.clone());
+    return Promise.resolve(reuseStaticResponse ? value.clone() : value);
   }
   return Promise.reject(new TypeError(DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE));
 };
@@ -253,10 +253,11 @@ export async function dispatchVerserBunRequestInternal(
       }
 
       if (routeMatch.value !== undefined) {
-        const routeResult = isResponseLike(routeMatch.value)
+        const staticRouteResponse = isResponseLike(routeMatch.value);
+        const routeResult = staticRouteResponse
           ? routeMatch.value
           : routeMatch.value(toWebRequest(request, routeMatch.params), server);
-        return toVerserBunResponse(await resolveResponse(await routeResult));
+        return toVerserBunResponse(await resolveResponse(await routeResult, staticRouteResponse));
       }
     }
   }
@@ -281,13 +282,36 @@ const writeResponseBody = async (
 
   const reader = source.getReader();
   let sinkTerminated = false;
+  let sourceCancellation: Promise<void> | undefined;
+  let resolveTermination!: () => void;
+  const termination = new Promise<void>((resolve) => {
+    resolveTermination = resolve;
+  });
+  let terminationSettled = false;
+  const terminate = (reason: unknown) => {
+    if (terminationSettled) return;
+    terminationSettled = true;
+    sinkTerminated = true;
+    sourceCancellation = reader.cancel(reason).then(() => undefined);
+    resolveTermination();
+  };
+  const onClose = () => terminate(new Error('Response sink closed'));
+  const onFinish = () => terminate(new Error('Response sink finished'));
+  const onError = (error: unknown) => terminate(error);
+  response.on?.('close', onClose);
+  response.on?.('finish', onFinish);
+  response.on?.('error', onError);
+
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const result = await Promise.race([
+        reader.read(),
+        termination.then(() => ({ done: true, terminated: true as const })),
+      ]);
+      if ('terminated' in result) return;
+      const { done, value } = result;
       if (done) {
-        if (!sinkTerminated) {
-          response.end();
-        }
+        response.end();
         return;
       }
       const canContinue = response.write(Buffer.from(value));
@@ -300,36 +324,37 @@ const writeResponseBody = async (
             cleanup();
             resolve();
           };
-          const onClose = () => {
+          const onWaitClose = () => {
             if (settled) return;
             settled = true;
             cleanup();
-            sinkTerminated = true;
+            terminate(new Error('Response sink closed'));
             resolve();
           };
-          const onFinish = () => {
+          const onWaitFinish = () => {
             if (settled) return;
             settled = true;
             cleanup();
-            sinkTerminated = true;
+            terminate(new Error('Response sink finished'));
             resolve();
           };
-          const onError = (error: unknown) => {
+          const onWaitError = (error: unknown) => {
             if (settled) return;
             settled = true;
             cleanup();
+            terminate(error);
             reject(error instanceof Error ? error : new Error(String(error)));
           };
           const cleanup = () => {
             response.off?.('drain', onDrain);
-            response.off?.('close', onClose);
-            response.off?.('finish', onFinish);
-            response.off?.('error', onError);
+            response.off?.('close', onWaitClose);
+            response.off?.('finish', onWaitFinish);
+            response.off?.('error', onWaitError);
           };
           response.on?.('drain', onDrain);
-          response.on?.('close', onClose);
-          response.on?.('finish', onFinish);
-          response.on?.('error', onError);
+          response.on?.('close', onWaitClose);
+          response.on?.('finish', onWaitFinish);
+          response.on?.('error', onWaitError);
           // If no event support (mock without on/off), proceed anyway
           if (response.on === undefined) {
             resolve();
@@ -342,6 +367,12 @@ const writeResponseBody = async (
       }
     }
   } finally {
+    response.off?.('close', onClose);
+    response.off?.('finish', onFinish);
+    response.off?.('error', onError);
+    if (sinkTerminated) {
+      await sourceCancellation;
+    }
     reader.releaseLock();
   }
 };

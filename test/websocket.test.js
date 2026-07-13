@@ -11,7 +11,7 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { PassThrough } = require('node:stream');
-const test = require('node:test');
+const test = require('./support/guarded-test.cjs');
 const { loadVerserGuestNode, loadVerserHost } = require('./support/verser-package-imports.cjs');
 const { trusted } = require('./support/tls-fixtures.cjs');
 
@@ -49,6 +49,22 @@ function createGuest(options) {
   });
 }
 
+test.before(async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-warmup-broker' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-warmup-guest' });
+  try {
+    await broker.connect();
+    await guest.connect();
+  } finally {
+    await broker.close('warmup');
+    await guest.close('warmup');
+    await host.close('warmup');
+  }
+});
+
 test('Node Broker opens VWS/1 WebSocket to Node Guest with subprotocol negotiation', async () => {
   const host = createHost({ port: 0 });
   await host.start();
@@ -75,6 +91,34 @@ test('Node Broker opens VWS/1 WebSocket to Node Guest with subprotocol negotiati
     });
 
     assert.equal(ws.protocol, 'vws.base64');
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Node Guest rejects a VWS subprotocol that was not offered by the Broker', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'ws-broker-unoffered' });
+  const guest = createGuest({ hostUrl, guestId: 'ws-guest-unoffered' });
+
+  try {
+    guest.attachWebSocket(() => ({ protocol: 'not-offered' }), 'ws-unoffered.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('ws-unoffered.local.test');
+
+    await assert.rejects(
+      broker.webSocket({
+        targetId: 'ws-guest-unoffered',
+        domain: 'ws-unoffered.local.test',
+        protocol: 'offered-protocol',
+      }),
+      /not offered|protocol|closed/i,
+    );
   } finally {
     await broker.close('test-complete');
     await guest.close('test-complete');
@@ -235,7 +279,7 @@ test('Oversized VWS frame closes with 1009 or deterministic error', async () => 
 
     // Broker sends an oversized binary message (2 MiB) to trigger 1009 from the Guest.
     // The VWS/1 frame itself exceeds VWS_MAX_FRAME_BYTES (1 MiB) after base64 encoding.
-    const big = Buffer.alloc(2 * 1024 * 1024);
+    let big = Buffer.alloc(800 * 1024);
 
     // Expect close or error from the oversized message path
     await new Promise((resolve, reject) => {
@@ -252,8 +296,10 @@ test('Oversized VWS frame closes with 1009 or deterministic error', async () => 
         // Error may fire instead of close; acceptable
         resolve();
       });
-      // Send oversized message
-      ws.send(big, { type: 'binary' });
+      // Send oversized message and release the generated body once serialized.
+      void ws.send(big, { type: 'binary' }).then(() => {
+        big = null;
+      });
       setTimeout(() => reject(new Error('No close/error for oversized message')), 2000);
     });
   } finally {
@@ -273,7 +319,7 @@ test('Oversized single chunk with newline is rejected with 1009 before buffering
   // Construct a single VWS/1 line that exceeds VWS_MAX_FRAME_BYTES (1 MiB)
   // and contains a newline. The parser must reject it before accumulating
   // the full line (byte-counting check fires before JSON parse).
-  const payload = 'x'.repeat(2 * 1024 * 1024);
+  const payload = 'x'.repeat(1100 * 1024);
   const line = `${JSON.stringify({ type: 'text', data: payload })}\n`;
 
   const closePromise = new Promise((resolve, reject) => {
@@ -410,11 +456,7 @@ test('Broker webSocket rejects when Guest closes stream before handshake', async
     // Guest handler that never sends accept/reject — the ws lease stream
     // will close when the Guest closes, which triggers the Host's
     // wsStream close handler and rejects the Broker's webSocket.
-    guest.attachWebSocket(() => {
-      // Intentionally do NOT return accept or reject — hang the handler.
-      // The Guest close() below will tear down the session, closing the
-      // ws lease stream, which causes the Host to reject the handshake.
-    }, 'ws-closeguard.local.test');
+    guest.attachWebSocket(() => new Promise(() => {}), 'ws-closeguard.local.test');
 
     await broker.connect();
     await guest.connect();
@@ -454,9 +496,7 @@ test('Broker webSocket rejects when Broker closes before Guest accepts', async (
 
   try {
     // Guest handler that never sends accept/reject — hangs the handshake
-    guest.attachWebSocket(() => {
-      // Never returns accept or reject
-    }, 'ws-close-self.local.test');
+    guest.attachWebSocket(() => new Promise(() => {}), 'ws-close-self.local.test');
 
     await broker.connect();
     await guest.connect();

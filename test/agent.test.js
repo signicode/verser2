@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { Readable, Writable } = require('node:stream');
 const test = require('./support/guarded-test.cjs');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
@@ -55,10 +56,16 @@ function requestWithAgent(url, options, body) {
       reject(error);
     });
     if (Array.isArray(body)) {
-      for (const chunk of body) {
-        request.write(chunk);
-      }
-      request.end();
+      void (async () => {
+        for (const chunk of body) {
+          if (!request.write(chunk)) await new Promise((resolve) => request.once('drain', resolve));
+        }
+        request.end();
+      })().catch(reject);
+      return;
+    }
+    if (body !== undefined && typeof body.pipe === 'function') {
+      body.pipe(request);
       return;
     }
     if (body !== undefined) {
@@ -489,9 +496,13 @@ test('Broker Agent cleans up when client aborts during body upload', async () =>
             'http://abort-upload-agent.local.test/abort-upload',
             { agent, method: 'POST' },
             (response) => {
-              const chunks = [];
-              response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-              response.on('end', () => resolve(Buffer.concat(chunks)));
+              const sink = new Writable({
+                write(_chunk, _encoding, callback) {
+                  callback();
+                },
+              });
+              response.pipe(sink);
+              response.on('end', () => resolve());
               response.on('error', reject);
             },
           );
@@ -603,7 +614,7 @@ test('Broker Agent streams large request bodies through leased routing', async (
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'broker-agent-large-body-1' });
   const guest = createGuest({ hostUrl, guestId: 'guest-agent-large-body-1' });
-  const largeBody = Buffer.alloc(256 * 1024, 'x');
+  const largeBodySize = 256 * 1024;
   let agent;
   let receivedSize = 0;
   guest.attach((request, response) => {
@@ -624,17 +635,20 @@ test('Broker Agent streams large request bodies through leased routing', async (
     );
 
     agent = broker.createAgent();
-    // Send as a single contiguous buffer — avoids chunked transfer encoding
-    // which would hit the 64KB default chunk-decoder pending limit for
-    // 128KB+ write sizes.
     const response = await requestWithAgent(
       'http://large-body-agent.local.test/large-body',
       { agent, method: 'POST' },
-      largeBody,
+      Readable.from(
+        (async function* generateBody() {
+          for (let offset = 0; offset < largeBodySize; offset += 32 * 1024) {
+            yield Buffer.alloc(Math.min(32 * 1024, largeBodySize - offset), 'x');
+          }
+        })(),
+      ),
     );
 
     assert.equal(response.statusCode, 200);
-    assert.equal(Number(response.body.toString('utf8')), largeBody.length);
+    assert.equal(Number(response.body.toString('utf8')), largeBodySize);
   } finally {
     if (agent !== undefined) {
       agent.destroy();

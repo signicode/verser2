@@ -816,7 +816,16 @@ class VerserGuest:
                 False,
             )
 
-        connection = VwsAsgiConnection(write)
+        offered_protocols = (
+            [
+                protocol.strip()
+                for protocol in requested_protocol.split(",")
+                if protocol.strip()
+            ]
+            if requested_protocol
+            else []
+        )
+        connection = VwsAsgiConnection(write, offered_protocols=offered_protocols)
         metadata = {
             "path": path,
             "headers": (
@@ -1076,7 +1085,8 @@ class VerserGuest:
             )
 
     def _fail_pending_streams(self, error: Exception) -> None:
-        """Put *error* into every pending event queue to unblock waiters."""
+        """Fail every pending stream and flow-control operation with *error*."""
+        self._fail_window_waiters(error)
         for queue in list(self._events.values()):
             queue.put_nowait(error)
 

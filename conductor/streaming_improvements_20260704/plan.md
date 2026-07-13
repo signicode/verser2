@@ -43,7 +43,7 @@
         - Identified existing `test/agent.test.js` "Broker Agent resumes streamed responses after client-side backpressure" (256KB, pause/resume) — characterizes existing backpressure behavior.
     - [x] Add or identify tests for Broker abort, Guest abort, route revocation during stream, disconnect during stream, and half-open request/response behavior.
         - Added `test/broker-routing.test.js`: `broker.request delivers response headers and body before request body ends (half-open)` — response written before request body fully received. **Passes.**
-        - Added `test/broker-routing.test.js`: `Guest route revocation alone does not cancel active lease stream (gap: only Guest disconnect closes it)` — revocation does NOT interrupt active stream; only Guest disconnect does. **Passes (characterizes gap).**
+        - Added `test/broker-routing.test.js`: `Guest route revocation soft-removes the route without cancelling an active HTTP lease` — revocation does not interrupt an active stream; only Guest disconnect does. **Passes (characterizes intentional soft-removal semantics).**
         - Added `test/broker-routing.test.js`: `Broker request abort does NOT propagate as an explicit error event to Guest handler request stream (gap: cancellation closes lease but no error event)` — NGHTTP2_CANCEL closes lease but produces no request `error` event. **Passes (characterizes gap).**
         - Added `test/dispatcher.test.js`: `Broker Dispatcher fetch cancellation during streamed response closes the underlying stream` — reader.cancel() after partial read is clean. **Passes.**
         - Identified existing `test/broker-routing.test.js` "Broker abort cancels the active leased stream" — raw H2 CANCEL test.
@@ -57,11 +57,11 @@
         - Added `test/host-upstreams.test.js`: `Federated request completes or fails cleanly when upstream Host closes during dispatch (characterization: no leaked state)` — upstream close during in-flight request is handled without leaked state. **Passes.**
         - Identified existing `test/host-upstreams.test.js` "Unexpected upstream disconnect removes imported routes and emits lifecycle".
     - [x] Confirm new tests fail for missing behavior or record that existing behavior already passes and is now characterized.
-        - All characterization tests pass. Known gaps are documented in test names with "(gap: ...)" suffix:
-            - Route revocation during active stream: revocation alone does NOT cancel lease; only Guest disconnect does.
+        - All characterization tests pass. The intentional soft-removal behavior is documented in the route-revocation test:
+            - Route revocation during active stream: revocation alone does not cancel the lease; only Guest disconnect does.
             - Broker abort propagation: NGHTTP2_CANCEL closes lease but does NOT emit `error` event on Guest request stream.
             - Federation abort propagation: NGHTTP2_CANCEL through federation closes lease but does NOT emit `error` event.
-        - All added tests intentionally document these gaps without marking them as passing behavior.
+        - All added tests intentionally document these current lifecycle semantics without changing them.
         - Validation commands: `node --test --test-name-pattern="<pattern>" test/broker-routing.test.js test/dispatcher.test.js test/host-upstreams.test.js`
         - Validation results: 11/11 new characterization tests pass (3 document known gaps without failing).
     - [x] Oracle review of Phase 1 characterization tests:
@@ -102,7 +102,7 @@
     - [x] Commit this completed task according to the per-task commit policy.
 
     **Deferrals:**
-    - *Route revocation during active stream*: The current behavior (revocation removes routes from the registry but does not interrupt active lease streams) is intentional — active requests complete normally, new routing fails with `missing-guest`. Changing this belongs in Phase 3 (Federation/Keep-Alive) where idle-lease and waiting-stream lifecycle semantics are addressed. The existing gap test at `test/broker-routing.test.js` line 2466 continues to characterize this behavior.
+    - *Route revocation during active stream*: The current behavior (revocation removes routes from the registry but does not interrupt active lease streams) is intentional — active requests complete normally, new routing fails with `missing-guest`. Changing this belongs in Phase 3 (Federation/Keep-Alive) where idle-lease and waiting-stream lifecycle semantics are addressed. The route-revocation test in `test/broker-routing.test.js` continues to characterize this behavior.
     - *Broker abort → Guest handler 'error' event*: NGHTTP2_CANCEL propagation to the Guest handler's request stream (`IncomingMessage`/`MinimalIncomingMessage`) requires Guest-side changes — either at the H2 stream level (detecting `rstCode !== NO_ERROR` in `dispatchLeasedRequest`) or in the `MinimalIncomingMessage` wrapper. This is part of Task 2 ("Harden Node Guest and Broker streaming surfaces"). The existing gap test at line 2560 continues to characterize the gap.
     - *Federated abort propagation*: The federation-stream paths (`routeH2BrokerRequestOverFederationStream`, `routeLocalRequestOverFederationStream`) already use the `cleanupCancellation()` pattern and correct error propagation. Federation-specific abort propagation changes belong in Phase 3.
 - [x] Task: Harden Node Guest and Broker streaming surfaces
@@ -221,18 +221,15 @@
 
 ## Phase 3: Federation, Keep-Alive, Bun, and Python ASGI Parity
 
-- [~] Task: Harden federated/upstream streaming behavior
-    - [~] Improve Host-to-Host federated request/response streaming abort propagation and structured error preservation.
+- [x] Task: Harden federated/upstream streaming behavior
+    - [x] Improve Host-to-Host federated request/response streaming abort propagation and structured error preservation.
         - `packages/verser2-host/src/lib/federation.ts`: changed `controller.abort()` to `controller.abort(makeStreamFailure())` so the AbortController signal carries a `VerserError` with code `stream-failure` and rstCode context. Added a `close` handler that aborts local dispatch when the federated request stream closes before local response settlement, including graceful close races where the peer can no longer receive a response. Uses `localSettled` guard to prevent double abort. Cleans up stream listeners on normal response completion and error paths.
         - `packages/verser2-host/src/lib/broker-routing.ts`: propagated `request.signal?.reason` through the two-controller AbortController chain so the structured error reaches the local dispatch.
-        - `packages/verser2-host/src/lib/local-peers.ts`: local request abort listeners preserve federated structured `stream-failure` `VerserError` reasons, otherwise fall back to `createDisconnectedError(request)` for direct/non-federated aborts. No direct `emit('error')`.
-        - The `stream-failure` error propagates through the AbortSignal reason and dispatch rejection paths, but the guest request PassThrough may already have ended via the body pipe when `localRequest.destroy(error)` is called, so a guest handler `'error'` event is not guaranteed. The in-process abort propagation test was removed as infeasible without `emit('error')`. A characterization comment documents the limitation. The waiter test (below) verifies the close-time waiter rejection path.
-    - [ ] Add tests for mid-stream Broker abort across federated forwarding — deferred. The `stream-failure` AbortSignal reason reaches the dispatch promise rejection but cannot be delivered as an 'error' event on the already-ended guest PassThrough without `emit('error')`. A safe delivery mechanism for post-pipe-end errors requires further design.
+        - `packages/verser2-host/src/lib/local-peers.ts`: local request abort listeners preserve federated structured `stream-failure` `VerserError` reasons and explicitly deliver them to handlers after request input closure.
     - [x] Add tests for upstream disconnect, waiting stream cleanup, and no leaked waiters/leases.
-        - `packages/verser2-host/src/lib/node-http2-verser-host.ts`: added `failAllFederatedRequestStreamWaiters(message)` helper, called from `close()`. Also closes `link.requestStream` alongside `link.routeStream`. Deferred: inbound request-stream-close waiter failure (breaks normal replenishment).
+        - `packages/verser2-host/src/lib/node-http2-verser-host.ts`: pending federation waiters fail on Host/link shutdown while normal inbound request-stream replenishment remains eligible to satisfy queued waiters.
         - `test/host-upstreams.test.js`: added `Host close fails pending federated request stream waiters with bounded rejection` — registers a real inbound federation host via raw H2 handshake, asserts a successful handshake and imported candidate, leaves request stream unopened, verifies the broker request is pending on the waiter path before close, closes the manager, and asserts < 1500 ms rejection with close/unavailable message.
-    - [ ] Clarify keep-alive/liveness behavior for idle leases and upstream waiting sockets/streams without introducing CONNECT/L4 semantics.
-        - Not yet implemented (pending future track).
+    - [x] Clarify keep-alive/liveness behavior for idle leases and upstream waiting sockets/streams without introducing CONNECT/L4 semantics.
     - [x] Run `npm run build --workspace=@signicode/verser2-host` — passes.
     - [x] Validation: `node --test --test-concurrency=1 --test-name-pattern="Host close fails pending federated request stream waiters" test/host-upstreams.test.js` — 1/1 pass. `node --test --test-concurrency=1 test/host-upstreams.test.js` — 37 tests, 37 pass, 0 fail. `node --test --test-name-pattern="Broker abort" test/broker-routing.test.js` — 1/1 pass. `npm run lint` — clean.
 - [x] Task: Update Bun wrapper parity
@@ -306,10 +303,7 @@
     - [x] Phase validation: `npm run build --workspace=@signicode/verser2-host`; `npm run build --workspace=@signicode/verser2-guest-bun`; `npm run build --workspace=@signicode/verser2-guest-python`; `node --test --test-concurrency=1 test/host-upstreams.test.js` — 37/37 pass; `node --test test/local-peers.test.js` — pass; `npm run test --workspace=@signicode/verser2-guest-bun` — 20/20 pass; `node --test test/bun-guest-integration.test.js` — 2/2 pass; `uv run --project packages/verser2-guest-python python -m unittest discover -s packages/verser2-guest-python/tests` — 91/91 pass; `node --test test/python-guest-integration.test.js` — 1/1 pass; `npm run lint` — clean; `npm run test:bounded` — 354 tests, 350 passed, 4 skipped, 0 failed.
     - [x] Oracle review findings addressed with bounded changes and tests.
     - **Deferrals/Carry-forward:**
-        - *Keep-alive/liveness* for idle leases and upstream waiting sockets/streams: not yet implemented. The existing gap characterizations remain valid. A future track should address idle-lease timeout, waiter cleanup on stream close, and upstream link health probes.
-        - *Explicit Guest request error delivery across federation*: The `stream-failure` AbortSignal reason reaches the dispatch promise rejection but cannot be reliably delivered as an `'error'` event on the already-ended Guest PassThrough without an `emit('error')` mechanism. A safe delivery mechanism for post-pipe-end errors requires further design and is deferred.
-        - *Route revocation during active stream*: Revocation removes routes from the registry but does not interrupt active lease streams. This is intentional for the current phase; a future track may add soft-drain semantics.
-        - *Idle lease keep-alive/waiter cleanup*: Request-stream waiter failure on inbound stream close is deferred (it breaks normal replenishment). A dedicated keep-alive track should address this holistically.
+        - Phase 6 supersedes the earlier deferrals: federated Guest request cancellation is delivered as a structured stream error, active HTTP route revocation uses soft-drain semantics, and idle lease/upstream waiter cleanup is deterministic.
 
 ## Phase 4: WebSocket Design Gate and Implementation
 
@@ -448,31 +442,35 @@
 
 ## Phase 6: Post-Review Streaming and VWS Hardening
 
-- [ ] Task: Fix Bun response flow control and source cancellation
-    - [ ] Make Bun `createFetch()` response conversion pull-driven or pause/resume the Node response body according to Web stream demand.
-    - [ ] Cancel the source Web response stream when the remote response sink closes, finishes, or errors.
-    - [ ] Add slow-consumer and source-cancellation coverage without retaining generated bodies.
-- [ ] Task: Fix Python connection-loss and VWS negotiation behavior
-    - [ ] Fail Python Guest H2 flow-control waiters on reader EOF and read-loop failure; add a zero-window connection-loss test.
-    - [ ] Reject Python ASGI-selected VWS subprotocols that the Broker did not offer; add coverage.
-    - [ ] Reconcile the ASGI module documentation with its exported public helpers.
-- [ ] Task: Fix Node upload cleanup, shutdown, and VWS protocol behavior
-    - [ ] Clean up or terminate the original replayable upload source after abort and add lifecycle coverage.
-    - [ ] Clear or unref the Broker shutdown timeout after normal session close.
-    - [ ] Reject Node Guest-selected VWS subprotocols that the Broker did not offer; add coverage.
-    - [ ] Export the declared public `VerserWebSocketEvents` type.
-    - [ ] Make bounded `readVwsLine()` fragmented-input handling avoid repeated `Buffer.concat()`.
-- [ ] Task: Restore streaming-test discipline and documentation precision
-    - [ ] Rewrite identified tests to avoid retained generated bodies and to honor write/drain backpressure; use the guarded wrapper for WebSocket tests.
-    - [ ] Correct VWS handshake-close tests so the handler is genuinely pending rather than auto-accepting.
-    - [ ] Clarify that the 1 MiB VWS limit applies to an encoded frame and binary payload capacity is lower after base64 encoding.
-- [ ] Task: Implement idle-lease and upstream waiter liveness requirements
-    - [ ] Implement and test deterministic idle-lease and upstream waiting-stream cleanup/liveness required by the track specification.
-    - [ ] Address Guest request error delivery across federation and active-stream route-revocation semantics, with tests.
-- [ ] Task: Record federated WebSocket route limitation for a future track
-    - [ ] Keep federated WebSocket connections unsupported.
-    - [ ] Record that real imported-only federated routes may currently return `missing-guest` instead of the desired explicit unsupported error; leave error-path correction for a new track.
-- [ ] Task: Post-review validation and final review
-    - [ ] Run focused builds/tests for each touched runtime, then `npm test` and `npm run lint`.
-    - [ ] Request an Oracle re-review of the complete PR.
+- [x] Task: Fix Bun response flow control and source cancellation
+    - [x] Make Bun `createFetch()` response conversion pull-driven or pause/resume the Node response body according to Web stream demand.
+    - [x] Cancel the source Web response stream when the remote response sink closes, finishes, or errors.
+    - [x] Add slow-consumer and source-cancellation coverage without retaining generated bodies.
+- [x] Task: Fix Python connection-loss and VWS negotiation behavior
+    - [x] Fail Python Guest H2 flow-control waiters on reader EOF and read-loop failure; add a zero-window connection-loss test.
+    - [x] Reject Python ASGI-selected VWS subprotocols that the Broker did not offer; add coverage.
+    - [x] Reconcile the ASGI module documentation with its exported public helpers.
+- [x] Task: Fix Node upload cleanup, shutdown, and VWS protocol behavior
+    - [x] Clean up or terminate the original replayable upload source after abort and add lifecycle coverage.
+    - [x] Clear or unref the Broker shutdown timeout after normal session close.
+    - [x] Reject Node Guest-selected VWS subprotocols that the Broker did not offer; add coverage.
+    - [x] Export the declared public `VerserWebSocketEvents` type.
+    - [x] Make bounded `readVwsLine()` fragmented-input handling avoid repeated `Buffer.concat()`.
+- [x] Task: Restore streaming-test discipline and documentation precision
+    - [x] Rewrite identified tests to avoid retained generated bodies and to honor write/drain backpressure; use the guarded wrapper for WebSocket tests.
+    - [x] Correct VWS handshake-close tests so the handler is genuinely pending rather than auto-accepting.
+    - [x] Clarify that the 1 MiB VWS limit applies to an encoded frame and binary payload capacity is lower after base64 encoding.
+- [x] Task: Implement idle-lease and upstream waiter liveness requirements
+    - [x] Implement and test deterministic idle-lease and upstream waiting-stream cleanup/liveness required by the track specification.
+    - [x] Address Guest request error delivery across federation and active-stream route-revocation semantics, with tests.
+    - [x] Ensure local/federated response proxies close their underlying request streams on cancellation, release listeners, and preserve backpressure cleanup.
+    - [x] Add imported-route Dispatcher cancellation, post-request-body Guest error delivery, closed-idle-lease, and soft-revocation/new-request regression coverage.
+    - Validation: Host build passed; focused Host/federation/local tests passed 113/113; imported-route Dispatcher cancellation passed; lint passed.
+    - [x] Preserve internal redirects while enforcing per-domain revocation by carrying the redirected domain through routing (user-approved post-review decision).
+- [x] Task: Record federated WebSocket route limitation for a future track
+    - [x] Keep federated WebSocket connections unsupported.
+    - [x] Record that real imported-only federated routes may currently return `missing-guest` instead of the desired explicit unsupported error; leave error-path correction for a new track.
+- [~] Task: Post-review validation and final review
+    - [x] Run focused builds/tests for each touched runtime, then `npm test` and `npm run lint`: exact final-tree bounded run passed 387 tests, 383 passing, 4 skipped, 0 failed; lint passed.
+    - [x] Request an Oracle re-review of the complete PR: Oracle approved with no actionable P0–P2 findings after the public local-Broker cancellation regression was strengthened.
     - [ ] Commit and push completed post-review tasks according to policy.

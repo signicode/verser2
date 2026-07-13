@@ -241,6 +241,29 @@ class TestLiveGuestWebSocketLease(unittest.TestCase):
         asyncio.run(_run())
         self.assertEqual(sent[-1]["code"], 1002)
 
+    def test_asgi_selected_subprotocol_must_be_offered(self) -> None:
+        sent: list[dict] = []
+
+        async def record(frame: dict) -> None:
+            sent.append(frame)
+
+        async def run() -> None:
+            connection = VwsAsgiConnection(
+                record,
+                offered_protocols=["vws.one", "vws.two"],
+            )
+            await connection.send({"type": "websocket.accept"})
+            await connection.send(
+                {"type": "websocket.accept", "subprotocol": "vws.two"}
+            )
+            with self.assertRaises(ValueError):
+                await connection.send(
+                    {"type": "websocket.accept", "subprotocol": "vws.other"}
+                )
+
+        asyncio.run(run())
+        self.assertEqual([frame["protocol"] for frame in sent], ["", "vws.two"])
+
     def test_app_ignoring_disconnect_is_cancelled_after_reset(self) -> None:
         cancelled = False
 

@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const http2 = require('node:http2');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
@@ -234,6 +235,7 @@ test('Broker follows 307 internal redirects to advertised routes and replays req
       response.end('redirecting');
     }, 'redirect-307.local.test');
     targetGuest.attach((request, response) => {
+      assert.equal(request.headers.host, 'target-307.local.test');
       const chunks = [];
       request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
       request.on('end', () => {
@@ -252,7 +254,7 @@ test('Broker follows 307 internal redirects to advertised routes and replays req
       targetId: 'guest-redirect-307-a',
       method: 'PATCH',
       path: '/start',
-      headers: { 'x-input': 'redirect' },
+      headers: { 'x-input': 'redirect', host: 'redirect-307.local.test:443' },
       body: [Buffer.from('first-'), Buffer.from('second')],
     });
 
@@ -264,6 +266,46 @@ test('Broker follows 307 internal redirects to advertised routes and replays req
     if (broker !== undefined) await broker.close('test-complete');
     if (redirectGuest !== undefined) await redirectGuest.close('test-complete');
     if (targetGuest !== undefined) await targetGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker rejects a revoked domain even when the same Guest has another active route', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-domain-revoke' });
+  const guest = createGuest({
+    hostUrl,
+    guestId: 'guest-domain-revoke',
+    routedDomains: ['active-domain.local.test', 'revoked-domain.local.test'],
+  });
+
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('active-domain.local.test');
+    await broker.waitForRoute('revoked-domain.local.test');
+
+    const revokeResult = await guest.revokeRoutes(['revoked-domain.local.test']);
+    assert.equal(revokeResult.status, 'ack');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.deepEqual(broker.getRoutes(), [
+      { targetId: 'guest-domain-revoke', domain: 'active-domain.local.test' },
+    ]);
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-domain-revoke',
+          method: 'GET',
+          path: '/revoked',
+          headers: { host: 'revoked-domain.local.test:443' },
+        }),
+      /route is not available|missing|revoked/i,
+    );
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
     await host.close('test-complete');
   }
 });
@@ -476,6 +518,33 @@ test('Broker validates routed request headers before forwarding metadata', async
         return true;
       },
     );
+  } finally {
+    await broker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker terminates the original replayable upload source when request setup aborts', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-replay-abort-1' });
+  const source = new PassThrough();
+
+  try {
+    await broker.connect();
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-replay-abort-1',
+          method: 'POST',
+          path: '/abort',
+          headers: { connection: 'close' },
+          body: source,
+        }),
+      /forbidden header/i,
+    );
+    assert.equal(source.destroyed, true);
   } finally {
     await broker.close('test-complete');
     await host.close('test-complete');
@@ -729,6 +798,49 @@ test('Broker request routes over a raw leased HTTP/2 stream without a Guest cont
     await broker.close('test-complete');
     rawGuest.close();
     await host.close('test-complete');
+  }
+});
+
+test('Host does not hand a closed idle lease to a queued request', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const session = await connectRawClient(host.address.port);
+  let broker;
+  try {
+    await requestJson(session, {
+      peerId: 'guest-closed-idle',
+      role: 'guest',
+      routedDomains: ['closed-idle.local.test'],
+    });
+
+    const lease = session.request({
+      ':method': 'POST',
+      ':path': '/verser/guest/lease',
+      'x-verser-peer-id': 'guest-closed-idle',
+      'x-verser-lease-id': 'closed-idle-lease',
+    });
+    await once(lease, 'response');
+    const leaseClosed = once(lease, 'close');
+    lease.close(http2.constants.NGHTTP2_CANCEL);
+    await leaseClosed;
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+
+    broker = await host.attachLocalBroker({ brokerId: 'broker-closed-idle' });
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-closed-idle',
+          method: 'GET',
+          path: '/closed-idle',
+          headers: { host: 'closed-idle.local.test' },
+          leaseAcquireTimeoutMs: 20,
+        }),
+      (error) => error.code === 'timeout',
+    );
+  } finally {
+    await broker?.close();
+    session.destroy();
+    await host.close();
   }
 });
 
@@ -2348,12 +2460,13 @@ test('broker.request streams multi-megabyte request body without full buffering'
       body,
     });
 
-    // Write 2MB in 64KB chunks, verifying streaming
-    const chunkSize = 64 * 1024;
+    // Write 2MB in bounded chunks, respecting PassThrough backpressure.
+    const chunkSize = 32 * 1024;
     const totalSize = 2 * 1024 * 1024;
-    for (let i = 0; i < totalSize / chunkSize; i++) {
-      body.write(Buffer.alloc(chunkSize, 'a'));
-      if (i % 8 === 0) await new Promise((resolve) => setImmediate(resolve));
+    for (let offset = 0; offset < totalSize; offset += chunkSize) {
+      if (!body.write(Buffer.alloc(chunkSize, 'a'))) {
+        await new Promise((resolve) => body.once('drain', resolve));
+      }
     }
     body.end();
 
@@ -2378,15 +2491,28 @@ test('broker.request streams multi-megabyte response body without full buffering
   try {
     const chunkSize = 64 * 1024;
     const totalSize = 2 * 1024 * 1024;
-    const expectedBody = Buffer.alloc(totalSize, 'b');
+    const expectedHash = createHash('sha256');
+    for (let offset = 0; offset < totalSize; offset += chunkSize) {
+      expectedHash.update(Buffer.alloc(chunkSize, 'b'));
+    }
 
     guest = createGuest({ hostUrl, guestId: 'guest-large-download-1' });
     guest.attach((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/octet-stream' });
-      for (let offset = 0; offset < totalSize; offset += chunkSize) {
-        response.write(expectedBody.subarray(offset, offset + chunkSize));
-      }
-      response.end();
+      let offset = 0;
+      const writeNext = () => {
+        if (offset >= totalSize) {
+          response.end();
+          return;
+        }
+        offset += chunkSize;
+        if (!response.write(Buffer.alloc(chunkSize, 'b'))) {
+          response.once('drain', writeNext);
+        } else {
+          setImmediate(writeNext);
+        }
+      };
+      writeNext();
     }, 'large-download.local.test');
     await broker.connect();
     await guest.connect();
@@ -2399,9 +2525,18 @@ test('broker.request streams multi-megabyte response body without full buffering
     });
 
     assert.equal(response.statusCode, 200);
-    const body = await readBody(response.body);
-    assert.equal(body.length, totalSize);
-    assert.deepEqual(body, expectedBody);
+    const receivedHash = createHash('sha256');
+    let receivedBytes = 0;
+    await new Promise((resolve, reject) => {
+      response.body.on('data', (chunk) => {
+        receivedBytes += chunk.length;
+        receivedHash.update(chunk);
+      });
+      response.body.once('end', resolve);
+      response.body.once('error', reject);
+    });
+    assert.equal(receivedBytes, totalSize);
+    assert.equal(receivedHash.digest('hex'), expectedHash.digest('hex'));
   } finally {
     await broker.close('test-complete');
     if (guest !== undefined) await guest.close('test-complete');
@@ -2464,14 +2599,54 @@ test('broker.request delivers response headers and body before request body ends
   }
 });
 
+test('broker.request cleans an upload source after early response and mid-upload H2 abort', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-early-abort-1' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-early-abort-1' });
+  const body = new PassThrough();
+
+  try {
+    guest.attach((_request, response) => {
+      response.writeHead(200);
+      response.end('early');
+    }, 'early-abort.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('early-abort.local.test');
+
+    const responsePromise = broker.request({
+      targetId: 'guest-early-abort-1',
+      method: 'POST',
+      path: '/early-abort',
+      body,
+    });
+    body.write(Buffer.alloc(1024));
+    const response = await responsePromise;
+    assert.equal(response.statusCode, 200);
+    response.body.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(body.destroyed, true);
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 // ================ Characterization: Route Revocation During Active Stream ================
 
-test('Guest route revocation alone does not cancel active lease stream (gap: only Guest disconnect closes it)', async () => {
+test('Guest route revocation soft-removes the route without cancelling an active HTTP lease', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'broker-revoke-active-1' });
-  const guest = createGuest({ hostUrl, guestId: 'guest-revoke-active-1' });
+  const guest = createGuest({
+    hostUrl,
+    guestId: 'guest-revoke-active-1',
+    routedDomains: ['revoke-active.local.test', 'keep-active.local.test'],
+  });
 
   try {
     let postRevokeDataResolve;
@@ -2509,6 +2684,7 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
       targetId: 'guest-revoke-active-1',
       method: 'POST',
       path: '/revoke-during-stream',
+      headers: { host: 'revoke-active.local.test' },
       body,
     });
 
@@ -2538,7 +2714,7 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
     // Signal the handler that revocation has occurred
     seenRevocation = true;
 
-    // Revocation alone does NOT close the active lease (known gap).
+    // Revocation soft-removes the route but does not close an active lease.
     // The request should still be alive after revocation.
     // Write more data and prove it arrives at the guest handler specifically after revocation.
     body.write(Buffer.from('more-data'));
@@ -2558,6 +2734,17 @@ test('Guest route revocation alone does not cancel active lease stream (gap: onl
         ),
       ),
     ]);
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-revoke-active-1',
+          method: 'GET',
+          path: '/after-revocation',
+          headers: { host: 'revoke-active.local.test' },
+        }),
+      (error) => error.code === 'missing-guest',
+    );
 
     // Only Guest disconnect closes the active lease stream
     await guest.close('test-disconnect');

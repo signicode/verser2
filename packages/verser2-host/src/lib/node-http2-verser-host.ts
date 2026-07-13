@@ -1553,8 +1553,20 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     return new Promise<federation.AcquiredFederatedRequestStream>((resolve, reject) => {
-      const resolveStream = (stream: http2.ServerHttp2Stream): void =>
+      const resolveStream = (stream: http2.ServerHttp2Stream): void => {
+        const current = this.inboundFederationHosts.get(hostId);
+        if (current?.requestStream !== stream || stream.closed) {
+          reject(
+            createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
+              hostId,
+              direction: 'inbound-federation',
+            }),
+          );
+          return;
+        }
+        this.inboundFederationHosts.set(hostId, { ...current, requestBusy: true });
         resolve({ stream, via: 'inbound-federation', hostId });
+      };
       const timeout = setTimeout(() => {
         const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
         const remainingWaiters = waiters.filter((waiter) => waiter.resolve !== resolveStream);
@@ -2209,6 +2221,14 @@ export class NodeHttp2VerserHost implements VerserHost {
         });
       }
       acceptProtocol = acceptFrame.protocol ?? '';
+      if (acceptProtocol.length > 0 && acceptProtocol !== protocol) {
+        returnLease();
+        throw createVerserError(
+          'protocol-error',
+          'Guest accepted a WebSocket subprotocol that the Broker did not offer',
+          { targetId, domain, offeredProtocol: protocol, acceptedProtocol: acceptProtocol },
+        );
+      }
     } catch (error) {
       // Cleanup: respond to Broker with error if not already responded.
       // sendError calls respond() + end(), so do not close brokerStream

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Readable } from 'node:stream';
 import { createVerserBroker, createVerserBunGuest } from '../src/index';
 import {
   createNodeStyleHandler,
@@ -111,6 +112,23 @@ describe('createVerserBunGuest routes API', () => {
 });
 
 describe('Bun adapter response body consumers', () => {
+  test('reuses static route Responses by cloning each dispatch body', async () => {
+    const staticResponse = new Response('reusable-static-body');
+    const handler = { routes: { '/static': staticResponse } };
+
+    const first = await dispatchVerserBunRequestInternal(handler, {
+      ...baseRequest,
+      path: '/static',
+    });
+    const second = await dispatchVerserBunRequestInternal(handler, {
+      ...baseRequest,
+      path: '/static',
+    });
+
+    await expect(first.text()).resolves.toBe('reusable-static-body');
+    await expect(second.text()).resolves.toBe('reusable-static-body');
+  });
+
   test('does not eagerly read Response bodies', async () => {
     const originalText = Response.prototype.text;
     let textCalled = false;
@@ -624,6 +642,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     const receivedChunks: Buffer[] = [];
     let writeCallIndex = 0;
     let endCalled = false;
+    let sourceCanceled = false;
     const handlers = new Map<string, (...args: unknown[]) => void>();
 
     const responseWriter = {
@@ -662,7 +681,9 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
               // Two chunks: first triggers backpressure, second must NOT be written
               controller.enqueue(streamChunkEncoder.encode('first'));
               controller.enqueue(streamChunkEncoder.encode('second'));
-              controller.close();
+            },
+            cancel() {
+              sourceCanceled = true;
             },
           }),
           { status: 200 },
@@ -703,6 +724,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
 
     // end() must NOT have been called (sink was closed externally)
     expect(endCalled).toBe(false);
+    expect(sourceCanceled).toBe(true);
     // Only the first chunk should ever have been written
     expect(receivedChunks).toHaveLength(1);
     expect(receivedChunks[0]).toEqual(Buffer.from('first'));
@@ -713,6 +735,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     const receivedChunks: Buffer[] = [];
     let writeCallIndex = 0;
     let endCalled = false;
+    let sourceCanceled = false;
     const handlers = new Map<string, (...args: unknown[]) => void>();
 
     const responseWriter = {
@@ -750,7 +773,9 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
             start(controller) {
               controller.enqueue(streamChunkEncoder.encode('first'));
               controller.enqueue(streamChunkEncoder.encode('second'));
-              controller.close();
+            },
+            cancel() {
+              sourceCanceled = true;
             },
           }),
           { status: 200 },
@@ -789,6 +814,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     });
 
     expect(endCalled).toBe(false);
+    expect(sourceCanceled).toBe(true);
     expect(receivedChunks).toHaveLength(1);
     expect(receivedChunks[0]).toEqual(Buffer.from('first'));
   });
@@ -890,5 +916,96 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     expect(destroyed).toBe(true);
     // Should have removed data, end, and error listeners only
     expect(removedEvents.sort()).toEqual(['data', 'end', 'error']);
+  });
+
+  test('Bun fetch response only pulls a bounded amount while the Web consumer is slow', async () => {
+    const broker = createVerserBroker({
+      hostUrl: 'https://localhost:1',
+      brokerId: 'bun-slow-consumer-test',
+    });
+    let yielded = 0;
+    let destroyed = false;
+    const source = Readable.from(
+      (async function* () {
+        for (let index = 0; index < 64; index++) {
+          yielded++;
+          yield Buffer.alloc(1024, index);
+        }
+      })(),
+    );
+    source.on('close', () => {
+      destroyed = true;
+    });
+    (broker as unknown as { getRoutes: () => unknown }).getRoutes = () => [
+      { targetId: 'target', domain: 'slow.test' },
+    ];
+    (broker as unknown as { request: () => Promise<unknown> }).request = async () => ({
+      statusCode: 200,
+      headers: {},
+      body: source,
+    });
+
+    const response = await broker.createFetch()('http://slow.test/data');
+    const reader = response.body?.getReader();
+    expect(reader).not.toBeNull();
+    if (reader === undefined || reader === null) return;
+
+    try {
+      const first = await reader.read();
+      expect(first.done).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(yielded).toBeLessThanOrEqual(2);
+    } finally {
+      await reader.cancel('slow-consumer');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(destroyed).toBe(true);
+  });
+
+  test('response writer cancels its Web source when the Node sink errors', async () => {
+    let sourceCanceled = false;
+    let errorHandler: ((error: unknown) => void) | undefined;
+    let writeCalls = 0;
+    const responseWriter = {
+      statusCode: 0,
+      writeHead() {},
+      write() {
+        writeCalls++;
+        return false;
+      },
+      end() {},
+      on(event: string, handler: (...args: unknown[]) => void) {
+        if (event === 'error') errorHandler = handler;
+      },
+      off() {},
+    };
+    let done!: () => void;
+    const donePromise = new Promise<void>((resolve) => {
+      done = resolve;
+    });
+    const nodeHandler = createNodeStyleHandler('error.test', {
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('first'));
+            },
+            cancel() {
+              sourceCanceled = true;
+              done();
+            },
+          }),
+        ),
+    });
+
+    nodeHandler(
+      { method: 'GET', url: '/', headers: {}, on() {} },
+      responseWriter as unknown as NodeStyleResponse,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(writeCalls).toBe(1);
+    errorHandler?.(new Error('sink-error'));
+    await donePromise;
+    expect(sourceCanceled).toBe(true);
   });
 });

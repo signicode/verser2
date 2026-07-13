@@ -56,6 +56,7 @@ type LocalRequest = Readable & {
 };
 
 class LocalIncomingMessage extends PassThrough implements LocalRequest {
+  private onAbortListener?: () => void;
   public readonly method: string;
 
   public readonly url: string;
@@ -73,10 +74,19 @@ class LocalIncomingMessage extends PassThrough implements LocalRequest {
       // headers does not surface as an unhandled stream error.
     });
     const onAbort = (): void => {
-      this.destroy(createRequestAbortError(request));
+      const error = createRequestAbortError(request);
+      // A federated request can be cancelled after the request pipe has
+      // already ended while the Guest handler is still running.  destroy()
+      // is then a no-op; explicitly deliver the structured error so the
+      // handler observes the cancellation without creating an unhandled error.
+      if (this.readableEnded || this.destroyed) {
+        this.emit('error', error);
+      } else {
+        this.destroy(error);
+      }
     };
+    this.onAbortListener = onAbort;
     request.signal?.addEventListener('abort', onAbort, { once: true });
-    this.once('close', () => request.signal?.removeEventListener('abort', onAbort));
     request.body.once('error', (error) => {
       this.destroy(
         request.signal?.aborted || isHttp2CancelError(error)
@@ -85,6 +95,13 @@ class LocalIncomingMessage extends PassThrough implements LocalRequest {
       );
     });
     request.body.pipe(this);
+  }
+
+  public disposeAbortListener(request: LocalDispatchRequest): void {
+    if (this.onAbortListener !== undefined) {
+      request.signal?.removeEventListener('abort', this.onAbortListener);
+      this.onAbortListener = undefined;
+    }
   }
 }
 
@@ -338,6 +355,7 @@ export function dispatchLocalGuestRequest(
       }
       settled = true;
       cleanup();
+      localRequest.disposeAbortListener(request);
       reject(error);
     };
     const resolveResponse = (): void => {
@@ -346,7 +364,12 @@ export function dispatchLocalGuestRequest(
       }
       settled = true;
       cleanup();
-      resolve(localResponse.toBrokerResponse(request.requestId));
+      const brokerResponse = localResponse.toBrokerResponse(request.requestId);
+      const dispose = (): void => localRequest.disposeAbortListener(request);
+      brokerResponse.body.once('end', dispose);
+      brokerResponse.body.once('close', dispose);
+      brokerResponse.body.once('error', dispose);
+      resolve(brokerResponse);
     };
     const failBeforeResponse = (error: unknown): void => {
       rejectBeforeResponse(createLocalHandlerError(request, error));

@@ -36,6 +36,16 @@ import type {
 } from './types';
 import { toVerserError } from './utils';
 
+function normalizeRequestedDomain(value: string): string {
+  const authority = value.trim();
+  try {
+    const hostname = new URL(`http://${authority}`).hostname.toLowerCase();
+    return hostname.replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
+  } catch {
+    return authority.toLowerCase().replace(/\.$/, '');
+  }
+}
+
 /** Minimal peer info needed by the routing functions. */
 export interface PeerInfo {
   readonly role: string;
@@ -155,9 +165,11 @@ async function routeH2BrokerRequestOverFederationStream(
     stream.off('error', cancelForwarding);
   };
   const cancelOnReset = (): void => {
-    if (stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR) {
-      cancelForwarding();
-    }
+    // Once response metadata has been delivered, a Broker close can be a
+    // graceful-looking HTTP/2 close rather than an `aborted` event.  The
+    // federation request is still live in that case, so close it unless the
+    // forwarding operation has already completed.
+    cancelForwarding();
   };
   stream.once('aborted', cancelForwarding);
   stream.once('close', cancelOnReset);
@@ -403,6 +415,21 @@ export async function routeBrokerRequest(
   if (target.role !== 'guest') {
     throw createVerserError('missing-guest', 'Target peer is not a Guest', { targetId });
   }
+  const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
+  const requestedDomainValue = requestedHeaders.host ?? requestedHeaders[':authority'];
+  const requestedDomain =
+    requestedDomainValue === undefined ? undefined : normalizeRequestedDomain(requestedDomainValue);
+  if (
+    requestedDomain !== undefined &&
+    !Array.from(callbacks.getRouteCandidates(targetId)).some(
+      (candidate) => normalizeRequestedDomain(candidate.domain) === requestedDomain,
+    )
+  ) {
+    throw createVerserError('missing-guest', 'Target Guest route is not available', {
+      targetId,
+      domain: requestedDomain,
+    });
+  }
   if (target.transport === 'local') {
     await routeH2BrokerRequestToLocalGuest(
       stream,
@@ -562,63 +589,74 @@ export async function routeLocalRequestDispatch(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<VerserLocalBrokerResponse> {
   const target = callbacks.getPeer(request.targetId);
-  if (target === undefined || target.role !== 'guest') {
-    const forwarded = await tryRouteLocalRequestToFederatedHost(request, callbacks);
-    if (forwarded !== undefined) {
-      return forwarded;
-    }
-    throw createVerserError('missing-guest', 'Target Guest is not registered', {
-      targetId: request.targetId,
-    });
-  }
-
-  callbacks.emitLifecycle({
-    name: VERSER_LIFECYCLE_EVENTS.requestStarted,
-    peerId: request.targetId,
-    role: 'guest',
-  });
   const controller = new AbortController();
-  const cancelFromUpstream = (): void => {
-    // Propagate the upstream signal's reason (set by controller.abort(reason)
-    // in the federation boundary) so structured errors like stream-failure
-    // pass through the local dispatch abort chain.
-    controller.abort(request.signal?.reason);
-  };
+  const cancelFromUpstream = (): void => controller.abort(request.signal?.reason);
   if (request.signal?.aborted) {
-    controller.abort(request.signal?.reason);
+    controller.abort(request.signal.reason);
   } else {
     request.signal?.addEventListener('abort', cancelFromUpstream, { once: true });
   }
   callbacks.trackController(request.sourceId, controller);
   callbacks.trackController(request.targetId, controller);
+  const dispatchRequest = { ...request, signal: controller.signal };
   let response: VerserLocalBrokerResponse | undefined;
   const untrackController = (): void => {
     request.signal?.removeEventListener('abort', cancelFromUpstream);
     callbacks.untrackController(request.sourceId, controller);
     callbacks.untrackController(request.targetId, controller);
   };
+
   try {
-    if (target.transport === 'local') {
-      if (target.localGuest === undefined) {
-        throw createVerserError('disconnected-target', 'Target local Guest is not attached', {
+    if (target === undefined || target.role !== 'guest') {
+      const forwarded = await tryRouteLocalRequestToFederatedHost(dispatchRequest, callbacks);
+      if (forwarded !== undefined) {
+        response = forwarded;
+      } else {
+        throw createVerserError('missing-guest', 'Target Guest is not registered', {
           targetId: request.targetId,
         });
       }
-      response = await routeLocalRequestToAttachedGuest(
-        { ...request, signal: controller.signal },
-        target.localGuest.listener,
-      );
     } else {
-      response = await routeLocalRequestToH2Guest(
-        { ...request, signal: controller.signal },
-        callbacks,
-      );
+      const requestedDomainValue = request.headers.host ?? request.headers[':authority'];
+      const requestedDomain =
+        requestedDomainValue === undefined
+          ? undefined
+          : normalizeRequestedDomain(requestedDomainValue);
+      if (
+        requestedDomain !== undefined &&
+        !Array.from(callbacks.getRouteCandidates(request.targetId)).some(
+          (candidate) => normalizeRequestedDomain(candidate.domain) === requestedDomain,
+        )
+      ) {
+        throw createVerserError('missing-guest', 'Target Guest has no active route', {
+          targetId: request.targetId,
+          domain: requestedDomain,
+        });
+      }
+      callbacks.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.requestStarted,
+        peerId: request.targetId,
+        role: 'guest',
+      });
+      if (target.transport === 'local') {
+        if (target.localGuest === undefined) {
+          throw createVerserError('disconnected-target', 'Target local Guest is not attached', {
+            targetId: request.targetId,
+          });
+        }
+        response = await routeLocalRequestToAttachedGuest(
+          dispatchRequest,
+          target.localGuest.listener,
+        );
+      } else {
+        response = await routeLocalRequestToH2Guest(dispatchRequest, callbacks);
+      }
+      callbacks.emitLifecycle({
+        name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
+        peerId: request.targetId,
+        role: 'guest',
+      });
     }
-    callbacks.emitLifecycle({
-      name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
-      peerId: request.targetId,
-      role: 'guest',
-    });
     const cancelResponse = (): void => {
       response?.body.destroy(
         createVerserError('disconnected-target', 'Local peer disconnected during request', {
@@ -808,6 +846,48 @@ async function routeLocalRequestOverFederationStream(
   requestStream: FederationRequestStream,
 ): Promise<VerserLocalBrokerResponse> {
   const body = new PassThrough();
+  const destroyBody = body.destroy.bind(body);
+  body.destroy = (error?: Error): PassThrough => {
+    if (error !== undefined && !(error instanceof Error)) {
+      return destroyBody(
+        createVerserError('stream-failure', 'Federated response stream failed', {
+          requestId: request.requestId,
+          targetId: request.targetId,
+          cause: String(error),
+        }),
+      );
+    }
+    return destroyBody(error);
+  };
+  let settled = false;
+  let responseBodyActive = false;
+  let responseData: ((chunk: Buffer) => void) | undefined;
+  let responseEnd: (() => void) | undefined;
+  let responseError: ((error: Error) => void) | undefined;
+  let responseClose: (() => void) | undefined;
+  let bodyEnded = false;
+  let bodyErrored = false;
+  const requestBodyError = (error: Error): void => {
+    requestStream.destroy(error);
+  };
+  const abortFederatedRequest = (): void => {
+    if (settled || requestStream.closed) {
+      return;
+    }
+    const reason = request.signal?.reason;
+    request.body.unpipe(requestStream);
+    request.body.destroy(reason instanceof Error ? reason : undefined);
+    requestStream.close(http2.constants.NGHTTP2_CANCEL);
+    body.destroy(
+      reason instanceof Error
+        ? reason
+        : createVerserError('stream-failure', 'Federated request was cancelled', {
+            requestId: request.requestId,
+            targetId: request.targetId,
+          }),
+    );
+  };
+  request.signal?.addEventListener('abort', abortFederatedRequest, { once: true });
   const responsePromise = readFederatedResponseMetadata(requestStream, {
     requestId: request.requestId,
     targetId: request.targetId,
@@ -825,20 +905,91 @@ async function routeLocalRequestOverFederationStream(
       },
     }),
   );
-  request.body.once('error', (error) => requestStream.destroy(error));
+  request.body.once('error', requestBodyError);
   request.body.pipe(requestStream);
-  const metadata = await responsePromise;
-  requestStream.pipe(body);
-  requestStream.once('end', () => body.end());
-  requestStream.once('error', (error) => body.destroy(error));
-  requestStream.once('close', () => body.end());
+  try {
+    const metadata = await responsePromise;
+    responseBodyActive = true;
+    const cleanup = (): void => {
+      settled = true;
+      request.signal?.removeEventListener('abort', abortFederatedRequest);
+      if (responseData !== undefined) requestStream.off('data', responseData);
+      if (responseEnd !== undefined) requestStream.off('end', responseEnd);
+      if (responseError !== undefined) requestStream.off('error', responseError);
+      if (responseClose !== undefined) requestStream.off('close', responseClose);
+      request.body.off('error', requestBodyError);
+      request.body.unpipe(requestStream);
+    };
+    body.once('end', () => {
+      bodyEnded = true;
+      cleanup();
+    });
+    body.once('close', () => {
+      if (!bodyEnded && !bodyErrored && !requestStream.closed) {
+        requestStream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+      cleanup();
+    });
+    body.once('error', () => {
+      bodyErrored = true;
+      if (!requestStream.closed) {
+        requestStream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+      cleanup();
+    });
+    responseData = (chunk: Buffer): void => {
+      if (!body.write(chunk)) {
+        requestStream.pause();
+        body.once('drain', () => requestStream.resume());
+      }
+    };
+    responseEnd = (): void => {
+      body.end();
+    };
+    responseError = (error: Error): void => {
+      body.destroy(
+        createVerserError('stream-failure', 'Federated response stream failed', {
+          requestId: request.requestId,
+          targetId: request.targetId,
+          cause: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    };
+    responseClose = (): void => {
+      if (
+        'rstCode' in requestStream &&
+        (requestStream as http2.ServerHttp2Stream).rstCode !== http2.constants.NGHTTP2_NO_ERROR
+      ) {
+        body.destroy(
+          createVerserError('stream-failure', 'Federated response stream was reset', {
+            requestId: request.requestId,
+            targetId: request.targetId,
+            rstCode: String((requestStream as http2.ServerHttp2Stream).rstCode),
+          }),
+        );
+      } else {
+        body.end();
+      }
+    };
+    requestStream.on('data', responseData);
+    requestStream.once('end', responseEnd);
+    requestStream.once('error', responseError);
+    requestStream.once('close', responseClose);
 
-  return {
-    requestId: request.requestId,
-    statusCode: metadata.statusCode,
-    headers: flattenVerserHeaders(
-      validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
-    ),
-    body,
-  };
+    return {
+      requestId: request.requestId,
+      statusCode: metadata.statusCode,
+      headers: flattenVerserHeaders(
+        validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
+      ),
+      body,
+    };
+  } finally {
+    // Keep the abort listener installed while the response body is being
+    // consumed.  It is removed by the body terminal events above.
+    if (!settled && !responseBodyActive) {
+      settled = true;
+      request.signal?.removeEventListener('abort', abortFederatedRequest);
+    }
+  }
 }

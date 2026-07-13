@@ -226,7 +226,8 @@ export function readVwsLine(
   maxBytes: number = VWS_MAX_FRAME_BYTES,
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    let buffer = Buffer.alloc(0);
+    const chunks: Buffer[] = [];
+    let bufferedBytes = 0;
     let settled = false;
     const cleanup = (): void => {
       stream.off('data', onData);
@@ -249,25 +250,31 @@ export function readVwsLine(
       finish(err);
     };
     const onData = (chunk: Buffer): void => {
-      buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
-      const idx = buffer.indexOf(0x0a);
+      const next = Buffer.from(chunk);
+      const idx = next.indexOf(0x0a);
       if (idx < 0) {
-        if (buffer.byteLength > maxBytes) oversize();
+        chunks.push(next);
+        bufferedBytes += next.byteLength;
+        if (bufferedBytes > maxBytes) oversize();
         return;
       }
-      const line = buffer.subarray(0, idx);
-      const remaining = buffer.subarray(idx + 1);
-      if (line.byteLength > maxBytes) {
+      const lineBytes = bufferedBytes + idx;
+      if (lineBytes > maxBytes) {
         oversize();
         return;
       }
+      const line =
+        chunks.length === 0
+          ? next.subarray(0, idx)
+          : Buffer.concat([...chunks, next.subarray(0, idx)], lineBytes);
+      const remaining = next.subarray(idx + 1);
       finish(undefined, line.toString('utf8'));
       if (remaining.byteLength > 0) stream.unshift(remaining);
     };
     const onEnd = (): void =>
       finish(
-        buffer.byteLength > 0 ? undefined : new Error('Stream ended before VWS frame'),
-        buffer.toString('utf8'),
+        bufferedBytes > 0 ? undefined : new Error('Stream ended before VWS frame'),
+        Buffer.concat(chunks, bufferedBytes).toString('utf8'),
       );
     const onError = (error: Error): void => finish(error);
     const onClose = (): void => finish(new Error('Stream closed before VWS frame'));

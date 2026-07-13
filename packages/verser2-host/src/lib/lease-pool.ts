@@ -44,12 +44,21 @@ export class LeasePool {
   private readonly activeLeases = new Map<string, GuestLeaseStream>();
   private readonly queuedLeaseAcquisitions = new Map<VerserPeerId, QueuedLeaseAcquisition[]>();
 
+  private isClosed(lease: GuestLeaseStream): boolean {
+    return lease.stream.closed || lease.stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR;
+  }
+
   /**
    * Adds an idle lease to the pool. If a queued acquisition is waiting for
    * this guest's lease, the lease is assigned immediately (resolving the
    * queued promise) instead of being added to the idle pool.
    */
   addIdleLease(lease: GuestLeaseStream): void {
+    // Never consume a waiter for a stream that has already gone away. The
+    // Guest close handler may be queued behind this callback.
+    if (this.isClosed(lease)) {
+      return;
+    }
     const queued = this.queuedLeaseAcquisitions.get(lease.guestId)?.shift();
     if (queued !== undefined) {
       clearTimeout(queued.timeout);
@@ -75,7 +84,13 @@ export class LeasePool {
     timeoutMs: number,
   ): Promise<GuestLeaseStream> {
     const idleLeases = this.idleLeases.get(guestId) ?? [];
-    const lease = idleLeases.shift();
+    let lease = idleLeases.shift();
+    while (lease !== undefined && this.isClosed(lease)) {
+      lease = idleLeases.shift();
+    }
+    if (idleLeases.length === 0) {
+      this.idleLeases.delete(guestId);
+    }
     if (lease !== undefined) {
       lease.active = true;
       this.activeLeases.set(`${lease.guestId}:${lease.leaseId}`, lease);
@@ -116,7 +131,11 @@ export class LeasePool {
     timeoutMs: number,
   ): Promise<GuestLeaseStream | undefined> {
     const idleLeases = this.idleLeases.get(guestId) ?? [];
+    while (idleLeases[0] !== undefined && this.isClosed(idleLeases[0])) {
+      idleLeases.shift();
+    }
     if (idleLeases.length === 0) {
+      this.idleLeases.delete(guestId);
       return undefined;
     }
     return this.acquireLease(guestId, requestId, timeoutMs);
@@ -128,10 +147,13 @@ export class LeasePool {
    */
   removeLease(lease: GuestLeaseStream): void {
     const idleLeases = this.idleLeases.get(lease.guestId) ?? [];
-    this.idleLeases.set(
-      lease.guestId,
-      idleLeases.filter((candidate) => candidate !== lease),
-    );
+    const remainingIdleLeases = idleLeases.filter((candidate) => candidate !== lease);
+    if (remainingIdleLeases.length === 0) {
+      this.idleLeases.delete(lease.guestId);
+    } else {
+      this.idleLeases.set(lease.guestId, remainingIdleLeases);
+    }
+    lease.active = false;
     this.activeLeases.delete(`${lease.guestId}:${lease.leaseId}`);
   }
 

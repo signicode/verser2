@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { PassThrough } = require('node:stream');
+const { Readable } = require('node:stream');
 const test = require('./support/guarded-test.cjs');
 const { fetch } = require('undici');
 
@@ -327,10 +329,20 @@ test('Broker Dispatcher streams large response bodies with controlled backpressu
       const chunkSize = 64 * 1024;
       const totalSize = 512 * 1024;
       response.writeHead(200, { 'content-type': 'application/octet-stream' });
-      for (let offset = 0; offset < totalSize; offset += chunkSize) {
-        response.write(Buffer.alloc(chunkSize, 0x78));
-      }
-      response.end();
+      let offset = 0;
+      const writeNext = () => {
+        if (offset >= totalSize) {
+          response.end();
+          return;
+        }
+        offset += chunkSize;
+        if (!response.write(Buffer.alloc(chunkSize, 0x78))) {
+          response.once('drain', writeNext);
+        } else {
+          setImmediate(writeNext);
+        }
+      };
+      writeNext();
     },
     { brokerId: 'broker-dispatcher-large-response', guestId: 'guest-dispatcher-large-response' },
   );
@@ -340,19 +352,24 @@ test('Broker Dispatcher streams large response bodies with controlled backpressu
       dispatcher: route.broker.createDispatcher(),
     });
     const reader = response.body.getReader();
-    const chunks = [];
     let totalBytes = 0;
+    let chunkCount = 0;
+    const hash = createHash('sha256');
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value);
       totalBytes += value.length;
+      hash.update(value);
+      chunkCount += 1;
       // Simulate slow consumer — small delay every few chunks
-      if (chunks.length % 4 === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+      if (chunkCount % 4 === 0) await new Promise((resolve) => setTimeout(resolve, 5));
     }
     assert.equal(totalBytes, 512 * 1024);
-    const combined = Buffer.concat(chunks.map((c) => Buffer.from(c)));
-    assert.equal(combined.length, 512 * 1024);
+    const expectedHash = createHash('sha256');
+    for (let offset = 0; offset < 512 * 1024; offset += 64 * 1024) {
+      expectedHash.update(Buffer.alloc(64 * 1024, 0x78));
+    }
+    assert.equal(hash.digest('hex'), expectedHash.digest('hex'));
   } finally {
     await closeRoute(route);
   }
@@ -480,7 +497,7 @@ test('Broker Dispatcher propagates abort signal during request body upload', asy
 });
 
 test('Broker Dispatcher streams large request body through fetch', async () => {
-  const largeBody = Buffer.alloc(256 * 1024, 'L');
+  const largeBodySize = 256 * 1024;
   let receivedSize = 0;
 
   const route = await createConnectedRoute(
@@ -499,13 +516,20 @@ test('Broker Dispatcher streams large request body through fetch', async () => {
   try {
     const response = await fetch('http://dispatcher-large-upload.local.test/large-upload', {
       method: 'POST',
-      body: largeBody,
+      body: Readable.from(
+        (async function* generateBody() {
+          for (let offset = 0; offset < largeBodySize; offset += 32 * 1024) {
+            yield Buffer.alloc(Math.min(32 * 1024, largeBodySize - offset), 'L');
+          }
+        })(),
+      ),
+      duplex: 'half',
       dispatcher: route.broker.createDispatcher(),
     });
 
     assert.equal(response.status, 200);
     const text = await response.text();
-    assert.equal(Number(text), largeBody.length);
+    assert.equal(Number(text), largeBodySize);
   } finally {
     await closeRoute(route);
   }
