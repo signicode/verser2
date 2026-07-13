@@ -527,3 +527,11 @@ lint pass.
 - [x] Task: Validate and review canonical test performance
     - [x] Run both canonical partitions, focused affected tests, `npm test`, and `npm run lint`.
     - [x] Oracle approved with no actionable P0–P2 findings; committed and pushed as `6cfbd2b`.
+
+## Follow-up Note: Imported Federated WebSocket Error Path
+
+- Federated WebSocket connections remain unsupported.
+- A real imported-only federated WebSocket route can currently return
+  `missing-guest` before reaching the explicit unsupported-route error.
+- Address this error-path consistency in a future dedicated track; do not use it
+  to enable federated WebSocket connections.
