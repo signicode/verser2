@@ -78,6 +78,11 @@ export type { VerserPeerRole } from '@signicode/verser-common';
 
 export { HostRouteRegistry, createHostRouteRegistry } from './lib/route-registry';
 
+export {
+  openUpstreamFederationVwsStream,
+  readFederationVwsNegotiation,
+} from './lib/federation';
+
 export type {
   HostRouteRegistryOptions,
   ImportedRouteRejection,

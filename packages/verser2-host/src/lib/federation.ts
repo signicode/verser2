@@ -14,6 +14,8 @@ import * as http2 from 'node:http2';
 import { text as readStreamText } from 'node:stream/consumers';
 
 import {
+  FEDERATION_VWS_PATH,
+  FEDERATION_VWS_VERSION,
   type FederatedRouteRegistration,
   VERSER_LIFECYCLE_EVENTS,
   type VerserBrokerRouteLifecycleControlFrame,
@@ -21,14 +23,17 @@ import {
   type VerserHostId,
   type VerserRouteLifecycleEvent,
   createFederatedRoutesControlFrame,
+  createFederationVwsNegotiationFailure,
   createVerserError,
   createVerserHostFederationHandshake,
   createVerserHostId,
+  decodeVwsFrame,
   encodeJsonLine,
   encodeVerserEnvelope,
   flattenVerserHeaders,
   readLeaseRequestMetadataFromStream,
   readNdjsonLines,
+  readVwsLine,
   sanitizeHttp2ResponseHeaders,
   validateVerserHeaders,
 } from '@signicode/verser-common';
@@ -283,6 +288,131 @@ export async function openUpstreamRequestStream(
   }
 
   return stream;
+}
+
+/** Opens the dedicated, versioned Host-to-Host VWS stream. */
+export async function openUpstreamFederationVwsStream(
+  session: http2.ClientHttp2Session,
+  upstreamId: string,
+  localHostId: VerserHostId,
+): Promise<http2.ClientHttp2Stream> {
+  const stream = session.request({
+    ':method': 'POST',
+    ':path': FEDERATION_VWS_PATH,
+    'content-type': 'application/x-ndjson',
+    'x-verser-host-id': localHostId,
+    'x-verser-federation-vws-version': String(FEDERATION_VWS_VERSION),
+  });
+  const headers = await waitForUpstreamHandshakeResponse(stream, upstreamId);
+  const statusCode = Number(headers[':status'] ?? 0);
+  if (statusCode < 200 || statusCode >= 300) {
+    stream.close(http2.constants.NGHTTP2_CANCEL);
+    throw createVerserError('upstream-unavailable', 'Upstream federation VWS stream rejected', {
+      upstreamId,
+      statusCode,
+    });
+  }
+  return stream;
+}
+
+/** Reads the first federation-VWS negotiation response without buffering traffic. */
+export async function readFederationVwsNegotiation(
+  stream: FederationRequestStream,
+  context: { targetId?: string; domain?: string } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<string | undefined> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const cancel = (): void => {
+    if ('close' in stream && typeof stream.close === 'function') {
+      stream.close(http2.constants.NGHTTP2_CANCEL);
+    } else {
+      stream.destroy();
+    }
+  };
+  const line = new Promise<string>((resolve, reject) => {
+    // biome-ignore lint/style/useConst: timer is cleared by cleanup before assignment completes
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (error?: Error, value?: string): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(value ?? '');
+    };
+    const onAbort = (): void => {
+      cancel();
+      finish(
+        createVerserError('stream-failure', 'Federation VWS negotiation was cancelled', context),
+      );
+    };
+    timer = setTimeout(() => {
+      cancel();
+      try {
+        createFederationVwsNegotiationFailure(context);
+      } catch (error) {
+        finish(error as Error);
+      }
+    }, timeoutMs);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    readVwsLine(stream).then(
+      (value) => finish(undefined, value),
+      (error: unknown) => {
+        const oversized =
+          typeof error === 'object' &&
+          error !== null &&
+          'closeCode' in error &&
+          (error as { closeCode?: unknown }).closeCode === 1009;
+        if (oversized) {
+          finish(
+            createVerserError(
+              'protocol-error',
+              error instanceof Error
+                ? error.message
+                : 'Federation VWS negotiation frame exceeds the maximum size',
+              { ...context, cause: error instanceof Error ? error.message : String(error) },
+            ),
+          );
+          return;
+        }
+        try {
+          createFederationVwsNegotiationFailure(context);
+        } catch (failure) {
+          finish(failure as Error);
+        }
+      },
+    );
+  });
+  const response = await line;
+  const frame = (() => {
+    try {
+      return decodeVwsFrame(response);
+    } catch (error) {
+      throw createVerserError(
+        'protocol-error',
+        error instanceof Error ? error.message : 'Invalid federation VWS negotiation response',
+        context,
+      );
+    }
+  })();
+  const version = (frame as { version?: unknown }).version;
+  if (version !== FEDERATION_VWS_VERSION) {
+    throw createVerserError('protocol-error', 'Federation VWS protocol version mismatch', {
+      ...context,
+      version: typeof version === 'number' ? version : undefined,
+    });
+  }
+  if (frame.type === 'error') {
+    throw createVerserError('protocol-error', frame.message, context);
+  }
+  if (frame.type !== 'accept') {
+    throw createVerserError('protocol-error', 'Expected federation VWS accept response', context);
+  }
+  return frame.protocol;
 }
 
 export async function openUpstreamDispatchRequestStream(

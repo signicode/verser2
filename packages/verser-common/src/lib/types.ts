@@ -934,7 +934,8 @@ export type VerserErrorCode =
   | 'route-loop'
   | 'authorization-denied'
   | 'unsafe-retry'
-  | 'revocation-failed';
+  | 'revocation-failed'
+  | 'websocket-negotiation-failed';
 
 /**
  * A read-only record of key-value pairs providing structured context for an error.
