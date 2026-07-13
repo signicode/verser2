@@ -19,16 +19,16 @@
     - [x] Delegate the shared protocol/test implementation to the configured implementation specialist.
     - [x] Implement protocol-neutral request/response contracts that preserve VWS/1 frames and route metadata without changing route advertisements.
     - [x] Validate focused common/Host tests, build, and meaningful coverage for the new shared behavior.
-- [~] Task: Conductor - Phase Checkpoint 'Delivery Setup and Federation-VWS Contract' (Protocol in workflow.md)
+- [x] Task: Conductor - Phase Checkpoint 'Delivery Setup and Federation-VWS Contract' (Protocol in workflow.md)
     - [x] Review the public federation protocol and branch/PR surface before subsequent cross-Host and public API work.
-    - [ ] Deduplicate shared protocol code, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
+    - [x] Deduplicate shared protocol code, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
 
 ### Phase 1 Validation
 
 - Deduplication: VWS federation framing, versioning, and deterministic negotiation errors are shared through `@signicode/verser-common`; Host stream opening and negotiation remain Host-specific adapters.
 - Validation: `npm run test:bounded -- -- test/common-protocol.test.js test/host-federation-vws.test.js test/websocket.test.js` passed (53 contract/Host tests and 23 direct-VWS tests). The earlier combined run also passed 87 federated HTTP regression tests.
 - Review: Oracle Phase 1 blockers were repaired and reverified. One P2 public-export concern is tracked in `td.md`.
-- Checkpoint commit: pending.
+- Checkpoint commit: `5e9876e` (`feat(federation): add VWS negotiation contract`).
 
 ## Phase 2: Host Multi-Hop Federation Data Plane
 
