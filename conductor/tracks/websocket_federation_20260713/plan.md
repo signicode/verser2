@@ -1,8 +1,14 @@
 # Implementation Plan: WebSocket Federation
 
+## Delivery Record
+
+- Base branch: `main`
+- Implementation branch: `conductor/websocket_federation_20260713`
+- Draft PR: pending creation
+
 ## Phase 1: Delivery Setup and Federation-VWS Contract
 
-- [ ] Task: Create track branch and PR review surface
+- [~] Task: Create track branch and PR review surface
     - [ ] Capture the current branch as the PR base and verify the worktree and upstream state.
     - [ ] Create `conductor/websocket_federation_20260713` from that base.
     - [ ] Create and push a draft PR whose title and body describe the completed federation-VWS behavior, using `spec.md` as the body source.
