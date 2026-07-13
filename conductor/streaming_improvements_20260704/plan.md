@@ -470,7 +470,7 @@
 - [x] Task: Record federated WebSocket route limitation for a future track
     - [x] Keep federated WebSocket connections unsupported.
     - [x] Record that real imported-only federated routes may currently return `missing-guest` instead of the desired explicit unsupported error; leave error-path correction for a new track.
-- [~] Task: Post-review validation and final review
+- [x] Task: Post-review validation and final review
     - [x] Run focused builds/tests for each touched runtime, then `npm test` and `npm run lint`: exact final-tree bounded run passed 387 tests, 383 passing, 4 skipped, 0 failed; lint passed.
     - [x] Request an Oracle re-review of the complete PR: Oracle approved with no actionable P0–P2 findings after the public local-Broker cancellation regression was strengthened.
-    - [ ] Commit and push completed post-review tasks according to policy.
+    - [x] Commit and push completed post-review tasks according to policy: `1ba0921 fix(streaming): close post-review hardening gaps`.
