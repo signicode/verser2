@@ -212,13 +212,11 @@ export class Http2VerserBroker implements VerserBroker {
     }
 
     response.body.destroy();
-    const redirectedHeaders: Record<string, string> = {
-      ...(request.headers ?? {}),
-      host: redirectTarget.route.domain,
-    };
+    const redirectedHeaders = request.headers;
     return this.requestWithInternalRedirects(
       {
         targetId: redirectTarget.route.targetId,
+        routeDomain: redirectTarget.route.domain,
         method: request.method,
         path: `${redirectTarget.url.pathname}${redirectTarget.url.search}`,
         headers: redirectedHeaders,
@@ -244,6 +242,9 @@ export class Http2VerserBroker implements VerserBroker {
         'x-verser-request-id': requestId,
         'x-verser-source-id': this.options.brokerId,
         'x-verser-target-id': request.targetId,
+        ...(request.routeDomain === undefined
+          ? {}
+          : { 'x-verser-route-domain': request.routeDomain }),
         'x-verser-method': request.method,
         'x-verser-path': request.path,
         'x-verser-headers': JSON.stringify(validateVerserHeaders(request.headers ?? {})),

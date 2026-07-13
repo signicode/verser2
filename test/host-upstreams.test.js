@@ -527,7 +527,7 @@ test('Downstream Host imports upstream route advertisements', async () => {
       1,
     ),
   );
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(
     managerEvents.some((event) => event.name === 'error' && event.error?.code === 'route-loop'),
     false,
@@ -642,6 +642,7 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
   const manager = createVerserHost({ hostId: 'host-manager', tls: tlsOptions() });
   const runner = createVerserHost({ hostId: 'host-runner', tls: tlsOptions() });
   let broker;
+  let expectedGuestDomain = 'runner-forward.verser.test';
   await manager.start();
   try {
     await runner.connectUpstream({
@@ -649,10 +650,12 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
       url: hostUrl(manager),
       tls: { ca: trusted.certificate },
     });
-    await runner.attachLocalGuest({
+    const guest = await runner.attachLocalGuest({
       guestId: 'guest-runner',
-      routedDomains: ['runner-forward.verser.test'],
+      routedDomains: ['runner-forward.verser.test', 'runner-alt.verser.test'],
       listener: async (request, response) => {
+        assert.equal(request.headers.host, expectedGuestDomain);
+        assert.equal(request.headers['x-forwarded-host'], 'public.example:8443');
         const body = await text(request);
         response.writeHead(207, { 'x-federated': request.headers['x-forwarded-check'] });
         response.end(`forwarded:${request.method}:${request.url}:${body}`);
@@ -666,17 +669,56 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
     );
     broker = await manager.attachLocalBroker({ brokerId: 'broker-manager' });
 
+    await assert.rejects(
+      () => broker.request({ targetId: 'guest-runner', method: 'GET', path: '/ambiguous' }),
+      /ambiguous|routeDomain/i,
+    );
+
     const response = await broker.request({
       targetId: 'guest-runner',
       method: 'POST',
       path: '/federated?phase=5',
-      headers: { host: 'runner-forward.verser.test', 'x-forwarded-check': 'yes' },
+      routeDomain: 'runner-forward.verser.test',
+      headers: {
+        host: 'public.example:8443',
+        'x-forwarded-host': 'spoofed.invalid',
+        'x-forwarded-check': 'yes',
+      },
       body: [Buffer.from('request-body')],
     });
 
     assert.equal(response.statusCode, 207);
     assert.equal(response.headers['x-federated'], 'yes');
     assert.equal(await text(response.body), 'forwarded:POST:/federated?phase=5:request-body');
+    expectedGuestDomain = 'runner-alt.verser.test';
+    const alternateResponse = await broker.request({
+      targetId: 'guest-runner',
+      routeDomain: 'runner-alt.verser.test',
+      method: 'GET',
+      path: '/alternate',
+      headers: { host: 'public.example:8443' },
+    });
+    assert.equal(alternateResponse.statusCode, 207);
+    await text(alternateResponse.body);
+    expectedGuestDomain = 'runner-forward.verser.test';
+    guest.revokeRoutes(['runner-alt.verser.test']);
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('guest-runner', 'runner-alt.verser.test').length,
+        0,
+      ),
+    );
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'guest-runner',
+          routeDomain: 'runner-alt.verser.test',
+          method: 'GET',
+          path: '/revoked',
+          headers: { host: 'public.example:8443' },
+        }),
+      /route|missing|revoked/i,
+    );
   } finally {
     await broker?.close();
     await runner.close();
@@ -1434,6 +1476,8 @@ test('Bun-facing Broker fetch reaches imported upstream route through federation
       guestId: 'guest-manager-bun-fetch',
       routedDomains: ['manager-bun-fetch.verser.test'],
       listener: async (request, response) => {
+        assert.equal(request.headers.host, 'manager-bun-fetch.verser.test');
+        assert.equal(request.headers['x-forwarded-host'], undefined);
         const body = await text(request);
         response.writeHead(202, { 'x-bun-facing': request.method });
         response.end(`${request.url}:${body}`);

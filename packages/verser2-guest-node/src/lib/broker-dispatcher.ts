@@ -67,11 +67,16 @@ export class VerserBrokerDispatcher extends Dispatcher {
     if (body instanceof Readable) {
       controller.attachRequestBody(body);
     }
+    const requestHeaders = normalizeCommonHeaders(options.headers ?? undefined);
+    if (requestHeaders.host === undefined && requestHeaders[':authority'] === undefined) {
+      requestHeaders.host = requestUrl.host;
+    }
     const response = await this.nodeBroker.request({
       targetId: route.targetId,
+      routeDomain: route.domain,
       method: options.method,
       path: `${requestUrl.pathname}${requestUrl.search}`,
-      headers: normalizeCommonHeaders(options.headers ?? undefined),
+      headers: requestHeaders,
       body,
     });
     if (controller.aborted) {

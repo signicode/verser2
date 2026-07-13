@@ -474,3 +474,56 @@
     - [x] Run focused builds/tests for each touched runtime, then `npm test` and `npm run lint`: exact final-tree bounded run passed 387 tests, 383 passing, 4 skipped, 0 failed; lint passed.
     - [x] Request an Oracle re-review of the complete PR: Oracle approved with no actionable P0–P2 findings after the public local-Broker cancellation regression was strengthened.
     - [x] Commit and push completed post-review tasks according to policy: `1ba0921 fix(streaming): close post-review hardening gaps`.
+
+## Phase 7: Route Domain and Forwarded Authority Compatibility
+
+Validation note: Phase 7 Oracle matrix coverage is verified. Focused Node
+Broker/Host/local/federation tests, Dispatcher tests, Bun adapter tests, Python
+Broker tests, all affected package builds, and repository lint pass. Generated
+body Broker cases use the guarded test wrapper. The detailed subtask checkboxes
+remain historical task notes; no commit or Oracle review was performed here.
+Additional matrix coverage verifies active same-Guest federated domain selection,
+federated target-only ambiguity, explicit public Host/spoof handling, Bun mocked
+payload authority injection, Python IPv6 authority brackets, and deterministic
+local route waits.
+
+- [x] Task: Add a Verser-owned route-domain contract
+    - [x] Add optional `routeDomain` to supported Broker request contracts and internal request metadata.
+    - [x] Have route-aware Node, Bun, and Python Broker paths derive it from the selected advertised route or request URL.
+    - [x] Keep legacy direct requests source-compatible when their `Host` already identifies an active route; return a clear error for ambiguous multi-domain target-only requests.
+- [x] Task: Preserve public authority without weakening route validation
+    - [x] Validate only the exact active `(targetId, routeDomain)` pair at the Host.
+    - [x] Rewrite Guest-visible `Host` to the validated route domain and overwrite `X-Forwarded-Host` with the Broker-supplied original authority when different.
+    - [x] Never use `X-Forwarded-Host`, `Forwarded`, or `X-Forwarded-For` as routing authorization input.
+    - [x] Preserve redirected route domains per internal redirect while retaining the initial external authority in `X-Forwarded-Host`.
+- [x] Task: Test compatibility and security boundaries
+    - [x] Cover public-host preservation, spoofed forwarded-host overwrite, strict revoked-domain enforcement, multi-domain direct requests, redirects, and Node/Bun/Python route-aware APIs.
+    - [x] Confirm `X-Forwarded-For` remains untouched and is not repurposed as authority metadata.
+- [x] Task: Document migration and release implications
+    - [x] Document `routeDomain`, Host rewriting, `X-Forwarded-Host` trust semantics, trusted-proxy application configuration, and signed-request caveats.
+    - [x] Update CHANGELOG and package/docs guidance with Host-first Python upgrade order, interface additions, and stream ownership/lifecycle changes from Phase 6.
+- [x] Task: Validate and review forwarded-authority phase
+    - [x] Run affected builds, focused cross-runtime tests, `npm test`, and `npm run lint`.
+    - [ ] Request Oracle review; commit and push completed work.
+
+## Phase 8: Canonical Bounded Test Execution and Performance
+
+Validation note: the canonical runner now executes two deterministic partitions
+with a fixed 10-second Node test timeout and preserves memory guards. Partition
+1 completed in 11.27s (262 tests); partition 2 completed in 5.52s (128 tests),
+for 390 total tests.
+No individual test exceeded the timeout; the slowest observed tests were the
+approximately 1.01s handshake/close cases. `npm test`, focused validations, and
+lint pass.
+
+- [x] Task: Enforce canonical per-test timeout and split execution
+    - [x] Split the bounded root test execution into two deterministic runs.
+    - [x] Enforce a non-configurable 10-second timeout for every individual test in the canonical runner; no compatibility bypass.
+    - [x] Report individual test timings and fail with actionable file/partition context on timeout.
+- [x] Task: Profile and remediate slow tests
+    - [x] Gather timing data from both runs and identify every test near or above the 10-second limit.
+    - [x] Fix or redesign tests that exceed the limit without reducing meaningful coverage; no test exceeded the limit.
+    - [x] Preserve memory guards and simplify runner/test synchronization where safely feasible.
+- [x] Task: Validate and review canonical test performance
+    - [x] Run both canonical partitions, focused affected tests, `npm test`, and `npm run lint`.
+    - [ ] Request Oracle review; commit and push completed work.

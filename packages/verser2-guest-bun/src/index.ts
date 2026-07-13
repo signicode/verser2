@@ -160,11 +160,16 @@ export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
         reqBody = Readable.from(reqBodyStream);
       }
 
+      const requestHeaders = Object.fromEntries(request.headers.entries());
+      if (!requestHeaders.host && !requestHeaders[':authority']) {
+        requestHeaders.host = requestUrl.host;
+      }
       const response = await nodeBroker.request({
         targetId: route.targetId,
+        routeDomain: route.domain,
         method: request.method,
         path: `${requestUrl.pathname}${requestUrl.search}`,
-        headers: Object.fromEntries(request.headers.entries()),
+        headers: requestHeaders,
         body: reqBody,
       });
 

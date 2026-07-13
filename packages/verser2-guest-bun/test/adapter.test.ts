@@ -962,6 +962,27 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     expect(destroyed).toBe(true);
   });
 
+  test('Bun fetch sends the selected routeDomain and URL authority as Host', async () => {
+    const broker = createVerserBroker({
+      hostUrl: 'https://localhost:1',
+      brokerId: 'bun-route-domain-test',
+    });
+    (broker as unknown as { getRoutes: () => unknown }).getRoutes = () => [
+      { targetId: 'target', domain: 'route.test' },
+    ];
+    let captured: Record<string, unknown> | undefined;
+    (broker as unknown as { request: (request: unknown) => Promise<unknown> }).request = async (
+      request,
+    ) => {
+      captured = request as Record<string, unknown>;
+      return { statusCode: 200, headers: {}, body: Readable.from([Buffer.from('ok')]) };
+    };
+    const response = await broker.createFetch()('http://route.test:8443/path');
+    expect(await response.text()).toBe('ok');
+    expect(captured?.routeDomain).toBe('route.test');
+    expect((captured?.headers as Record<string, string>).host).toBe('route.test:8443');
+  });
+
   test('response writer cancels its Web source when the Node sink errors', async () => {
     let sourceCanceled = false;
     let errorHandler: ((error: unknown) => void) | undefined;

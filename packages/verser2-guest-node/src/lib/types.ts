@@ -123,6 +123,8 @@ export interface VerserBrokerOptions {
 export interface VerserBrokerRequest {
   /** Target Guest peer ID. */
   readonly targetId: string;
+  /** Optional advertised route domain selected for the target Guest. */
+  readonly routeDomain?: string;
   /** HTTP method (e.g. `GET`, `POST`). */
   readonly method: string;
   /** Request path (e.g. `/api/resource?id=1`). */

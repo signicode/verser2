@@ -32,7 +32,10 @@ npm run lint
 
 `npm test` runs `npm run test:bounded`. It builds all packages, stages
 publish-ready packages under `dist/packages`, then runs the Node source test
-suite with bounded memory settings and guarded per-test memory-growth checks.
+suite in two deterministic partitions with bounded memory settings, a hard
+10-second timeout per individual test, and guarded per-test memory-growth checks.
+Each partition prints its file list and Node's per-test durations; timeout
+failures include partition/file/test context.
 The default source suite skips redundant package-consumer matrix wrappers and
 pack dry-runs that are covered by the explicit package-validation commands
 below; this keeps ordinary test iteration focused while preserving package
@@ -45,6 +48,8 @@ when diagnosing memory growth, validating suspected OOM fixes, or running the
 full suite on memory-constrained developer machines. It intentionally avoids a
 low virtual-memory cap because Node and npm wrappers may reserve more address
 space than they actively use.
+The 10-second test timeout is fixed by the canonical runner and cannot be
+disabled or overridden through compatibility options.
 
 Default repository tests must remain compatible with the bounded runner. New or
 changed tests should pass with the default bounded heap and the guarded per-test

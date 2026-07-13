@@ -91,14 +91,26 @@ async function readNextChunk(stream) {
 }
 
 async function waitForRoutes(peer, expectedRoutes) {
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    if (JSON.stringify(peer.getRoutes()) === JSON.stringify(expectedRoutes)) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.deepEqual(peer.getRoutes(), expectedRoutes);
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      unsubscribe();
+      error === undefined ? resolve() : reject(error);
+    };
+    const unsubscribe = peer.onRouteChange(() => {
+      if (JSON.stringify(peer.getRoutes()) === JSON.stringify(expectedRoutes)) {
+        finish();
+      }
+    });
+    const timeout = setTimeout(
+      () => finish(new Error('Timed out waiting for expected route snapshot')),
+      5000,
+    );
+    if (JSON.stringify(peer.getRoutes()) === JSON.stringify(expectedRoutes)) finish();
+  });
 }
 
 test('Host attaches local Guests and Brokers with route advertisement, degradation, and retraction', async () => {
@@ -227,6 +239,16 @@ test('Local Guest revokes a subset of its route domains', async () => {
       .map((r) => r.domain)
       .sort();
     assert.deepEqual(brokerDomains, ['also-keep.test', 'keep.test']);
+
+    await assert.rejects(
+      () => localBroker.request({ targetId: 'revoke-subset-guest', method: 'GET', path: '/' }),
+      /ambiguous|routeDomain/i,
+    );
+    localGuest.revokeRoutes(['keep.test', 'also-keep.test']);
+    await assert.rejects(
+      () => localBroker.request({ targetId: 'revoke-subset-guest', method: 'GET', path: '/' }),
+      /no active route|missing-guest/i,
+    );
   } finally {
     if (localBroker !== undefined) await localBroker.close('test-complete');
     if (localGuest !== undefined) await localGuest.close('test-complete');

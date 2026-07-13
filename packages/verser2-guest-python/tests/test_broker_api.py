@@ -593,13 +593,17 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
         ):
             response = self._run(
                 broker.get(
-                    "http://alpha.local/health?x=1",
-                    headers={"x-test": "yes"},
+                    "http://external.local:8443/health?x=1",
+                    headers={"x-test": "yes", "HoSt": "public.example:9443"},
+                    route_domain="alpha.local",
                 )
+            )
+            self._run(
+                broker.get("http://[2001:db8::1]:8443/ipv6", route_domain="alpha.local")
             )
 
         self.assertIsNotNone(response)
-        self.assertEqual(len(headers_calls), 1)
+        self.assertEqual(len(headers_calls), 2)
 
         request_headers = dict(headers_calls[0]["headers"])
         self.assertEqual(request_headers.get(":method"), "POST")
@@ -611,6 +615,7 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
         self.assertEqual(body, b"")
 
         self.assertEqual(request_headers.get("x-verser-target-id"), "guest-a")
+        self.assertEqual(request_headers.get("x-verser-route-domain"), "alpha.local")
         self.assertEqual(
             request_headers.get("x-verser-source-id"), "python-unit-broker"
         )
@@ -624,6 +629,14 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
         if request_headers_meta is None:
             self.fail("expected x-verser-headers value for JSON request headers")
         self.assertIn("x-test", request_headers_meta)
+        self.assertEqual(
+            json.loads(request_headers_meta).get("HoSt"), "public.example:9443"
+        )
+        ipv6_headers = dict(headers_calls[1]["headers"])
+        self.assertEqual(
+            json.loads(ipv6_headers["x-verser-headers"])["host"],
+            "[2001:db8::1]:8443",
+        )
 
     def test_missing_advertised_route_raises_actionable_exception(self) -> None:
         broker = self._broker_factory()

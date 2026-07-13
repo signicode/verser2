@@ -426,6 +426,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       requestId: metadata.requestId,
       sourceId: metadata.sourceId,
       targetId: metadata.targetId,
+      routeDomain: metadata.routeDomain,
       method: metadata.method,
       path: metadata.path,
       headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),

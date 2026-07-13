@@ -345,7 +345,7 @@ test('Host rejects lease streams without lease ids', async () => {
   }
 });
 
-test('Host queues Broker routed requests and times out when no lease is available', async () => {
+test('Host rejects target-only requests when the Guest has no active route', async () => {
   const host = createHost({ port: 0 });
 
   await host.start();
@@ -371,9 +371,8 @@ test('Host queues Broker routed requests and times out when no lease is availabl
       'x-verser-lease-acquire-timeout-ms': '10',
     });
 
-    assert.equal(response.error.code, 'timeout');
+    assert.equal(response.error.code, 'missing-guest');
     assert.equal(response.error.context.targetId, 'guest-lease-timeout');
-    assert.equal(response.error.context.requestId, 'req-lease-timeout');
   } finally {
     guest.close();
     broker.close();

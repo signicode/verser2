@@ -3,6 +3,7 @@ const { createHash } = require('node:crypto');
 const http2 = require('node:http2');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
+const { test: guardedTest } = require('./support/guarded-test.cjs');
 
 const common = require('../packages/verser-common/dist/index.js');
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
@@ -236,6 +237,9 @@ test('Broker follows 307 internal redirects to advertised routes and replays req
     }, 'redirect-307.local.test');
     targetGuest.attach((request, response) => {
       assert.equal(request.headers.host, 'target-307.local.test');
+      assert.equal(request.headers['x-forwarded-host'], 'redirect-307.local.test:443');
+      assert.equal(request.headers['x-forwarded-for'], '198.51.100.7');
+      assert.equal(request.headers.forwarded, 'for=198.51.100.7');
       const chunks = [];
       request.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
       request.on('end', () => {
@@ -254,7 +258,13 @@ test('Broker follows 307 internal redirects to advertised routes and replays req
       targetId: 'guest-redirect-307-a',
       method: 'PATCH',
       path: '/start',
-      headers: { 'x-input': 'redirect', host: 'redirect-307.local.test:443' },
+      headers: {
+        'x-input': 'redirect',
+        host: 'redirect-307.local.test:443',
+        'x-forwarded-host': 'attacker.invalid',
+        'x-forwarded-for': '198.51.100.7',
+        forwarded: 'for=198.51.100.7',
+      },
       body: [Buffer.from('first-'), Buffer.from('second')],
     });
 
@@ -287,9 +297,17 @@ test('Broker rejects a revoked domain even when the same Guest has another activ
     await broker.waitForRoute('active-domain.local.test');
     await broker.waitForRoute('revoked-domain.local.test');
 
+    const routeRemoved = new Promise((resolve) => {
+      const unsubscribe = broker.onRouteChange((event) => {
+        if (event.type === 'removed' && event.domain === 'revoked-domain.local.test') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
     const revokeResult = await guest.revokeRoutes(['revoked-domain.local.test']);
     assert.equal(revokeResult.status, 'ack');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await routeRemoved;
     assert.deepEqual(broker.getRoutes(), [
       { targetId: 'guest-domain-revoke', domain: 'active-domain.local.test' },
     ]);
@@ -303,6 +321,42 @@ test('Broker rejects a revoked domain even when the same Guest has another activ
         }),
       /route is not available|missing|revoked/i,
     );
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Node Broker explicit routeDomain authorizes the route while preserving public Host authority', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-explicit-route-domain' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-explicit-route-domain' });
+  try {
+    guest.attach((request, response) => {
+      assert.equal(request.headers.host, 'route-domain.local.test');
+      assert.equal(request.headers['x-forwarded-host'], 'route-domain.local.test:80');
+      assert.equal(request.headers['x-forwarded-for'], '203.0.113.8');
+      response.end('ok');
+    }, 'route-domain.local.test');
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('route-domain.local.test');
+    const response = await broker.request({
+      targetId: 'guest-explicit-route-domain',
+      routeDomain: 'route-domain.local.test',
+      method: 'GET',
+      path: '/explicit',
+      headers: {
+        host: 'route-domain.local.test:80',
+        'x-forwarded-host': 'spoofed.invalid',
+        'x-forwarded-for': '203.0.113.8',
+      },
+    });
+    assert.equal(response.statusCode, 200);
+    await readBody(response.body);
   } finally {
     await broker.close('test-complete');
     await guest.close('test-complete');
@@ -2429,120 +2483,126 @@ test('Rejected onRouteChange listener does not break subsequent lifecycle events
 
 // ================ Characterization: Large Streaming Bodies ================
 
-test('broker.request streams multi-megabyte request body without full buffering', async () => {
-  const host = createHost({ port: 0 });
-  await host.start();
-  const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-large-upload-1' });
-  let guest;
+guardedTest(
+  'broker.request streams multi-megabyte request body without full buffering',
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-large-upload-1' });
+    let guest;
 
-  try {
-    guest = createGuest({ hostUrl, guestId: 'guest-large-upload-1' });
-    let receivedBytes = 0;
-    guest.attach((request, response) => {
-      request.on('data', (chunk) => {
-        receivedBytes += chunk.length;
+    try {
+      guest = createGuest({ hostUrl, guestId: 'guest-large-upload-1' });
+      let receivedBytes = 0;
+      guest.attach((request, response) => {
+        request.on('data', (chunk) => {
+          receivedBytes += chunk.length;
+        });
+        request.on('end', () => {
+          response.writeHead(200, { 'x-received-bytes': String(receivedBytes) });
+          response.end('ok');
+        });
+      }, 'large-upload.local.test');
+      await broker.connect();
+      await guest.connect();
+      await broker.waitForRoute('large-upload.local.test');
+
+      const body = new PassThrough();
+      const responsePromise = broker.request({
+        targetId: 'guest-large-upload-1',
+        method: 'POST',
+        path: '/large-upload',
+        body,
       });
-      request.on('end', () => {
-        response.writeHead(200, { 'x-received-bytes': String(receivedBytes) });
-        response.end('ok');
-      });
-    }, 'large-upload.local.test');
-    await broker.connect();
-    await guest.connect();
-    await broker.waitForRoute('large-upload.local.test');
 
-    const body = new PassThrough();
-    const responsePromise = broker.request({
-      targetId: 'guest-large-upload-1',
-      method: 'POST',
-      path: '/large-upload',
-      body,
-    });
-
-    // Write 2MB in bounded chunks, respecting PassThrough backpressure.
-    const chunkSize = 32 * 1024;
-    const totalSize = 2 * 1024 * 1024;
-    for (let offset = 0; offset < totalSize; offset += chunkSize) {
-      if (!body.write(Buffer.alloc(chunkSize, 'a'))) {
-        await new Promise((resolve) => body.once('drain', resolve));
+      // Write 2MB in bounded chunks, respecting PassThrough backpressure.
+      const chunkSize = 32 * 1024;
+      const totalSize = 2 * 1024 * 1024;
+      for (let offset = 0; offset < totalSize; offset += chunkSize) {
+        if (!body.write(Buffer.alloc(chunkSize, 'a'))) {
+          await new Promise((resolve) => body.once('drain', resolve));
+        }
       }
+      body.end();
+
+      const response = await responsePromise;
+      assert.equal(response.statusCode, 200);
+      assert.equal(Number(response.headers['x-received-bytes']), totalSize);
+      assert.deepEqual(await readBody(response.body), Buffer.from('ok'));
+    } finally {
+      await broker.close('test-complete');
+      if (guest !== undefined) await guest.close('test-complete');
+      await host.close('test-complete');
     }
-    body.end();
+  },
+);
 
-    const response = await responsePromise;
-    assert.equal(response.statusCode, 200);
-    assert.equal(Number(response.headers['x-received-bytes']), totalSize);
-    assert.deepEqual(await readBody(response.body), Buffer.from('ok'));
-  } finally {
-    await broker.close('test-complete');
-    if (guest !== undefined) await guest.close('test-complete');
-    await host.close('test-complete');
-  }
-});
+guardedTest(
+  'broker.request streams multi-megabyte response body without full buffering',
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-large-download-1' });
+    let guest;
 
-test('broker.request streams multi-megabyte response body without full buffering', async () => {
-  const host = createHost({ port: 0 });
-  await host.start();
-  const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-large-download-1' });
-  let guest;
+    try {
+      const chunkSize = 64 * 1024;
+      const totalSize = 2 * 1024 * 1024;
+      const expectedHash = createHash('sha256');
+      for (let offset = 0; offset < totalSize; offset += chunkSize) {
+        expectedHash.update(Buffer.alloc(chunkSize, 'b'));
+      }
 
-  try {
-    const chunkSize = 64 * 1024;
-    const totalSize = 2 * 1024 * 1024;
-    const expectedHash = createHash('sha256');
-    for (let offset = 0; offset < totalSize; offset += chunkSize) {
-      expectedHash.update(Buffer.alloc(chunkSize, 'b'));
-    }
+      guest = createGuest({ hostUrl, guestId: 'guest-large-download-1' });
+      guest.attach((_request, response) => {
+        response.writeHead(200, { 'content-type': 'application/octet-stream' });
+        let offset = 0;
+        const writeNext = () => {
+          if (offset >= totalSize) {
+            response.end();
+            return;
+          }
+          offset += chunkSize;
+          if (!response.write(Buffer.alloc(chunkSize, 'b'))) {
+            response.once('drain', writeNext);
+          } else {
+            setImmediate(writeNext);
+          }
+        };
+        writeNext();
+      }, 'large-download.local.test');
+      await broker.connect();
+      await guest.connect();
+      await broker.waitForRoute('large-download.local.test');
 
-    guest = createGuest({ hostUrl, guestId: 'guest-large-download-1' });
-    guest.attach((_request, response) => {
-      response.writeHead(200, { 'content-type': 'application/octet-stream' });
-      let offset = 0;
-      const writeNext = () => {
-        if (offset >= totalSize) {
-          response.end();
-          return;
-        }
-        offset += chunkSize;
-        if (!response.write(Buffer.alloc(chunkSize, 'b'))) {
-          response.once('drain', writeNext);
-        } else {
-          setImmediate(writeNext);
-        }
-      };
-      writeNext();
-    }, 'large-download.local.test');
-    await broker.connect();
-    await guest.connect();
-    await broker.waitForRoute('large-download.local.test');
-
-    const response = await broker.request({
-      targetId: 'guest-large-download-1',
-      method: 'GET',
-      path: '/large-download',
-    });
-
-    assert.equal(response.statusCode, 200);
-    const receivedHash = createHash('sha256');
-    let receivedBytes = 0;
-    await new Promise((resolve, reject) => {
-      response.body.on('data', (chunk) => {
-        receivedBytes += chunk.length;
-        receivedHash.update(chunk);
+      const response = await broker.request({
+        targetId: 'guest-large-download-1',
+        method: 'GET',
+        path: '/large-download',
       });
-      response.body.once('end', resolve);
-      response.body.once('error', reject);
-    });
-    assert.equal(receivedBytes, totalSize);
-    assert.equal(receivedHash.digest('hex'), expectedHash.digest('hex'));
-  } finally {
-    await broker.close('test-complete');
-    if (guest !== undefined) await guest.close('test-complete');
-    await host.close('test-complete');
-  }
-});
+
+      assert.equal(response.statusCode, 200);
+      const receivedHash = createHash('sha256');
+      let receivedBytes = 0;
+      await new Promise((resolve, reject) => {
+        response.body.on('data', (chunk) => {
+          receivedBytes += chunk.length;
+          receivedHash.update(chunk);
+        });
+        response.body.once('end', resolve);
+        response.body.once('error', reject);
+      });
+      assert.equal(receivedBytes, totalSize);
+      assert.equal(receivedHash.digest('hex'), expectedHash.digest('hex'));
+    } finally {
+      await broker.close('test-complete');
+      if (guest !== undefined) await guest.close('test-complete');
+      await host.close('test-complete');
+    }
+  },
+);
 
 // ================ Characterization: Half-Open / Early Response ================
 

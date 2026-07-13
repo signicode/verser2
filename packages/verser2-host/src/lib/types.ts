@@ -160,6 +160,8 @@ export interface VerserHostUpstreamHandle {
  */
 export interface VerserLocalBrokerRequest {
   readonly targetId: string;
+  /** Optional advertised route domain selected for the target Guest. */
+  readonly routeDomain?: string;
   readonly method: string;
   readonly path: string;
   readonly headers?: Record<string, string>;

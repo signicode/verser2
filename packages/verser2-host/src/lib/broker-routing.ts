@@ -46,6 +46,86 @@ function normalizeRequestedDomain(value: string): string {
   }
 }
 
+function normalizeAuthority(value: string): string {
+  const authority = value.trim();
+  const explicitPort = authority.startsWith('[')
+    ? authority.match(/^\[[^\]]+\]:(\d+)$/)?.[1]
+    : authority.match(/:(\d+)$/)?.[1];
+  try {
+    const parsed = new URL(`http://${authority}`);
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+    return explicitPort === undefined ? hostname : `${hostname}:${explicitPort}`;
+  } catch {
+    return authority.toLowerCase().replace(/\.$/, '');
+  }
+}
+
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
+  return entry?.[1];
+}
+
+function resolveRouteDomain(
+  targetId: string,
+  explicitDomain: string | undefined,
+  requestedHeaders: Record<string, string>,
+  callbacks: BrokerRoutingCallbacks,
+): string | undefined {
+  const requested =
+    explicitDomain ??
+    headerValue(requestedHeaders, 'host') ??
+    headerValue(requestedHeaders, ':authority');
+  const candidates = Array.from(callbacks.getRouteCandidates(targetId));
+  if (requested === undefined) {
+    const domains = [
+      ...new Set(candidates.map((candidate) => normalizeRequestedDomain(candidate.domain))),
+    ];
+    if (domains.length === 0) {
+      throw createVerserError('missing-guest', 'Target Guest has no active route', { targetId });
+    }
+    if (domains.length !== 1) {
+      throw createVerserError(
+        'missing-guest',
+        'Target-only request is ambiguous; routeDomain is required',
+        {
+          targetId,
+        },
+      );
+    }
+    return domains[0];
+  }
+  const normalized = normalizeRequestedDomain(requested);
+  if (!candidates.some((candidate) => normalizeRequestedDomain(candidate.domain) === normalized)) {
+    throw createVerserError('missing-guest', 'Target Guest route is not available', {
+      targetId,
+      domain: normalized,
+    });
+  }
+  return normalized;
+}
+
+function rewriteGuestHeaders(
+  requestedHeaders: Record<string, string>,
+  routeDomain: string | undefined,
+): Record<string, string> {
+  if (routeDomain === undefined) {
+    return requestedHeaders;
+  }
+  const originalHost =
+    headerValue(requestedHeaders, 'host') ?? headerValue(requestedHeaders, ':authority');
+  const rewritten = Object.fromEntries(
+    Object.entries(requestedHeaders).filter(([name]) => name.toLowerCase() !== 'x-forwarded-host'),
+  );
+  rewritten.host = routeDomain;
+  if (
+    originalHost !== undefined &&
+    normalizeAuthority(originalHost) !== normalizeAuthority(routeDomain)
+  ) {
+    rewritten['x-forwarded-host'] = originalHost;
+  }
+  return rewritten;
+}
+
 /** Minimal peer info needed by the routing functions. */
 export interface PeerInfo {
   readonly role: string;
@@ -152,6 +232,7 @@ async function routeH2BrokerRequestOverFederationStream(
   requestStream: FederationRequestStream,
   requestId: string,
   targetId: string,
+  routeDomain: string | undefined,
 ): Promise<void> {
   let completed = false;
   const cancelForwarding = (): void => {
@@ -185,6 +266,7 @@ async function routeH2BrokerRequestOverFederationStream(
         requestId,
         sourceId: String(headers['x-verser-source-id'] ?? ''),
         targetId,
+        routeDomain,
         method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
         path: String(headers['x-verser-path'] ?? '/'),
         headers: flattenVerserHeaders(
@@ -236,6 +318,7 @@ async function routeBrokerRequestOverLease(
   lease: GuestLeaseStream,
   requestId: string,
   targetId: string,
+  routeDomain: string | undefined,
 ): Promise<void> {
   let completed = false;
 
@@ -264,6 +347,7 @@ async function routeBrokerRequestOverLease(
     requestId,
     targetId,
   });
+  const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
   lease.stream.write(
     encodeVerserEnvelope({
       type: 'request',
@@ -274,7 +358,7 @@ async function routeBrokerRequestOverLease(
         method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
         path: String(headers['x-verser-path'] ?? '/'),
         headers: flattenVerserHeaders(
-          validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+          validateVerserHeaders(rewriteGuestHeaders(requestedHeaders, routeDomain)),
         ),
       },
     }),
@@ -328,6 +412,7 @@ async function routeH2BrokerRequestToLocalGuest(
   headers: http2.IncomingHttpHeaders,
   requestId: string,
   targetId: VerserPeerId,
+  routeDomain: string | undefined,
   callbacks: BrokerRoutingCallbacks,
 ): Promise<void> {
   const controller = new AbortController();
@@ -355,7 +440,12 @@ async function routeH2BrokerRequestToLocalGuest(
         method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
         path: String(headers['x-verser-path'] ?? '/'),
         headers: flattenVerserHeaders(
-          validateVerserHeaders(decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'))),
+          validateVerserHeaders(
+            rewriteGuestHeaders(
+              decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}')),
+              routeDomain,
+            ),
+          ),
         ),
         body: stream,
         leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs(headers),
@@ -416,26 +506,21 @@ export async function routeBrokerRequest(
     throw createVerserError('missing-guest', 'Target peer is not a Guest', { targetId });
   }
   const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
-  const requestedDomainValue = requestedHeaders.host ?? requestedHeaders[':authority'];
-  const requestedDomain =
-    requestedDomainValue === undefined ? undefined : normalizeRequestedDomain(requestedDomainValue);
-  if (
-    requestedDomain !== undefined &&
-    !Array.from(callbacks.getRouteCandidates(targetId)).some(
-      (candidate) => normalizeRequestedDomain(candidate.domain) === requestedDomain,
-    )
-  ) {
-    throw createVerserError('missing-guest', 'Target Guest route is not available', {
-      targetId,
-      domain: requestedDomain,
-    });
-  }
+  const routeDomain = resolveRouteDomain(
+    targetId,
+    headers['x-verser-route-domain'] === undefined
+      ? undefined
+      : String(headers['x-verser-route-domain']),
+    requestedHeaders,
+    callbacks,
+  );
   if (target.transport === 'local') {
     await routeH2BrokerRequestToLocalGuest(
       stream,
       headers,
       requestId,
       createPeerId(targetId),
+      routeDomain,
       callbacks,
     );
     return;
@@ -446,7 +531,7 @@ export async function routeBrokerRequest(
     parseLeaseAcquireTimeoutMs(headers),
   );
   if (lease !== undefined) {
-    await routeBrokerRequestOverLease(stream, headers, lease, requestId, targetId);
+    await routeBrokerRequestOverLease(stream, headers, lease, requestId, targetId, routeDomain);
     return;
   }
 
@@ -455,7 +540,7 @@ export async function routeBrokerRequest(
     requestId,
     parseLeaseAcquireTimeoutMs(headers),
   );
-  await routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId);
+  await routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId, routeDomain);
 }
 
 // ---------------------------------------------------------------------------
@@ -482,14 +567,39 @@ async function tryRouteH2BrokerRequestToFederatedHost(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<boolean> {
   let hadUpstreamCandidate = false;
+  const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
+  const requestedValue =
+    headers['x-verser-route-domain'] ??
+    headerValue(requestedHeaders, 'host') ??
+    headerValue(requestedHeaders, ':authority');
+  const requestedDomain =
+    requestedValue === undefined ? undefined : normalizeRequestedDomain(String(requestedValue));
+  const candidates = Array.from(callbacks.getRouteCandidates(targetId)).filter(
+    (candidate) => candidate.source === 'upstream',
+  );
+  if (
+    requestedDomain === undefined &&
+    new Set(candidates.map((candidate) => normalizeRequestedDomain(candidate.domain))).size > 1
+  ) {
+    throw createVerserError(
+      'missing-guest',
+      'Target-only request is ambiguous; routeDomain is required',
+      {
+        targetId,
+      },
+    );
+  }
   const unavailableCandidates: Array<{
     readonly domain: string;
     readonly originHostId: string;
     readonly nextHopHostId: string;
     readonly hopCount: number;
   }> = [];
-  for (const candidate of callbacks.getRouteCandidates(targetId)) {
-    if (candidate.source !== 'upstream') {
+  for (const candidate of candidates) {
+    if (
+      requestedDomain !== undefined &&
+      normalizeRequestedDomain(candidate.domain) !== requestedDomain
+    ) {
       continue;
     }
     hadUpstreamCandidate = true;
@@ -513,6 +623,7 @@ async function tryRouteH2BrokerRequestToFederatedHost(
       acquired.stream,
       requestId,
       targetId,
+      candidate.domain,
     );
     return true;
   }
@@ -559,6 +670,7 @@ export async function routeLocalBrokerRequest(
       requestId,
       sourceId,
       targetId,
+      routeDomain: request.routeDomain,
       method: request.method,
       path: request.path,
       headers: flattenVerserHeaders(validateVerserHeaders(request.headers ?? {})),
@@ -617,22 +729,17 @@ export async function routeLocalRequestDispatch(
         });
       }
     } else {
-      const requestedDomainValue = request.headers.host ?? request.headers[':authority'];
-      const requestedDomain =
-        requestedDomainValue === undefined
-          ? undefined
-          : normalizeRequestedDomain(requestedDomainValue);
-      if (
-        requestedDomain !== undefined &&
-        !Array.from(callbacks.getRouteCandidates(request.targetId)).some(
-          (candidate) => normalizeRequestedDomain(candidate.domain) === requestedDomain,
-        )
-      ) {
-        throw createVerserError('missing-guest', 'Target Guest has no active route', {
-          targetId: request.targetId,
-          domain: requestedDomain,
-        });
-      }
+      const routeDomain = resolveRouteDomain(
+        request.targetId,
+        request.routeDomain,
+        request.headers,
+        callbacks,
+      );
+      const localDispatchRequest = {
+        ...dispatchRequest,
+        routeDomain,
+        headers: rewriteGuestHeaders(request.headers, routeDomain),
+      };
       callbacks.emitLifecycle({
         name: VERSER_LIFECYCLE_EVENTS.requestStarted,
         peerId: request.targetId,
@@ -645,11 +752,11 @@ export async function routeLocalRequestDispatch(
           });
         }
         response = await routeLocalRequestToAttachedGuest(
-          dispatchRequest,
+          localDispatchRequest,
           target.localGuest.listener,
         );
       } else {
-        response = await routeLocalRequestToH2Guest(dispatchRequest, callbacks);
+        response = await routeLocalRequestToH2Guest(localDispatchRequest, callbacks);
       }
       callbacks.emitLifecycle({
         name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
@@ -746,6 +853,7 @@ async function routeLocalRequestToH2Guest(
         requestId: request.requestId,
         sourceId: request.sourceId,
         targetId: request.targetId,
+        routeDomain: request.routeDomain,
         method: request.method,
         path: request.path,
         headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),
@@ -789,14 +897,37 @@ async function tryRouteLocalRequestToFederatedHost(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<VerserLocalBrokerResponse | undefined> {
   let hadUpstreamCandidate = false;
+  const requested =
+    request.routeDomain ??
+    headerValue(request.headers, 'host') ??
+    headerValue(request.headers, ':authority');
+  const requestedDomain = requested === undefined ? undefined : normalizeRequestedDomain(requested);
+  const candidates = Array.from(callbacks.getRouteCandidates(request.targetId)).filter(
+    (candidate) => candidate.source === 'upstream',
+  );
+  if (
+    requestedDomain === undefined &&
+    new Set(candidates.map((candidate) => normalizeRequestedDomain(candidate.domain))).size > 1
+  ) {
+    throw createVerserError(
+      'missing-guest',
+      'Target-only request is ambiguous; routeDomain is required',
+      {
+        targetId: request.targetId,
+      },
+    );
+  }
   const unavailableCandidates: Array<{
     readonly domain: string;
     readonly originHostId: string;
     readonly nextHopHostId: string;
     readonly hopCount: number;
   }> = [];
-  for (const candidate of callbacks.getRouteCandidates(request.targetId)) {
-    if (candidate.source !== 'upstream') {
+  for (const candidate of candidates) {
+    if (
+      requestedDomain !== undefined &&
+      normalizeRequestedDomain(candidate.domain) !== requestedDomain
+    ) {
       continue;
     }
     hadUpstreamCandidate = true;
@@ -814,7 +945,10 @@ async function tryRouteLocalRequestToFederatedHost(
       continue;
     }
 
-    return routeLocalRequestOverFederationStream(request, acquired.stream);
+    return routeLocalRequestOverFederationStream(
+      { ...request, routeDomain: candidate.domain },
+      acquired.stream,
+    );
   }
 
   if (hadUpstreamCandidate) {
@@ -899,6 +1033,7 @@ async function routeLocalRequestOverFederationStream(
         requestId: request.requestId,
         sourceId: request.sourceId,
         targetId: request.targetId,
+        routeDomain: request.routeDomain,
         method: request.method,
         path: request.path,
         headers: flattenVerserHeaders(validateVerserHeaders(request.headers)),

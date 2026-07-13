@@ -759,12 +759,18 @@ test('Route revocation blocks new opens but preserves an active WebSocket', asyn
       targetId: 'ws-guest-revoke',
       domain: 'ws-revoke.local.test',
     });
+    const routeRemoved = new Promise((resolve) => {
+      const unsubscribe = broker.onRouteChange((event) => {
+        if (event.type === 'removed' && event.domain === 'ws-revoke.local.test') {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
     // Revoke the route
     const revokeResult = await guest.revokeRoutes(['ws-revoke.local.test']);
     assert.equal(revokeResult.status, 'ack');
-
-    // Wait for route removal to propagate to Broker
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await routeRemoved;
 
     const activeEcho = new Promise((resolve, reject) => {
       const timer = setTimeout(

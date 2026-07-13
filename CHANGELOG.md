@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased - Explicit route-domain selection
+
+- Broker request surfaces may provide `routeDomain` (Node/Bun and local APIs) or
+  `route_domain` (Python) when a Guest advertises more than one domain.
+- Route-aware Agent, Dispatcher, Bun fetch, and Python URL helpers populate the
+  advertised domain automatically. Existing target-only requests remain valid
+  when the Host can identify exactly one active route; target-only requests for
+  multiple domains must migrate to an explicit route domain.
+- Hosts authorize only the `(targetId, routeDomain)` pair, forward the selected
+  route as `Host`, and overwrite `X-Forwarded-Host` with the caller's original
+  authority. Applications should not use forwarded headers for authorization.
+
+### Phase 6 migration notes
+
+- Python upgrades should be performed Host-first: upgrade the Host and route
+  lifecycle/control-plane peers before rolling Python Guests or Brokers.
+- Python-facing interface additions include `route_domain`, route lifecycle
+  observations, and the ASGI WebSocket exports. Keep mixed-version deployments
+  on the documented compatibility path while rolling these interfaces.
+- Request and response streams have explicit ownership: the producer owns
+  writing, the consumer owns reading, and cancellation/close transfers a
+  terminal lifecycle event rather than silently reusing a stream.
+
 ## v0.5.0 - Route revocation and lifecycle observation
 
 - Adds Guest-owned route revocation APIs across Node, Bun, Python, and local Guest surfaces.

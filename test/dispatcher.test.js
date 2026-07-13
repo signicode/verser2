@@ -106,7 +106,7 @@ test(
         request.on('end', () => {
           response.writeHead(208, { 'x-dispatcher': 'verser' });
           response.end(
-            `${request.method} ${request.url} ${request.headers['x-input']} ${Buffer.concat(chunks).toString('utf8')}`,
+            `${request.method} ${request.url} ${request.headers.host} ${request.headers['x-input']} ${Buffer.concat(chunks).toString('utf8')}`,
           );
         });
       },
@@ -126,7 +126,10 @@ test(
 
       assert.equal(response.status, 208);
       assert.equal(response.headers.get('x-dispatcher'), 'verser');
-      assert.equal(await response.text(), 'POST /fetch-path?query=1 fetch payload');
+      assert.equal(
+        await response.text(),
+        'POST /fetch-path?query=1 dispatcher.local.test fetch payload',
+      );
     } finally {
       await closeRoute(route);
     }

@@ -3,6 +3,23 @@
 A Broker sends requests to advertised Guest routes through the Host. Advertised
 routes can be local to that Host or imported through Host federation.
 
+## Route-domain selection
+
+Broker requests can optionally select an advertised Guest route explicitly:
+
+- Node/Bun and local Broker APIs: `routeDomain`
+- Python Broker API: `route_domain`
+
+Route-aware helpers populate this field from the requested hostname. If a legacy
+target-only request is sent to a Guest with multiple active domains, the Host
+rejects it as ambiguous; pass the advertised domain explicitly. The Host uses
+the selected `(targetId, routeDomain)` pair for authorization, forwards that
+domain as `Host`, and sets `X-Forwarded-Host` to the original caller authority.
+Do not authorize requests using forwarded headers.
+
+Internal 307/308 redirects preserve the external authority while updating the
+selected route domain to the redirected advertised route.
+
 ## Broker versus public gateway
 
 A Broker is a routing client; it does not listen for public HTTP traffic by

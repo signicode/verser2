@@ -41,6 +41,7 @@ export interface LocalDispatchRequest {
   readonly requestId: string;
   readonly sourceId: string;
   readonly targetId: string;
+  readonly routeDomain?: string;
   readonly method: string;
   readonly path: string;
   readonly headers: Record<string, string>;

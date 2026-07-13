@@ -25,6 +25,8 @@ export class VerserBrokerSocket extends Duplex {
 
   private readonly targetId: string;
 
+  private readonly routeDomain: string;
+
   private readonly options: BrokerSocketGuestOptions;
 
   private readonly limits: Required<
@@ -54,6 +56,7 @@ export class VerserBrokerSocket extends Duplex {
   public constructor(
     broker: BrokerRequestRouter,
     targetId: string,
+    routeDomain: string,
     options: BrokerSocketGuestOptions,
     limits: Pick<
       VerserBrokerOptions,
@@ -63,6 +66,7 @@ export class VerserBrokerSocket extends Duplex {
     super();
     this.broker = broker;
     this.targetId = targetId;
+    this.routeDomain = routeDomain;
     this.options = options;
     this.limits = {
       maxChunkDecoderPendingBytes:
@@ -153,6 +157,7 @@ export class VerserBrokerSocket extends Duplex {
     const requestHeaders = this.options.headers;
     const response = (await this.broker.request({
       targetId: this.targetId,
+      routeDomain: this.routeDomain,
       method: String(this.options.method ?? 'GET'),
       path: String(this.options.path ?? '/'),
       headers: normalizeRequestHeaders(

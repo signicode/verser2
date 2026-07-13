@@ -37,15 +37,32 @@ test('bounded test runner preserves full validation flow with default heap limit
   assert.match(runnerSource, /--max-old-space-size=\$\{oldSpaceSizeMb\}/);
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*build/);
   assert.match(runnerSource, /npm[\s\S]*run[\s\S]*stage:packages/);
-  assert.match(runnerSource, /DEFAULT_TEST_FILES\s*=\s*\['test\/\*\.test\.js'\]/);
+  assert.match(runnerSource, /readdirSync\([\s\S]*test[\s\S]*\.test\.js/);
   assert.match(runnerSource, /DEFAULT_MEMORY_LEAK_BYTES\s*=\s*1024\s*\*\s*1024/);
-  assert.match(
-    runnerSource,
-    /testArgs\s*=\s*\['--expose-gc',\s*'--test',\s*'--test-concurrency=1'\]/,
-  );
+  assert.match(runnerSource, /'--test-concurrency=1'[\s\S]*test-timeout=\$\{TEST_TIMEOUT_MS\}/);
+  assert.match(runnerSource, /TEST_TIMEOUT_MS\s*=\s*10_000/);
+  assert.match(runnerSource, /partitionTestFiles/);
   assert.match(runnerSource, /VERSER_TEST_MEMORY_GUARD:\s*'1'/);
   assert.match(runnerSource, /VERSER_TEST_MEMORY_LEAK_BYTES:\s*String\(options\.memoryLeakBytes\)/);
   assert.match(runnerSource, /runCommand\(process\.execPath, testArgs/);
+});
+
+test('bounded runner partitions one and two focused files without discovery', () => {
+  const runner = require('../scripts/run-bounded-tests.js');
+  assert.deepEqual(
+    runner.partitionTestFiles(['test/one.test.js']).filter((p) => p.length > 0),
+    [['test/one.test.js']],
+  );
+  assert.deepEqual(runner.partitionTestFiles(['test/a.test.js', 'test/b.test.js']), [
+    ['test/a.test.js'],
+    ['test/b.test.js'],
+  ]);
+});
+
+test('bounded runner rejects timeout bypasses and option-like test paths', () => {
+  const runner = require('../scripts/run-bounded-tests.js');
+  assert.throws(() => runner.parseArgs(['--test-timeout=1']), /timeout bypasses/i);
+  assert.throws(() => runner.parseArgs(['--', '--test-timeout=1']), /hyphen|timeout/i);
 });
 
 test('guarded test wrapper supports per-test memory allowances', () => {
