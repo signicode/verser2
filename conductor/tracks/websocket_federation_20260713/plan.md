@@ -83,7 +83,7 @@
     - `npm run lint` — passed.
     - `git diff --check` — no whitespace errors.
 - Coverage: meaningful focused behavior coverage across Node WebSocket, Bun WebSocket, and federation data-plane tests; no numeric tool coverage report generated.
-- Checkpoint commit: <!-- ORCHESTRATOR: fill SHA after commit -->
+- Checkpoint commit: `58fca1f` (`feat(websocket): add native Node and Bun surfaces`).
 
 ## Phase 4: Python Async Broker and ASGI Interoperability
 
