@@ -40,7 +40,13 @@ Thread safety
 These classes are **not** thread-safe. Use them from a single async context.
 """
 
-from .broker import VerserBroker, VerserBrokerResponse, create_verser_broker
+from .broker import (
+    VerserBroker,
+    VerserBrokerResponse,
+    VerserBrokerWebSocket,
+    VerserWebSocketError,
+    create_verser_broker,
+)
 from .guest import VerserGuest, create_verser_guest
 from .asgi import VwsAsgiConnection, build_websocket_scope, dispatch_asgi_websocket
 
@@ -50,6 +56,8 @@ __all__ = [
     "VERSER2_GUEST_PYTHON_PACKAGE_NAME",
     "VerserBroker",
     "VerserBrokerResponse",
+    "VerserBrokerWebSocket",
+    "VerserWebSocketError",
     "VerserGuest",
     "create_verser_broker",
     "create_verser_guest",

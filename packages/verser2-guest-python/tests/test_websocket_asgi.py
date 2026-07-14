@@ -132,6 +132,7 @@ class TestLiveGuestWebSocketLease(unittest.TestCase):
 
         async def app(scope, receive, send):
             self.assertEqual(scope["type"], "websocket")
+            self.assertIn((b"host", b"live.local"), scope["headers"])
             received.append(await receive())
             await send({"type": "websocket.accept", "subprotocol": "vws.test"})
             received.append(await receive())
@@ -241,6 +242,147 @@ class TestLiveGuestWebSocketLease(unittest.TestCase):
         asyncio.run(_run())
         self.assertEqual(sent[-1]["code"], 1002)
 
+    def test_inbound_wire_validation_uses_1002_and_1009(self) -> None:
+        async def run() -> list[int]:
+            sent: list[dict] = []
+
+            async def record(frame: dict) -> None:
+                sent.append(frame)
+
+            for frame in (
+                {"type": "text", "data": 1},
+                {"type": "binary", "data": "%%%"},
+                {"type": "close", "code": "1000"},
+                {"type": "ping", "data": 1},
+                {"type": "pong", "data": 1},
+            ):
+                connection = VwsAsgiConnection(record)
+                await connection.feed(frame)
+            connection = VwsAsgiConnection(record)
+            await connection.feed({"type": "text", "data": "x" * (1024 * 1024 + 1)})
+            return [frame["code"] for frame in sent]
+
+        self.assertEqual(asyncio.run(run()), [1002, 1002, 1002, 1002, 1002, 1009])
+
+    def test_queue_overflow_is_1009(self) -> None:
+        async def run() -> int:
+            sent: list[dict] = []
+
+            async def record(frame: dict) -> None:
+                sent.append(frame)
+
+            connection = VwsAsgiConnection(record)
+            connection._events = asyncio.Queue(maxsize=1)
+            await connection.feed({"type": "text", "data": "a"})
+            await connection.feed({"type": "text", "data": "b"})
+            return sent[-1]["code"]
+
+        self.assertEqual(asyncio.run(run()), 1009)
+
+    def test_websocket_lease_activation_state_releases_on_every_terminal_path(
+        self,
+    ) -> None:
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1",
+                guest_id="ws-accounting",
+                app=lambda *_args: None,
+                min_waiting_websocket_streams=2,
+                max_websocket_streams=3,
+            )
+            guest._conn = MagicMock()
+            guest._writer = MagicMock()
+            guest._writer.drain = AsyncMock()
+            guest._send_data = AsyncMock()
+            replenished: list[None] = []
+            guest._start_ws_lease_task = lambda: replenished.append(None)
+
+            for stream_id in (19, 20):
+                guest._events[stream_id] = asyncio.Queue()
+                guest._events[stream_id].put_nowait(
+                    h2.events.DataReceived(
+                        stream_id=stream_id,
+                        data=b'{"type":"open","domain":"accounting.local"}\n',
+                        flow_controlled_length=1,
+                    )
+                )
+                guest._dispatch_leased_websocket_stream = AsyncMock()
+                await guest._read_websocket_lease(stream_id)
+                self.assertNotIn(stream_id, guest._ws_active_stream_ids)
+
+            self.assertGreaterEqual(len(replenished), 2)
+
+        asyncio.run(run())
+
+    def test_accepted_asgi_failure_is_1011(self) -> None:
+        sent: list[dict] = []
+
+        async def record(frame: dict) -> None:
+            sent.append(frame)
+
+        async def run() -> None:
+            connection = VwsAsgiConnection(record)
+            await connection.send({"type": "websocket.accept"})
+            await connection.send({"type": "websocket.close", "code": 1011})
+
+        asyncio.run(run())
+        self.assertEqual(sent[-1]["code"], 1011)
+
+    def test_live_asgi_application_exception_maps_to_1011_close(self) -> None:
+        sent: list[dict] = []
+        accepted = asyncio.Event()
+
+        async def app(_scope, receive, send):
+            await receive()
+            await send({"type": "websocket.accept"})
+            await asyncio.sleep(0)
+            raise RuntimeError("application exploded")
+
+        async def run() -> None:
+            async def send_data(_stream_id, data, _end_stream):
+                await asyncio.sleep(0)
+                frames = [json.loads(line) for line in data.decode().splitlines()]
+                sent.extend(frames)
+                if any(frame.get("type") == "accept" for frame in frames):
+                    accepted.set()
+                if any(frame.get("code") == 1011 for frame in frames):
+                    guest._events[18].put_nowait(
+                        h2.events.DataReceived(
+                            stream_id=18,
+                            data=b'{"type":"close","code":1000,"reason":"peer"}\n',
+                            flow_controlled_length=1,
+                        )
+                    )
+
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="ws-live-failure", app=app
+            )
+            guest._conn = MagicMock()
+            guest._events[18] = asyncio.Queue()
+            guest._send_data = send_data
+            task = asyncio.create_task(
+                guest._dispatch_leased_websocket_stream(
+                    18, b'{"type":"open","domain":"failure.local","path":"/"}\n'
+                )
+            )
+            await accepted.wait()
+            guest._events[18].put_nowait(
+                h2.events.DataReceived(
+                    stream_id=18,
+                    data=b'{"type":"text","data":"wake"}\n',
+                    flow_controlled_length=1,
+                )
+            )
+            await task
+
+        asyncio.run(run())
+        self.assertTrue(
+            any(
+                frame.get("type") == "close" and frame.get("code") == 1011
+                for frame in sent
+            )
+        )
+
     def test_asgi_selected_subprotocol_must_be_offered(self) -> None:
         sent: list[dict] = []
 
@@ -263,6 +405,29 @@ class TestLiveGuestWebSocketLease(unittest.TestCase):
 
         asyncio.run(run())
         self.assertEqual([frame["protocol"] for frame in sent], ["", "vws.two"])
+
+    def test_pre_accept_close_is_structured_unavailable(self) -> None:
+        sent: list[dict] = []
+
+        async def run() -> None:
+            async def record(frame: dict) -> None:
+                sent.append(frame)
+
+            connection = VwsAsgiConnection(
+                record,
+                error_context={
+                    "guestId": "python-guest",
+                    "domain": "ws.local",
+                    "path": "/socket",
+                },
+            )
+            await connection.send({"type": "websocket.close", "code": 1000})
+
+        asyncio.run(run())
+        self.assertEqual(sent[0]["type"], "error")
+        self.assertEqual(sent[0]["code"], "missing-guest")
+        self.assertEqual(sent[0]["context"]["domain"], "ws.local")
+        self.assertEqual(sent[0]["context"]["status"], 404)
 
     def test_app_ignoring_disconnect_is_cancelled_after_reset(self) -> None:
         cancelled = False
@@ -294,6 +459,34 @@ class TestLiveGuestWebSocketLease(unittest.TestCase):
         guest._events[3].put_nowait(h2.events.StreamReset(stream_id=3, error_code=8))
         asyncio.run(guest._read_websocket_lease(3))
         self.assertTrue(cancelled)
+
+    def test_websocket_lease_pool_is_bounded_and_keeps_spares(self) -> None:
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1",
+            guest_id="ws-pool",
+            app=lambda *_args: None,
+            min_waiting_websocket_streams=3,
+            max_websocket_streams=3,
+        )
+        stop = asyncio.Event()
+
+        async def idle_lease() -> None:
+            await stop.wait()
+
+        guest._open_websocket_lease_stream = idle_lease
+
+        async def run() -> None:
+            for _ in range(8):
+                guest._start_ws_lease_task()
+            await asyncio.sleep(0)
+            self.assertEqual(len(guest._ws_lease_tasks), 3)
+            stop.set()
+            guest._closed = True
+            for task in list(guest._ws_lease_tasks):
+                task.cancel()
+            await asyncio.gather(*guest._ws_lease_tasks, return_exceptions=True)
+
+        asyncio.run(run())
 
 
 class TestVwsOpenValidation(unittest.TestCase):

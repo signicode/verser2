@@ -87,20 +87,30 @@
 
 ## Phase 4: Python Async Broker and ASGI Interoperability
 
-- [ ] Task: Add Python async Broker WebSocket API
-    - [ ] Scan Python `h2`, Broker, Guest, and ASGI WebSocket code for reusable protocol handling before edits.
-    - [ ] Add failing Python tests for async Broker opens to local, directly remote, and federated Node, Bun, and Python Guest endpoints.
-    - [ ] Implement the public async Broker WebSocket API with VWS/1 framing, negotiation, error, cancellation, ping/pong, and close semantics.
-    - [ ] Preserve compatibility with existing ASGI Guest WebSocket dispatch and route metadata.
-    - [ ] Delegate the Python implementation/tests to the configured implementation specialist.
-    - [ ] Validate the focused Python suite using `uv` and record coverage for changed behavior.
-- [ ] Task: Prove cross-runtime federation interoperability
-    - [ ] Add matrix integration coverage for Node, Bun, and Python Brokers reaching Node, Bun, and Python Guests through local, one-hop, and multi-hop routes.
-    - [ ] Verify text/binary boundaries, subprotocols, ping/pong, close propagation, cancellation, and unavailable negotiation outcomes across runtime boundaries.
-    - [ ] Validate no leaked streams or leases after successful, failed, and aborted connections.
-- [ ] Task: Conductor - Phase Checkpoint 'Python Async Broker and ASGI Interoperability' (Protocol in workflow.md)
-    - [ ] Review cross-runtime API and interoperability outcomes.
-    - [ ] Deduplicate shared behavior, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
+- [x] Task: Add Python async Broker WebSocket API
+    - [x] Scan Python `h2`, Broker, Guest, and ASGI WebSocket code for reusable protocol handling before edits.
+    - [x] Add failing Python tests for async Broker opens to local, directly remote, and federated Node, Bun, and Python Guest endpoints.
+    - [x] Implement the public async Broker WebSocket API with VWS/1 framing, negotiation, error, cancellation, ping/pong, and close semantics.
+    - [x] Preserve compatibility with existing ASGI Guest WebSocket dispatch and route metadata.
+    - [x] Delegate the Python implementation/tests to the configured implementation specialist.
+    - [x] Validate the focused Python suite using `uv` and record coverage for changed behavior.
+- [x] Task: Prove cross-runtime federation interoperability
+    - [x] Add matrix integration coverage for Node, Bun, and Python Brokers reaching Node, Bun, and Python Guests through local, one-hop, and multi-hop routes.
+    - [x] Verify text/binary boundaries, subprotocols, ping/pong, close propagation, cancellation, and unavailable negotiation outcomes across runtime boundaries.
+    - [x] Validate cleanup after successful, failed, and aborted connections.
+
+### Phase 4 Validation Notes
+
+- Python `VerserBroker.websocket()`/`web_socket()` and `VerserBrokerWebSocket` expose bounded VWS/1 async send/receive, text/binary, subprotocol, ping/pong, close, abort, structured error, and flow-control behavior. ASGI Guest dispatch emits structured unavailable and missing-negotiation outcomes while preserving scope metadata.
+- Verified with `npm test --workspace=@signicode/verser2-guest-python` (123 tests): 10 Broker WebSocket tests cover terminal pump finalization/unregistration, queued peer-close preservation, negotiation cancellation, timeout/reset, queue overflow, malformed/oversized handling, bounded errors, and waiter cancellation; 21 ASGI tests cover 1002/1009 wire validation, true application-exception 1011 mapping, shared lease activation accounting, metadata, and lifecycle; the remaining 92 tests cover existing Python HTTP/ASGI regressions.
+- The guarded root matrix test has 27 auditable success cells: 3 Broker runtimes × 3 Guest runtimes × 3 topologies (local, one-hop, multi-hop). Every cell asserts text, binary, negotiated subprotocol, ping/pong, and observed close code/reason; Node/Bun cells additionally assert `socket.destroyed === true`, while Python cells assert an empty WebSocket ownership set. Live Python Guests configure two waiting WebSocket leases with a maximum of three and report readiness only after both Host lease streams activate.
+- Final validation: `npm run test:bounded -- -- test/python-broker-websocket-integration.test.js` passed (1 guarded matrix test); canonical `npm test` passed after updating the expected structured VWS error code; `npm run build`, `npm run lint`, and the Python workspace compile/lint command passed.
+- Coverage evidence: no numeric coverage tool is configured, so no >=95% claim is made. The auditable mapping above records 31 focused WebSocket tests plus 27 live matrix cells and names each changed behavior exercised; bounded memory is enforced by `guarded-test.cjs` (the matrix uses its explicit 4 MiB allowance for nine simultaneous Guest connections).
+- Oracle review: after resolving in-scope repairs, Oracle review passed. Python VWS framing and lease accounting remain Python-runtime-specific; VWS/federation contracts (`@signicode/verser-common`) are shared protocol designs — no duplicate common implementation is needed.
+- [x] Task: Conductor - Phase Checkpoint 'Python Async Broker and ASGI Interoperability' (Protocol in workflow.md)
+    - [x] Review cross-runtime API and interoperability outcomes.
+    - [x] Deduplicate shared behavior, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
+- Checkpoint commit: `[ORCHESTRATOR TO INSERT SHA]`.
 
 ## Phase 5: Documentation, Full Validation, and Review
 

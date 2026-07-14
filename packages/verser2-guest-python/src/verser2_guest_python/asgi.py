@@ -100,6 +100,7 @@ class VwsAsgiConnection:
         self,
         write: Callable[[dict[str, Any]], Awaitable[None]],
         offered_protocols: list[str] | tuple[str, ...] = (),
+        error_context: dict[str, Any] | None = None,
     ) -> None:
         self._write = write
         self._offered_protocols = frozenset(offered_protocols)
@@ -109,6 +110,8 @@ class VwsAsgiConnection:
         self._queued_bytes = 0
         self.closed = False
         self.close_sent = False
+        self.accepted = False
+        self._error_context = dict(error_context or {})
         self.peer_closed = False
 
     async def receive(self) -> dict[str, Any]:
@@ -127,6 +130,7 @@ class VwsAsgiConnection:
                     "ASGI selected a WebSocket subprotocol that was not offered"
                 )
             await self._write({"type": "accept", "protocol": subprotocol or ""})
+            self.accepted = True
         elif event_type == "websocket.send":
             has_text = "text" in event and event["text"] is not None
             has_bytes = "bytes" in event and event["bytes"] is not None
@@ -174,6 +178,18 @@ class VwsAsgiConnection:
                 raise ValueError(f"Invalid WebSocket close code: {code}")
             if len(reason.encode("utf-8")) > 123:
                 raise ValueError("WebSocket close reason exceeds 123 UTF-8 bytes")
+            if not self.accepted:
+                await self._write(
+                    {
+                        "type": "error",
+                        "code": "missing-guest",
+                        "message": "WebSocket endpoint is unavailable",
+                        "context": {**self._error_context, "status": 404},
+                    }
+                )
+                self.closed = True
+                self.close_sent = True
+                return
             await self._write({"type": "close", "code": code, "reason": reason})
             self.close_sent = True
         else:
@@ -209,11 +225,11 @@ class VwsAsgiConnection:
             )
         elif frame_type == "ping":
             data = frame.get("data", "")
-            if (
-                not isinstance(data, str)
-                or len(data.encode("utf-8")) + 40 > VWS_MAX_FRAME_BYTES
-            ):
+            if not isinstance(data, str):
                 await self._protocol_error()
+                return
+            if len(data.encode("utf-8")) + 40 > VWS_MAX_FRAME_BYTES:
+                await self._protocol_error(1009)
                 return
             await self._write({"type": "pong", "data": data})
         elif frame_type == "pong":
@@ -247,10 +263,10 @@ class VwsAsgiConnection:
         else:
             await self._protocol_error()
 
-    async def _protocol_error(self) -> None:
+    async def _protocol_error(self, code: int = 1002) -> None:
         if not self.closed:
             await self._write(
-                {"type": "close", "code": 1002, "reason": "protocol error"}
+                {"type": "close", "code": code, "reason": "protocol error"}
             )
             self.close_sent = True
             self.closed = True
@@ -263,7 +279,7 @@ class VwsAsgiConnection:
             or self._queued_bytes + size > VWS_MAX_FRAME_BYTES
         ):
             if not force:
-                await self._protocol_error()
+                await self._protocol_error(1009)
                 return
             while not self._events.empty():
                 self._events.get_nowait()
@@ -277,7 +293,7 @@ class VwsAsgiConnection:
                 self._events.get_nowait()
                 self._events.put_nowait(event)
             else:
-                await self._protocol_error()
+                await self._protocol_error(1009)
 
     async def disconnect(self, code: int = 1006) -> None:
         if not self.closed:

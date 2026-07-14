@@ -83,6 +83,7 @@ test('federation VWS negotiation frames round-trip with VWS/1 wire shapes', () =
     type: 'error',
     version: 1,
     message: 'peer rejected the open',
+    code: 'protocol-error',
   });
   assert.deepEqual(common.decodeVwsFrame(JSON.stringify(errorFrame)), errorFrame);
 
