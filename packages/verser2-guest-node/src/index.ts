@@ -49,11 +49,18 @@ export type {
   VerserBrokerWebSocketRequest,
   /** VWS/1 WebSocket handler type for guest.attachWebSocket(). */
   VerserWebSocketHandler,
+  VerserNativeWebSocketHandler,
   /** Result returned by a WebSocket handler to accept or reject. */
   VerserWebSocketAcceptResult,
 } from './lib/types';
 
 export { VerserWebSocket } from './lib/verser-websocket';
+export { NativeVerserWebSocket } from './lib/native-websocket';
+export type {
+  NativeWebSocketBinaryType,
+  NativeWebSocketEvent,
+  NativeWebSocketMessageEvent,
+} from './lib/native-websocket';
 export type { VerserWebSocketEvents, VerserWebSocketSendOptions } from './lib/verser-websocket';
 
 import { Http2VerserBroker } from './lib/http2-verser-broker';

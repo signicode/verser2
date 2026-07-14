@@ -246,7 +246,13 @@ test('Guest handler can reject WebSocket connections', async () => {
           targetId: 'ws-guest-reject',
           domain: 'ws-reject.local.test',
         }),
-      /rejected/i,
+      (error) => {
+        assert.equal(error.code, 'missing-guest');
+        assert.equal(error.context.targetId, 'ws-guest-reject');
+        assert.equal(error.context.domain, 'ws-reject.local.test');
+        assert.equal(error.context.status, 404);
+        return true;
+      },
     );
   } finally {
     await broker.close('test-complete');
@@ -388,6 +394,8 @@ test('Pre-accept send is queued and not written until after accept', async () =>
   assert.equal(written.length, 0, 'No data written before accept');
 
   // Now accept
+  // Accept is an internal lifecycle action; exercise it through the Guest
+  // adapter contract rather than making it part of the public WebSocket API.
   ws.sendAccept('vws.test');
 
   // Wait a tick for the queue to flush
@@ -403,6 +411,55 @@ test('Pre-accept send is queued and not written until after accept', async () =>
   const dataFrame = JSON.parse(written[1].toString().trimEnd());
   assert.equal(dataFrame.type, 'text');
   assert.equal(dataFrame.data, 'before-accept');
+});
+
+test('Accepted sends are bounded and buffered accounting follows transport drain', async () => {
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const { Duplex } = require('node:stream');
+  const stream = new Duplex({
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  let blocked = true;
+  const originalWrite = stream.write.bind(stream);
+  stream.write = (chunk, encoding, callback) => {
+    const result = originalWrite(chunk, encoding, callback);
+    return blocked ? false : result;
+  };
+  const ws = new VerserWebSocket(stream, '', true);
+  const pending = ws.send('drain-me', { type: 'text' });
+  assert.ok(ws.getBufferedAmount() > 0);
+  blocked = false;
+  stream.emit('drain');
+  await pending;
+  assert.equal(ws.getBufferedAmount(), 0);
+  stream.destroy();
+});
+
+test('Accepted send overflow rejects deterministically and reports protocol closure', async () => {
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const { Duplex } = require('node:stream');
+  const stream = new Duplex({
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  stream.write = () => {
+    setImmediate(() => stream.emit('drain'));
+    return false;
+  };
+  const ws = new VerserWebSocket(stream, '', true);
+  const sends = Array.from({ length: 64 }, () =>
+    ws.send(Buffer.alloc(20 * 1024), { type: 'binary' }).catch((error) => error),
+  );
+  const results = await Promise.all(sends);
+  assert.ok(results.some((result) => result instanceof Error));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ws.getBufferedAmount(), 0);
+  stream.destroy();
 });
 
 test('VWS ping is automatically answered with pong and exposed as an event', async () => {

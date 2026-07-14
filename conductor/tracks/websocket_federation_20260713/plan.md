@@ -56,21 +56,34 @@
 
 ## Phase 3: Native Node and Bun WebSocket Surfaces
 
-- [ ] Task: Complete Node native-facing Broker and Guest compatibility
-    - [ ] Scan existing Node WebSocket, Agent, Dispatcher, fetch, minimal HTTP, and public export surfaces for reusable adapters.
-    - [ ] Add failing tests for Node standard-facing local, directly remote, and federated WebSocket connections, including subprotocols, text/binary, close, and errors.
-    - [ ] Implement thin native-facing Node wrappers and compatibility paths over VWS/1 without regressing existing direct APIs or HTTP request behavior.
-    - [ ] Delegate the Node implementation/tests to the configured implementation specialist.
-    - [ ] Validate the focused Node suite, type declarations, and package build.
-- [ ] Task: Add Bun native upgrade and Broker WebSocket support
-    - [ ] Scan Bun adapter, route-table, public export, and test conventions before edits; reuse shared Node transport only where runtime semantics remain correct.
-    - [ ] Add failing Bun tests for native upgrade/handler lifecycle and local, directly remote, and federated Broker connections.
-    - [ ] Implement Bun-native Guest upgrade/WebSocket handling and Broker compatibility over VWS/1, preserving Bun message and close semantics.
-    - [ ] Test explicit endpoint rejection and no-response negotiation failure through the Bun surface.
-    - [ ] Validate focused Bun tests, type declarations, and package build.
-- [ ] Task: Conductor - Phase Checkpoint 'Native Node and Bun WebSocket Surfaces' (Protocol in workflow.md)
-    - [ ] Review the new public APIs and runtime ergonomics before Python and end-to-end finalization.
-    - [ ] Deduplicate shared adapters, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
+- [x] Task: Complete Node native-facing Broker and Guest compatibility
+    - [x] Scan existing Node WebSocket, Agent, Dispatcher, fetch, minimal HTTP, and public export surfaces for reusable adapters.
+    - [x] Add failing tests for Node standard-facing local, directly remote, and federated WebSocket connections, including subprotocols, text/binary, close, and errors.
+    - [x] Implement thin native-facing Node wrappers and compatibility paths over VWS/1 without regressing existing direct APIs or HTTP request behavior.
+    - [x] Delegate the Node implementation/tests to the configured implementation specialist.
+    - [x] Validate the focused Node suite, type declarations, and package build.
+- [x] Task: Add Bun native upgrade and Broker WebSocket support
+    - [x] Scan Bun adapter, route-table, public export, and test conventions before edits; reuse shared Node transport only where runtime semantics remain correct.
+    - [x] Add failing Bun tests for native upgrade/handler lifecycle and local, directly remote, and federated Broker connections.
+    - [x] Implement Bun-native Guest upgrade/WebSocket handling and Broker compatibility over VWS/1, preserving Bun message and close semantics.
+    - [x] Test explicit endpoint rejection and no-response negotiation failure through the Bun surface.
+    - [x] Validate focused Bun tests, type declarations, and package build.
+- [x] Task: Conductor - Phase Checkpoint 'Native Node and Bun WebSocket Surfaces' (Protocol in workflow.md)
+    - [x] Review the new public APIs and runtime ergonomics before Python and end-to-end finalization.
+    - [x] Deduplicate shared adapters, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
+
+### Phase 3 Validation Notes
+
+- Deduplication: shared VWS transport queue/error primitives are reused; runtime facades remain adapters (no shared WebSocket base class across runtimes).
+- Oracle review: all high-severity blockers repaired; one P2 public-export concern tracked separately.
+- Validations:
+    - `npm test --workspace @signicode/verser2-guest-bun` — 28 tests passed.
+    - Focused bounded root WebSocket/native-node/Bun suite — 34 tests passed.
+    - `npm run build` — passed.
+    - `npm run lint` — passed.
+    - `git diff --check` — no whitespace errors.
+- Coverage: meaningful focused behavior coverage across Node WebSocket, Bun WebSocket, and federation data-plane tests; no numeric tool coverage report generated.
+- Checkpoint commit: <!-- ORCHESTRATOR: fill SHA after commit -->
 
 ## Phase 4: Python Async Broker and ASGI Interoperability
 

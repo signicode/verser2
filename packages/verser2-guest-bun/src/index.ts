@@ -14,6 +14,7 @@ export { VERSER2_GUEST_BUN_PACKAGE_NAME } from './lib/constants';
 export type {
   /** Broker interface for outbound request routing. */
   VerserBroker,
+  VerserBunBroker,
   /** Options for creating a Broker. */
   VerserBrokerOptions,
   /** Request sent through a Broker to a target Guest. */
@@ -44,6 +45,13 @@ export type {
   VerserBunRoutesPerMethod,
   /** Bun Guest request handler object. */
   VerserBunGuestRequestHandler,
+  /** Bun-compatible WebSocket callback set. */
+  VerserBunWebSocketHandler,
+  /** VWS-backed WebSocket passed to Bun callbacks. */
+  VerserBunWebSocket,
+  /** Options accepted by the Bun-native upgrade surface. */
+  VerserBunUpgradeOptions,
+  VerserBunNativeWebSocket,
 } from './lib/types';
 
 import { Readable } from 'node:stream';
@@ -52,19 +60,22 @@ import { resolveRouteForUrl } from '@signicode/verser-common';
 import type {
   VerserBroker,
   VerserBrokerOptions,
+  VerserBunBroker,
   VerserBunGuest,
   VerserBunGuestLifecycleEvent,
   VerserBunGuestOptions,
   VerserBunGuestRequestHandler,
+  VerserBunNativeWebSocket,
   VerserGuestRevocationResponse,
 } from './lib/types';
 
 import {
+  NativeVerserWebSocket,
   type VerserNodeGuest,
   createVerserBroker as createVerserNodeBroker,
   createVerserNodeGuest,
 } from '@signicode/verser2-guest-node';
-import { createNodeStyleHandler } from './lib/adapter';
+import { createNodeStyleHandler, createNodeStyleWebSocketHandler } from './lib/adapter';
 
 /**
  * Creates a new Bun Guest that connects outbound to a Verser Host.
@@ -84,6 +95,9 @@ import { createNodeStyleHandler } from './lib/adapter';
  */
 export function createVerserBunGuest(options: VerserBunGuestOptions): VerserBunGuest {
   const nodeGuest: VerserNodeGuest = createVerserNodeGuest(options);
+  const nativeGuest = nodeGuest as VerserNodeGuest & {
+    attachNativeWebSocket: (handler: unknown, domain?: string) => VerserNodeGuest;
+  };
 
   const guest: VerserBunGuest = {
     get connected(): boolean {
@@ -94,6 +108,12 @@ export function createVerserBunGuest(options: VerserBunGuestOptions): VerserBunG
       const domainName = domain ?? options.guestId;
       const nodeHandler = createNodeStyleHandler(domainName, handler);
       nodeGuest.attach(nodeHandler, domainName);
+      if (handler.websocket !== undefined) {
+        nativeGuest.attachNativeWebSocket(
+          createNodeStyleWebSocketHandler(domainName, handler),
+          domainName,
+        );
+      }
       return guest;
     },
 
@@ -137,8 +157,16 @@ type VerserBunFetch = ReturnType<VerserBroker['createFetch']>;
  *
  * @public
  */
-export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
+export function createVerserBroker(options: VerserBrokerOptions): VerserBunBroker {
   const nodeBroker = createVerserNodeBroker(options);
+
+  const nodeWebSocket = nodeBroker.webSocket.bind(nodeBroker);
+  const bunBroker = nodeBroker as unknown as VerserBunBroker;
+  const nativeWebSocket = async (
+    request: Parameters<VerserBroker['webSocket']>[0],
+  ): Promise<VerserBunNativeWebSocket> =>
+    new NativeVerserWebSocket((await nodeWebSocket(request)) as never);
+  bunBroker.nativeWebSocket = nativeWebSocket;
 
   const createVerserBunFetch: VerserBroker['createFetch'] = () => {
     const fetch: VerserBunFetch = (async (input: unknown, init: unknown) => {
@@ -225,8 +253,7 @@ export function createVerserBroker(options: VerserBrokerOptions): VerserBroker {
     return fetch;
   };
 
-  (nodeBroker as VerserBroker & { createFetch: typeof createVerserBunFetch }).createFetch =
-    createVerserBunFetch;
+  bunBroker.createFetch = createVerserBunFetch;
 
-  return nodeBroker;
+  return bunBroker;
 }
