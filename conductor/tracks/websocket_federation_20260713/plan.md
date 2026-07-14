@@ -44,15 +44,15 @@
     - [x] Implement structured error propagation, deterministic post-accept close behavior, incremental backpressure, bounded queues, frame limits, and consumed-lease cleanup across each hop.
     - [x] Add slow-consumer, malformed-frame, oversized-frame, ping/pong, and close-code/reason coverage without buffering whole traffic.
     - [x] Run the narrow Host/common test set and record at least 95% meaningful changed-behavior coverage.
-- [~] Task: Conductor - Phase Checkpoint 'Host Multi-Hop Federation Data Plane' (Protocol in workflow.md)
+- [x] Task: Conductor - Phase Checkpoint 'Host Multi-Hop Federation Data Plane' (Protocol in workflow.md)
     - [x] Review architecture, security binding, lifecycle policy, and multi-hop semantics before runtime public API work.
-    - [ ] Deduplicate Host/common code, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
+    - [x] Deduplicate Host/common code, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
 
 ### Phase 2 Validation
 
 - Deduplication: VWS federation error contracts remain shared; Host acquisition, authenticated traversal, and framed stream relaying remain Host-specific.
 - Validation: bounded Host/WebSocket federation regressions, build, and lint pass; Oracle verified mixed-version compatibility, traversal binding, bounded acquisition, structured errors, per-hop frame limits, and duplicate-stream cleanup.
-- Checkpoint commit: pending.
+- Checkpoint commit: `f2558bc` (`feat(federation): route VWS streams across Hosts`).
 
 ## Phase 3: Native Node and Bun WebSocket Surfaces
 
