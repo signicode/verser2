@@ -110,7 +110,7 @@
 - [x] Task: Conductor - Phase Checkpoint 'Python Async Broker and ASGI Interoperability' (Protocol in workflow.md)
     - [x] Review cross-runtime API and interoperability outcomes.
     - [x] Deduplicate shared behavior, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
-- Checkpoint commit: `[ORCHESTRATOR TO INSERT SHA]`.
+- Checkpoint commit: `51c052d` (`feat(websocket): add Python broker interoperability`).
 
 ## Phase 5: Documentation, Full Validation, and Review
 
