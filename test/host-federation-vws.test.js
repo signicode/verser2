@@ -58,6 +58,34 @@ test('Host federation VWS negotiation preserves peer errors', async () => {
   );
 });
 
+test('Federation VWS preserves structured error codes and maps endpoint rejection', async () => {
+  await assert.rejects(
+    readFederationVwsNegotiation(
+      negotiationStream(
+        '{"type":"error","version":1,"code":"missing-guest","message":"unavailable"}',
+      ),
+    ),
+    (error) => error.code === 'missing-guest',
+  );
+  for (const [statusCode, expected] of [
+    [403, 'authorization-denied'],
+    [404, 'protocol-error'],
+  ]) {
+    const session = {
+      request() {
+        const stream = negotiationStream();
+        stream.close = () => stream.destroy();
+        process.nextTick(() => stream.emit('response', { ':status': statusCode }));
+        return stream;
+      },
+    };
+    await assert.rejects(
+      openUpstreamFederationVwsStream(session, 'upstream-reject', 'host-a'),
+      (error) => error.code === expected,
+    );
+  }
+});
+
 test('Host federation VWS negotiation distinguishes version, malformed, oversized, and EOF', async () => {
   await assert.rejects(
     readFederationVwsNegotiation(negotiationStream('{"type":"accept","version":2}')),

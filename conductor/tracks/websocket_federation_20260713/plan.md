@@ -32,21 +32,27 @@
 
 ## Phase 2: Host Multi-Hop Federation Data Plane
 
-- [ ] Task: Add Host acquisition and forwarding for federation-VWS streams
-    - [ ] Scan Host routing, federation, lease, authorization, and lifecycle code for common/reusable pieces before edits.
-    - [ ] Add failing integration tests for real imported-only routes across one-hop and multi-hop Host topologies, replacing the current unsupported-federation regression.
-    - [ ] Implement authenticated federation-VWS stream acquisition, exact `(targetId, domain)` candidate selection, and hop-by-hop forwarding to the destination Host's local Guest lease.
-    - [ ] Preserve origin/via/hop-limit/loop protections and allow candidate failover only before accept.
-    - [ ] Delegate the Host implementation and tests to the configured implementation specialist.
-    - [ ] Validate focused WebSocket/federation tests and ensure direct local and near-remote Host routing remain unchanged.
-- [ ] Task: Harden federation-VWS lifecycle, errors, and flow control
-    - [ ] Add failing tests for authorization denial, explicit endpoint rejection, no negotiation response, mixed-version peer behavior, route revocation, Host/upstream/Guest loss, shutdown, cancellation, reset, and pre-accept failover.
-    - [ ] Implement structured error propagation, deterministic post-accept close behavior, incremental backpressure, bounded queues, frame limits, and consumed-lease cleanup across each hop.
-    - [ ] Add slow-consumer, malformed-frame, oversized-frame, ping/pong, and close-code/reason coverage without buffering whole traffic.
-    - [ ] Run the narrow Host/common test set and record at least 95% meaningful changed-behavior coverage.
-- [ ] Task: Conductor - Phase Checkpoint 'Host Multi-Hop Federation Data Plane' (Protocol in workflow.md)
-    - [ ] Review architecture, security binding, lifecycle policy, and multi-hop semantics before runtime public API work.
+- [x] Task: Add Host acquisition and forwarding for federation-VWS streams
+    - [x] Scan Host routing, federation, lease, authorization, and lifecycle code for common/reusable pieces before edits.
+    - [x] Add failing integration tests for real imported-only routes across one-hop and multi-hop Host topologies, replacing the current unsupported-federation regression.
+    - [x] Implement authenticated federation-VWS stream acquisition, exact `(targetId, domain)` candidate selection, and hop-by-hop forwarding to the destination Host's local Guest lease.
+    - [x] Preserve origin/via/hop-limit/loop protections and allow candidate failover only before accept.
+    - [x] Delegate the Host implementation and tests to the configured implementation specialist.
+    - [x] Validate focused WebSocket/federation tests and ensure direct local and near-remote Host routing remain unchanged.
+- [x] Task: Harden federation-VWS lifecycle, errors, and flow control
+    - [x] Add failing tests for authorization denial, explicit endpoint rejection, no negotiation response, mixed-version peer behavior, route revocation, Host/upstream/Guest loss, shutdown, cancellation, reset, and pre-accept failover.
+    - [x] Implement structured error propagation, deterministic post-accept close behavior, incremental backpressure, bounded queues, frame limits, and consumed-lease cleanup across each hop.
+    - [x] Add slow-consumer, malformed-frame, oversized-frame, ping/pong, and close-code/reason coverage without buffering whole traffic.
+    - [x] Run the narrow Host/common test set and record at least 95% meaningful changed-behavior coverage.
+- [~] Task: Conductor - Phase Checkpoint 'Host Multi-Hop Federation Data Plane' (Protocol in workflow.md)
+    - [x] Review architecture, security binding, lifecycle policy, and multi-hop semantics before runtime public API work.
     - [ ] Deduplicate Host/common code, record validation/coverage, commit the completed checkpoint, push the branch, and record its SHA.
+
+### Phase 2 Validation
+
+- Deduplication: VWS federation error contracts remain shared; Host acquisition, authenticated traversal, and framed stream relaying remain Host-specific.
+- Validation: bounded Host/WebSocket federation regressions, build, and lint pass; Oracle verified mixed-version compatibility, traversal binding, bounded acquisition, structured errors, per-hop frame limits, and duplicate-stream cleanup.
+- Checkpoint commit: pending.
 
 ## Phase 3: Native Node and Bun WebSocket Surfaces
 

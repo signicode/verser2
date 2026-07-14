@@ -7,6 +7,8 @@ import type { TLSSocket } from 'node:tls';
 
 import {
   DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS,
+  FEDERATION_VWS_PATH,
+  FEDERATION_VWS_VERSION,
   type FederatedRouteRegistration,
   type RoutedDomainRegistration,
   VERSER_GUEST_REVOCATION_PATH,
@@ -15,6 +17,7 @@ import {
   type VerserBrokerRouteLifecycleControlFrame,
   type VerserCertificateIdentity,
   type VerserError,
+  type VerserErrorCode,
   type VerserGuestRevocationRequest,
   type VerserHostFederationHandshake,
   type VerserHostId,
@@ -26,6 +29,9 @@ import {
   type VerserRouteLifecycleEvent,
   createBrokerRouteLifecycleControlFrame,
   createBrokerRoutesControlFrame,
+  createFederationVwsAccept,
+  createFederationVwsError,
+  createFederationVwsOpen,
   createGuestRevocationRequest,
   createGuestRevocationResponse,
   createPeerId,
@@ -34,6 +40,7 @@ import {
   createVerserError,
   createVerserHostFederationHandshake,
   createVerserHostId,
+  decodeVwsFrame,
   encodeJsonLine,
   extractCertificateIdentity,
   normalizeClientTlsOptions,
@@ -99,6 +106,8 @@ interface UpstreamLink {
   readonly session: http2.ClientHttp2Session;
   readonly routeStream: http2.ClientHttp2Stream;
   requestStream: http2.ClientHttp2Stream;
+  vwsStream?: http2.ClientHttp2Stream;
+  vwsBusy: boolean;
   closing: boolean;
 }
 
@@ -107,6 +116,8 @@ interface InboundFederationLink {
   readonly session: http2.Http2Session;
   readonly routeStream?: http2.ServerHttp2Stream;
   readonly requestStream?: http2.ServerHttp2Stream;
+  readonly vwsStream?: http2.ServerHttp2Stream;
+  readonly vwsBusy?: boolean;
   readonly requestBusy?: boolean;
 }
 
@@ -114,6 +125,14 @@ interface FederatedRequestStreamWaiter {
   readonly timeout: NodeJS.Timeout;
   readonly resolve: (stream: http2.ServerHttp2Stream) => void;
   readonly reject: (error: VerserError) => void;
+}
+
+interface FederatedVwsPoolWaiter {
+  readonly timeout: NodeJS.Timeout;
+  readonly resolve: (error?: VerserError) => void;
+  readonly reject: (error: VerserError) => void;
+  readonly signal?: AbortSignal;
+  readonly onAbort?: () => void;
 }
 
 /**
@@ -156,6 +175,8 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private static readonly MAX_WS_IDLE_LEASES_PER_GUEST = 4;
 
+  private static readonly MAX_FEDERATION_VWS_WAITERS = 64;
+
   private readonly routeRegistry: HostRouteRegistry;
 
   private readonly degradedCleanup: DegradedRouteCleanup;
@@ -172,6 +193,8 @@ export class NodeHttp2VerserHost implements VerserHost {
     string,
     FederatedRequestStreamWaiter[]
   >();
+
+  private readonly federatedVwsPoolWaiters = new Map<string, FederatedVwsPoolWaiter[]>();
 
   private server?: http2.Http2SecureServer;
 
@@ -474,11 +497,20 @@ export class NodeHttp2VerserHost implements VerserHost {
       const remoteHostId = await this.sendUpstreamHandshake(session, upstreamId, localHostId);
       const routeStream = await this.openUpstreamRouteStream(session, upstreamId, localHostId);
       const requestStream = await this.openUpstreamRequestStream(session, upstreamId, localHostId);
-      link = { upstreamId, remoteHostId, session, routeStream, requestStream, closing: false };
+      link = {
+        upstreamId,
+        remoteHostId,
+        session,
+        routeStream,
+        requestStream,
+        vwsBusy: false,
+        closing: false,
+      };
       this.upstreamLinks.set(upstreamId, link);
       session.once('close', () => this.handleUpstreamSessionClose(upstreamId));
       routeStream.once('close', () => this.handleUpstreamRouteStreamClose(upstreamId));
       void this.handleUpstreamRequestStream(requestStream, upstreamId);
+      void this.establishUpstreamVwsPool(link as UpstreamLink);
       session.on('error', (error) => {
         this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
       });
@@ -796,6 +828,11 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     if (path === federation.FEDERATION_DISPATCH_REQUEST_PATH) {
       this.handleHostFederationDispatchRequestStream(stream, headers);
+      return;
+    }
+
+    if (path === FEDERATION_VWS_PATH) {
+      await this.handleFederationVwsStream(stream, headers);
       return;
     }
 
@@ -1234,6 +1271,73 @@ export class NodeHttp2VerserHost implements VerserHost {
     } catch (error) {
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
       this.handleUpstreamRouteStreamClose(upstreamId);
+    }
+  }
+
+  private async replenishUpstreamVwsStream(
+    upstreamId: string,
+    completedStream: http2.ClientHttp2Stream,
+  ): Promise<void> {
+    const link = this.upstreamLinks.get(upstreamId);
+    if (
+      link === undefined ||
+      link.closing ||
+      link.vwsStream !== completedStream ||
+      link.session.closed ||
+      link.session.destroyed
+    ) {
+      return;
+    }
+    try {
+      const stream = await federation.openUpstreamFederationVwsStream(
+        link.session,
+        upstreamId,
+        this.getFederationHostId(),
+        'acquire',
+      );
+      link.vwsStream = stream;
+      link.vwsBusy = false;
+      void this.handleFederationVwsPeerStream(stream, link.remoteHostId);
+      stream.once('close', () => void this.replenishUpstreamVwsStream(upstreamId, stream));
+      this.resolveFederationVwsWaiters(link.remoteHostId);
+    } catch (error) {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+      this.resolveFederationVwsWaiters(
+        link.remoteHostId,
+        createVerserError('websocket-negotiation-failed', 'Federation VWS replenishment failed', {
+          upstreamId,
+        }),
+      );
+    }
+  }
+
+  private async establishUpstreamVwsPool(link: UpstreamLink): Promise<void> {
+    if (link.closing || link.session.closed || link.session.destroyed) return;
+    try {
+      const stream = await federation.openUpstreamFederationVwsStream(
+        link.session,
+        link.upstreamId,
+        this.getFederationHostId(),
+        'acquire',
+      );
+      if (link.closing || link.session.closed || link.session.destroyed) {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+        return;
+      }
+      link.vwsStream = stream;
+      link.vwsBusy = false;
+      void this.handleFederationVwsPeerStream(stream, link.remoteHostId);
+      stream.once('close', () => void this.replenishUpstreamVwsStream(link.upstreamId, stream));
+      this.resolveFederationVwsWaiters(link.remoteHostId);
+    } catch {
+      // VWS is an optional capability. Keep the authenticated HTTP federation
+      // link alive; a later WebSocket open reports deterministic negotiation failure.
+      this.resolveFederationVwsWaiters(
+        link.remoteHostId,
+        createVerserError('websocket-negotiation-failed', 'Federation VWS capability unavailable', {
+          upstreamId: link.upstreamId,
+        }),
+      );
     }
   }
 
@@ -2005,7 +2109,7 @@ export class NodeHttp2VerserHost implements VerserHost {
    */
   private raceVwsAccept(
     wsStream: http2.ServerHttp2Stream,
-    brokerStream: http2.ServerHttp2Stream,
+    brokerStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
     timeoutMs: number,
     targetId: string,
     domain: string,
@@ -2119,14 +2223,6 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
     }
 
-    // Validate target Guest
-    const target = this.peers.get(targetId);
-    if (target === undefined || target.role !== 'guest') {
-      throw createVerserError('missing-guest', 'Target Guest is not registered for WebSocket', {
-        targetId,
-      });
-    }
-
     // Validate route/domain ownership and revocation through route registry.
     // getCandidates returns only active (non-degraded, non-revoked) routes;
     // an empty result means the route is missing, degraded, or was revoked.
@@ -2139,118 +2235,26 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
     }
 
-    // Federated routes are not supported for WebSocket opens
-    if (candidates.some((r) => r.source !== 'local')) {
-      throw createVerserError('protocol-error', 'Federated WebSocket routes are not supported', {
-        targetId,
-        domain,
-      });
-    }
-
-    // Acquire an idle WS lease
-    const wsLeases = this.wsIdleLeases.get(targetId);
-    if (wsLeases === undefined || wsLeases.length === 0) {
-      throw createVerserError('missing-guest', 'No WebSocket lease available for target Guest', {
-        targetId,
-      });
-    }
-    const wsStream = wsLeases.shift() as http2.ServerHttp2Stream;
-    if (wsLeases.length === 0) {
-      this.wsIdleLeases.delete(targetId);
-    }
-
-    // Return the lease to idle pool on error (before accept handshake completes)
-    let leaseReturned = false;
-    const returnLease = (): void => {
-      if (leaseReturned) return;
-      leaseReturned = true;
-      const leases = this.wsIdleLeases.get(targetId) ?? [];
-      leases.push(wsStream);
-      this.wsIdleLeases.set(targetId, leases);
-    };
-
-    // VWS handshake timeout — Guest must respond within 30 seconds
-    const VWS_HANDSHAKE_TIMEOUT_MS = 30_000;
-
-    // Send VWS/1 open frame to Guest
-    const openFrame: Record<string, unknown> = { type: 'open', domain, path: wsPath };
-    if (protocol.length > 0) {
-      openFrame.protocol = protocol;
-    }
-    wsStream.write(`${JSON.stringify(openFrame)}\n`);
-
-    // Read the accept/error frame from Guest with timeout and
-    // broker-stream-close/error cancellation.
-    let acceptProtocol = '';
+    const openFrame = createFederationVwsOpen({
+      sourceId,
+      targetId,
+      domain,
+      path: wsPath,
+      ...(protocol.length > 0 ? { protocol } : {}),
+      originHostId: this.options.hostId ?? 'host-local',
+      viaHostIds: this.options.hostId === undefined ? [] : [this.options.hostId],
+      hopCount: 0,
+    });
     try {
-      const acceptLine = await this.raceVwsAccept(
-        wsStream,
-        brokerStream,
-        VWS_HANDSHAKE_TIMEOUT_MS,
-        targetId,
-        domain,
-      );
-      const acceptFrame: Record<string, unknown> = JSON.parse(acceptLine);
-      if (acceptFrame.type === 'error') {
-        if (typeof acceptFrame.message !== 'string') {
-          returnLease();
-          throw createVerserError('protocol-error', 'Malformed VWS error frame', {
-            targetId,
-            domain,
-          });
-        }
-        returnLease();
-        throw createVerserError('protocol-error', acceptFrame.message, {
-          targetId,
-          domain,
-        });
-      }
-      if (acceptFrame.type !== 'accept') {
-        returnLease();
-        throw createVerserError(
-          'protocol-error',
-          `Expected VWS accept frame, got ${String(acceptFrame.type)}`,
-          { targetId, domain },
-        );
-      }
-      if (acceptFrame.protocol !== undefined && typeof acceptFrame.protocol !== 'string') {
-        returnLease();
-        throw createVerserError('protocol-error', 'Malformed VWS accept protocol', {
-          targetId,
-          domain,
-        });
-      }
-      acceptProtocol = acceptFrame.protocol ?? '';
-      if (acceptProtocol.length > 0 && acceptProtocol !== protocol) {
-        returnLease();
-        throw createVerserError(
-          'protocol-error',
-          'Guest accepted a WebSocket subprotocol that the Broker did not offer',
-          { targetId, domain, offeredProtocol: protocol, acceptedProtocol: acceptProtocol },
-        );
-      }
+      const result = await this.routeFederationVws(brokerStream, openFrame, candidates);
+      const responseHeaders: http2.OutgoingHttpHeaders = { ':status': 200 };
+      if (result.protocol.length > 0) responseHeaders['x-verser-ws-protocol'] = result.protocol;
+      brokerStream.respond(responseHeaders);
+      this.bridgeWebSocketStreams(brokerStream, result.stream, result.framed);
     } catch (error) {
-      // Cleanup: respond to Broker with error if not already responded.
-      // sendError calls respond() + end(), so do not close brokerStream
-      // afterward — that would send a redundant RST_STREAM.
-      if (!brokerStream.headersSent && !brokerStream.closed) {
+      if (!brokerStream.headersSent && !brokerStream.closed)
         sendError(brokerStream, toVerserError(error));
-      }
-      if (!wsStream.closed) {
-        wsStream.close(http2.constants.NGHTTP2_CANCEL);
-      }
-      return;
     }
-
-    // Respond to Broker with 200 and optional negotiated protocol
-    const responseHeaders: http2.OutgoingHttpHeaders = { ':status': 200 };
-    if (acceptProtocol.length > 0) {
-      responseHeaders['x-verser-ws-protocol'] = acceptProtocol;
-    }
-    brokerStream.respond(responseHeaders);
-
-    // Bridge streams bidirectionally with backpressure
-    this.bridgeWebSocketStreams(brokerStream, wsStream);
   }
 
   /**
@@ -2268,6 +2272,443 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
+  private async handleFederationVwsStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): Promise<void> {
+    const hostId = String(headers['x-verser-host-id'] ?? '').trim();
+    const link = this.inboundFederationHosts.get(hostId);
+    if (link === undefined || link.session !== stream.session) {
+      throw createVerserError('authorization-denied', 'Federation VWS source is not authorized', {
+        hostId,
+      });
+    }
+    if (Number(headers['x-verser-federation-vws-version'] ?? 0) !== FEDERATION_VWS_VERSION) {
+      throw createVerserError('protocol-error', 'Federation VWS protocol version mismatch', {
+        hostId,
+      });
+    }
+    if (
+      headers['x-verser-federation-vws-mode'] === 'acquire' &&
+      link.vwsStream !== undefined &&
+      !link.vwsStream.closed &&
+      !link.vwsStream.destroyed
+    ) {
+      stream.respond({ ':status': 409, 'content-type': 'application/json' });
+      stream.end(
+        JSON.stringify({
+          code: 'websocket-negotiation-failed',
+          message: 'Duplicate federation VWS acquire stream',
+        }),
+      );
+      return;
+    }
+    stream.respond({ ':status': 200, 'content-type': 'application/x-ndjson' });
+    if (headers['x-verser-federation-vws-mode'] === 'acquire') {
+      this.inboundFederationHosts.set(hostId, { ...link, vwsStream: stream, vwsBusy: false });
+      this.resolveFederationVwsWaiters(hostId);
+      stream.once('close', () => {
+        const current = this.inboundFederationHosts.get(hostId);
+        if (current?.vwsStream === stream) {
+          this.inboundFederationHosts.set(hostId, { ...current, vwsStream: undefined });
+        }
+      });
+      return;
+    }
+    try {
+      const frame = decodeVwsFrame(await readVwsLine(stream));
+      const federationFrame = frame as unknown as Record<string, unknown>;
+      if (federationFrame.type !== 'open' || federationFrame.version !== FEDERATION_VWS_VERSION) {
+        throw createVerserError('protocol-error', 'Invalid federation VWS open frame', { hostId });
+      }
+      const open = createFederationVwsOpen(federationFrame as never);
+      this.validateFederationVwsOpen(open, hostId);
+      const candidates = this.routeRegistry.getCandidates(open.targetId, open.domain);
+      const result = await this.routeFederationVws(stream, open, candidates, hostId);
+      stream.write(`${JSON.stringify(createFederationVwsAccept({ protocol: result.protocol }))}\n`);
+      this.bridgeWebSocketStreams(stream, result.stream, true);
+    } catch (error) {
+      if (!stream.closed) {
+        const failure = toVerserError(error);
+        stream.end(`${JSON.stringify(createFederationVwsError(failure.message, failure.code))}\n`);
+      }
+    }
+  }
+
+  private async handleFederationVwsPeerStream(
+    stream: http2.ClientHttp2Stream,
+    peerHostId: string,
+  ): Promise<void> {
+    try {
+      const frame = decodeVwsFrame(await readVwsLine(stream)) as unknown as Record<string, unknown>;
+      if (frame.type !== 'open' || frame.version !== FEDERATION_VWS_VERSION) {
+        throw createVerserError('protocol-error', 'Invalid federation VWS open frame', {
+          peerHostId,
+        });
+      }
+      const open = createFederationVwsOpen(frame as never);
+      this.validateFederationVwsOpen(open, peerHostId);
+      const result = await this.routeFederationVws(
+        stream as unknown as http2.ServerHttp2Stream,
+        open,
+        this.routeRegistry.getCandidates(open.targetId, open.domain),
+        peerHostId,
+      );
+      stream.write(`${JSON.stringify(createFederationVwsAccept({ protocol: result.protocol }))}\n`);
+      this.bridgeWebSocketStreams(stream, result.stream, true);
+    } catch (error) {
+      if (!stream.closed) {
+        const failure = toVerserError(error);
+        stream.end(`${JSON.stringify(createFederationVwsError(failure.message, failure.code))}\n`);
+      }
+    }
+  }
+
+  private async routeFederationVws(
+    sourceStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    open: ReturnType<typeof createFederationVwsOpen>,
+    candidates: readonly FederatedRouteRegistration[],
+    sourceHostId?: string,
+  ): Promise<{
+    stream: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
+    protocol: string;
+    framed: boolean;
+  }> {
+    const controller = new AbortController();
+    const cancel = (): void => controller.abort();
+    sourceStream.once('close', cancel);
+    sourceStream.once('error', cancel);
+    try {
+      return await this.routeFederationVwsInternal(
+        sourceStream,
+        open,
+        candidates,
+        sourceHostId,
+        controller.signal,
+      );
+    } finally {
+      sourceStream.off('close', cancel);
+      sourceStream.off('error', cancel);
+    }
+  }
+
+  private async routeFederationVwsInternal(
+    sourceStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    open: ReturnType<typeof createFederationVwsOpen>,
+    candidates: readonly FederatedRouteRegistration[],
+    sourceHostId?: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    stream: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
+    protocol: string;
+    framed: boolean;
+  }> {
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      if (candidate.source !== 'local' && candidate.nextHopHostId === sourceHostId) continue;
+      let destination: http2.ServerHttp2Stream | http2.ClientHttp2Stream | undefined;
+      try {
+        if (candidate.source === 'local') {
+          const leases = this.wsIdleLeases.get(candidate.targetId);
+          if (leases === undefined || leases.length === 0) {
+            throw createVerserError(
+              'websocket-negotiation-failed',
+              'Advertised WebSocket endpoint is unavailable',
+              {
+                targetId: candidate.targetId,
+              },
+            );
+          }
+          destination = leases.shift() as http2.ServerHttp2Stream;
+          if (leases.length === 0) this.wsIdleLeases.delete(candidate.targetId);
+        } else {
+          const pooledResult = await this.waitForFederationVwsPool(
+            candidate.nextHopHostId,
+            5000,
+            signal,
+          );
+          const { pooled, inbound, upstream } = pooledResult;
+          if (inbound !== undefined && inbound.vwsStream === pooled) {
+            this.inboundFederationHosts.set(candidate.nextHopHostId, {
+              ...inbound,
+              vwsBusy: true,
+            });
+          } else if (upstream !== undefined) {
+            upstream.vwsBusy = true;
+          }
+          destination = pooled;
+        }
+
+        const forwardedOpen =
+          candidate.source === 'local'
+            ? open
+            : this.createForwardedFederationVwsOpen(open, candidate.nextHopHostId);
+        destination.write(
+          `${JSON.stringify(
+            candidate.source === 'local'
+              ? {
+                  type: 'open',
+                  domain: forwardedOpen.domain,
+                  path: forwardedOpen.path,
+                  ...(forwardedOpen.protocol === undefined
+                    ? {}
+                    : { protocol: forwardedOpen.protocol }),
+                }
+              : forwardedOpen,
+          )}\n`,
+        );
+        const protocol =
+          candidate.source === 'local'
+            ? await this.raceVwsAccept(
+                destination as http2.ServerHttp2Stream,
+                sourceStream,
+                30_000,
+                open.targetId,
+                open.domain,
+              ).then((line) => {
+                const frame = JSON.parse(line) as {
+                  type?: unknown;
+                  protocol?: unknown;
+                  message?: unknown;
+                  code?: unknown;
+                };
+                if (frame.type === 'error') {
+                  throw createVerserError(
+                    (typeof frame.code === 'string'
+                      ? frame.code
+                      : 'protocol-error') as VerserErrorCode,
+                    String(frame.message ?? 'WebSocket rejected'),
+                  );
+                }
+                if (
+                  frame.type !== 'accept' ||
+                  (frame.protocol !== undefined && typeof frame.protocol !== 'string')
+                ) {
+                  throw createVerserError('protocol-error', 'Malformed VWS accept frame');
+                }
+                const accepted = frame.protocol ?? '';
+                if (accepted !== '' && accepted !== (open.protocol ?? '')) {
+                  throw createVerserError(
+                    'protocol-error',
+                    'Guest accepted an unoffered WebSocket protocol',
+                  );
+                }
+                return accepted;
+              })
+            : await this.readFederatedVwsNegotiationWithCancellation(
+                sourceStream,
+                destination,
+                open.targetId,
+                open.domain,
+              );
+        return {
+          stream: destination,
+          protocol: protocol ?? '',
+          framed: sourceHostId !== undefined || candidate.source !== 'local',
+        };
+      } catch (error) {
+        lastError = error;
+        if (destination !== undefined && !destination.closed)
+          destination.close(http2.constants.NGHTTP2_CANCEL);
+      }
+    }
+    throw (
+      lastError ??
+      createVerserError('missing-guest', 'No WebSocket route candidate is available', {
+        targetId: open.targetId,
+        domain: open.domain,
+      })
+    );
+  }
+
+  private validateFederationVwsOpen(
+    open: ReturnType<typeof createFederationVwsOpen>,
+    senderHostId?: string,
+  ): void {
+    const localHostId = this.getFederationHostId();
+    if (open.viaHostIds.length === 0 || open.originHostId !== open.viaHostIds[0]) {
+      throw createVerserError('protocol-error', 'Federation VWS origin/via metadata is invalid');
+    }
+    if (new Set(open.viaHostIds).size !== open.viaHostIds.length) {
+      throw createVerserError('route-loop', 'Federation VWS route metadata contains a loop');
+    }
+    const localIndex = open.viaHostIds.indexOf(localHostId);
+    if (
+      senderHostId !== undefined &&
+      (open.viaHostIds.length < 2 || open.viaHostIds[open.viaHostIds.length - 1] !== localHostId)
+    ) {
+      throw createVerserError(
+        'authorization-denied',
+        'Federation VWS destination metadata is not bound to this Host',
+      );
+    }
+    if (localIndex >= 0 && localIndex !== open.viaHostIds.length - 1) {
+      throw createVerserError('route-loop', 'Federation VWS route revisits this Host', {
+        hostId: localHostId,
+      });
+    }
+    if (
+      senderHostId !== undefined &&
+      open.viaHostIds.length > 1 &&
+      open.viaHostIds[open.viaHostIds.length - 2] !== senderHostId
+    ) {
+      throw createVerserError(
+        'authorization-denied',
+        'Federation VWS traversal metadata is not bound to the sender',
+      );
+    }
+    if (open.hopCount !== open.viaHostIds.length - 1) {
+      throw createVerserError('protocol-error', 'Federation VWS hop metadata is invalid');
+    }
+    if (open.hopCount > (this.options.maxFederationHopCount ?? 8)) {
+      throw createVerserError('route-loop', 'Federation VWS route exceeds maximum hop count');
+    }
+  }
+
+  private createForwardedFederationVwsOpen(
+    open: ReturnType<typeof createFederationVwsOpen>,
+    nextHopHostId: string,
+  ): ReturnType<typeof createFederationVwsOpen> {
+    this.validateFederationVwsOpen(open);
+    return createFederationVwsOpen({
+      ...open,
+      viaHostIds: [...open.viaHostIds, nextHopHostId],
+      hopCount: open.hopCount + 1,
+    });
+  }
+
+  private async waitForFederationVwsPool(
+    hostId: string,
+    timeoutMs = 5000,
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly pooled: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
+    readonly inbound?: InboundFederationLink;
+    readonly upstream?: UpstreamLink;
+  }> {
+    const available = ():
+      | {
+          readonly pooled: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
+          readonly inbound?: InboundFederationLink;
+          readonly upstream?: UpstreamLink;
+        }
+      | undefined => {
+      const inbound = this.inboundFederationHosts.get(hostId);
+      const upstream = [...this.upstreamLinks.values()].find(
+        (link) => link.remoteHostId === hostId && !link.closing,
+      );
+      const pooled = inbound?.vwsStream ?? upstream?.vwsStream;
+      const busy =
+        inbound !== undefined && inbound.vwsStream === pooled ? inbound.vwsBusy : upstream?.vwsBusy;
+      if (pooled !== undefined && !pooled.closed && !pooled.destroyed && !busy) {
+        return { pooled, inbound, upstream };
+      }
+      return undefined;
+    };
+    const queued = this.federatedVwsPoolWaiters.get(hostId) ?? [];
+    if (queued.length >= NodeHttp2VerserHost.MAX_FEDERATION_VWS_WAITERS) {
+      throw createVerserError(
+        'websocket-negotiation-failed',
+        'Federation VWS acquisition queue is full',
+        {
+          nextHopHostId: hostId,
+        },
+      );
+    }
+    const ready = available();
+    if (ready !== undefined) return ready;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: VerserError): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', onAbort);
+        const waiters = this.federatedVwsPoolWaiters.get(hostId) ?? [];
+        this.federatedVwsPoolWaiters.set(
+          hostId,
+          waiters.filter((waiter) => waiter.resolve !== resolveReady),
+        );
+        if (error !== undefined) reject(error);
+        else {
+          const result = available();
+          if (result === undefined) {
+            reject(
+              createVerserError(
+                'websocket-negotiation-failed',
+                'Federation VWS next hop is unavailable',
+                {
+                  nextHopHostId: hostId,
+                },
+              ),
+            );
+          } else resolve(result);
+        }
+      };
+      const onAbort = (): void =>
+        finish(
+          createVerserError('stream-failure', 'Federation VWS acquisition was cancelled', {
+            nextHopHostId: hostId,
+          }),
+        );
+      const resolveReady = (error?: VerserError): void => finish(error);
+      const timeout = setTimeout(
+        () =>
+          finish(
+            createVerserError(
+              'websocket-negotiation-failed',
+              'Federation VWS next hop is unavailable',
+              {
+                nextHopHostId: hostId,
+              },
+            ),
+          ),
+        timeoutMs,
+      );
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const waiters = this.federatedVwsPoolWaiters.get(hostId) ?? [];
+      waiters.push({ timeout, resolve: resolveReady, reject, signal, onAbort });
+      this.federatedVwsPoolWaiters.set(hostId, waiters);
+    });
+  }
+
+  private resolveFederationVwsWaiters(hostId: string, error?: VerserError): void {
+    const waiters = this.federatedVwsPoolWaiters.get(hostId) ?? [];
+    const waiter = waiters.shift();
+    if (waiters.length === 0) this.federatedVwsPoolWaiters.delete(hostId);
+    else this.federatedVwsPoolWaiters.set(hostId, waiters);
+    waiter?.resolve(error);
+  }
+
+  private async readFederatedVwsNegotiationWithCancellation(
+    sourceStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    destination: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    targetId: string,
+    domain: string,
+  ): Promise<string | undefined> {
+    const controller = new AbortController();
+    const cancel = (): void => controller.abort();
+    sourceStream.once('close', cancel);
+    sourceStream.once('error', cancel);
+    try {
+      return await federation.readFederationVwsNegotiation(
+        destination,
+        {
+          targetId,
+          domain,
+        },
+        { signal: controller.signal },
+      );
+    } finally {
+      sourceStream.off('close', cancel);
+      sourceStream.off('error', cancel);
+    }
+  }
+
   /**
    * Bridges two HTTP/2 streams bidirectionally with backpressure.
    *
@@ -2277,84 +2718,83 @@ export class NodeHttp2VerserHost implements VerserHost {
    * errors, both are cleaned up and all listeners are removed.
    */
   private bridgeWebSocketStreams(
-    streamA: http2.ServerHttp2Stream,
-    streamB: http2.ServerHttp2Stream,
+    streamA: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    streamB: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    framed = true,
   ): void {
+    if (!framed) {
+      let rawClosed = false;
+      const rawCleanup = (): void => {
+        if (rawClosed) return;
+        rawClosed = true;
+        streamA.off('data', rawAtoB);
+        streamB.off('data', rawBtoA);
+        if (!streamA.closed) streamA.close(http2.constants.NGHTTP2_NO_ERROR);
+        if (!streamB.closed) streamB.close(http2.constants.NGHTTP2_NO_ERROR);
+      };
+      const rawAtoB = (chunk: Buffer): void => {
+        if (streamB.closed || streamB.destroyed) {
+          rawCleanup();
+          return;
+        }
+        if (!streamB.write(chunk)) {
+          streamA.pause();
+          streamB.once('drain', () => {
+            if (!rawClosed) streamA.resume();
+          });
+        }
+      };
+      const rawBtoA = (chunk: Buffer): void => {
+        if (streamA.closed || streamA.destroyed) {
+          rawCleanup();
+          return;
+        }
+        if (!streamA.write(chunk)) {
+          streamB.pause();
+          streamA.once('drain', () => {
+            if (!rawClosed) streamB.resume();
+          });
+        }
+      };
+      streamA.on('data', rawAtoB);
+      streamB.on('data', rawBtoA);
+      streamA.once('end', rawCleanup);
+      streamB.once('end', rawCleanup);
+      streamA.once('error', rawCleanup);
+      streamB.once('error', rawCleanup);
+      streamA.once('close', rawCleanup);
+      streamB.once('close', rawCleanup);
+      return;
+    }
     let closed = false;
-
     const cleanup = (): void => {
       if (closed) return;
       closed = true;
-
-      streamA.off('data', forwardAtoB);
-      streamA.off('end', onEndA);
-      streamA.off('error', cleanup);
-      streamA.off('close', cleanup);
-
-      streamB.off('data', forwardBtoA);
-      streamB.off('end', onEndB);
-      streamB.off('error', cleanup);
-      streamB.off('close', cleanup);
-
-      if (!streamA.closed) {
-        streamA.close(http2.constants.NGHTTP2_NO_ERROR);
-      }
-      if (!streamB.closed) {
-        streamB.close(http2.constants.NGHTTP2_NO_ERROR);
-      }
+      if (!streamA.closed) streamA.close(http2.constants.NGHTTP2_NO_ERROR);
+      if (!streamB.closed) streamB.close(http2.constants.NGHTTP2_NO_ERROR);
     };
-
-    const forwardAtoB = (chunk: Buffer): void => {
-      if (streamB.closed || streamB.destroyed) {
+    const forward = async (
+      source: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+      destination: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    ): Promise<void> => {
+      try {
+        while (!closed) {
+          const line = await readVwsLine(source, VWS_MAX_FRAME_BYTES);
+          const frame = decodeVwsFrame(line);
+          if (!destination.write(`${JSON.stringify(frame)}\n`)) {
+            await new Promise<void>((resolve) => destination.once('drain', resolve));
+          }
+        }
+      } catch {
         cleanup();
-        return;
-      }
-      const canContinue = streamB.write(chunk);
-      if (!canContinue) {
-        streamA.pause();
-        streamB.once('drain', () => {
-          if (!closed) streamA.resume();
-        });
       }
     };
-
-    const forwardBtoA = (chunk: Buffer): void => {
-      if (streamA.closed || streamA.destroyed) {
-        cleanup();
-        return;
-      }
-      const canContinue = streamA.write(chunk);
-      if (!canContinue) {
-        streamB.pause();
-        streamA.once('drain', () => {
-          if (!closed) streamB.resume();
-        });
-      }
-    };
-
-    const onEndA = (): void => {
-      streamA.off('data', forwardAtoB);
-      if (!streamB.closed && !streamB.destroyed) {
-        streamB.end();
-      }
-    };
-
-    const onEndB = (): void => {
-      streamB.off('data', forwardBtoA);
-      if (!streamA.closed && !streamA.destroyed) {
-        streamA.end();
-      }
-    };
-
-    streamA.on('data', forwardAtoB);
-    streamA.once('end', onEndA);
     streamA.once('error', cleanup);
     streamA.once('close', cleanup);
-
-    streamB.on('data', forwardBtoA);
-    streamB.once('end', onEndB);
     streamB.once('error', cleanup);
     streamB.once('close', cleanup);
+    void forward(streamA, streamB);
+    void forward(streamB, streamA);
   }
 
   private async routeBrokerRequest(

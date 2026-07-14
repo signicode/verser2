@@ -20,6 +20,7 @@ import {
   VERSER_LIFECYCLE_EVENTS,
   type VerserBrokerRouteLifecycleControlFrame,
   type VerserError,
+  type VerserErrorCode,
   type VerserHostId,
   type VerserRouteLifecycleEvent,
   createFederatedRoutesControlFrame,
@@ -295,6 +296,7 @@ export async function openUpstreamFederationVwsStream(
   session: http2.ClientHttp2Session,
   upstreamId: string,
   localHostId: VerserHostId,
+  mode: 'open' | 'acquire' = 'open',
 ): Promise<http2.ClientHttp2Stream> {
   const stream = session.request({
     ':method': 'POST',
@@ -302,15 +304,20 @@ export async function openUpstreamFederationVwsStream(
     'content-type': 'application/x-ndjson',
     'x-verser-host-id': localHostId,
     'x-verser-federation-vws-version': String(FEDERATION_VWS_VERSION),
+    ...(mode === 'acquire' ? { 'x-verser-federation-vws-mode': 'acquire' } : {}),
   });
   const headers = await waitForUpstreamHandshakeResponse(stream, upstreamId);
   const statusCode = Number(headers[':status'] ?? 0);
   if (statusCode < 200 || statusCode >= 300) {
     stream.close(http2.constants.NGHTTP2_CANCEL);
-    throw createVerserError('upstream-unavailable', 'Upstream federation VWS stream rejected', {
-      upstreamId,
-      statusCode,
-    });
+    throw createVerserError(
+      statusCode === 403 ? 'authorization-denied' : 'protocol-error',
+      'Upstream federation VWS stream rejected',
+      {
+        upstreamId,
+        statusCode,
+      },
+    );
   }
   return stream;
 }
@@ -407,7 +414,8 @@ export async function readFederationVwsNegotiation(
     });
   }
   if (frame.type === 'error') {
-    throw createVerserError('protocol-error', frame.message, context);
+    const code = (frame as typeof frame & { code?: VerserErrorCode }).code;
+    throw createVerserError(code ?? 'protocol-error', frame.message, context);
   }
   if (frame.type !== 'accept') {
     throw createVerserError('protocol-error', 'Expected federation VWS accept response', context);

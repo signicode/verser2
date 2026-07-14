@@ -802,35 +802,130 @@ test('Route revocation blocks new opens but preserves an active WebSocket', asyn
   }
 });
 
-test('Federated WebSocket routes fail with an explicit unsupported error', async () => {
-  const host = createHost({ port: 0, hostId: 'ws-federation-host' });
+test('Broker opens a WebSocket through an imported-only one-hop route', async () => {
+  const host = createHost({ port: 0, hostId: 'ws-federation-manager' });
+  const remoteHost = createHost({ port: 0, hostId: 'ws-federation-remote' });
   await host.start();
+  await remoteHost.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const remoteUrl = `https://127.0.0.1:${remoteHost.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'ws-federation-broker' });
-  const guest = createGuest({ hostUrl, guestId: 'ws-federated-target' });
+  const guest = createGuest({
+    hostUrl: remoteUrl,
+    guestId: 'ws-federated-target',
+  });
   try {
-    guest.attachWebSocket(() => {}, 'ws-federated-local-only.local.test');
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', (data, options) => void ws.send(data, options));
+    }, 'ws-federated.local.test');
     await broker.connect();
+    await remoteHost.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl,
+      tls: { ca: trusted.certificate },
+    });
     await guest.connect();
-    host.setImportedFederatedRoutes('remote-host', [
-      {
-        targetId: 'ws-federated-target',
-        domain: 'ws-federated.local.test',
-        originHostId: 'remote-origin',
-        nextHopHostId: 'remote-host',
-        hopCount: 1,
-        viaHostIds: [],
-        source: 'upstream',
-      },
+    await broker.waitForRoute('ws-federated.local.test');
+    const ws = await broker.webSocket({
+      targetId: 'ws-federated-target',
+      domain: 'ws-federated.local.test',
+      protocol: 'vws.base64',
+    });
+    const message = new Promise((resolve) => ws.once('message', resolve));
+    await ws.send('through-one-hop', { type: 'text' });
+    assert.equal(await message, 'through-one-hop');
+    ws.close();
+    const second = await broker.webSocket({
+      targetId: 'ws-federated-target',
+      domain: 'ws-federated.local.test',
+    });
+    second.close();
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await remoteHost.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker opens a WebSocket through an imported-only multi-hop route', async () => {
+  const host = createHost({ port: 0, hostId: 'ws-federation-root' });
+  const middleHost = createHost({ port: 0, hostId: 'ws-federation-middle' });
+  const remoteHost = createHost({ port: 0, hostId: 'ws-federation-leaf' });
+  await host.start();
+  await middleHost.start();
+  await remoteHost.start();
+  const rootUrl = `https://127.0.0.1:${host.address.port}`;
+  const middleUrl = `https://127.0.0.1:${middleHost.address.port}`;
+  const leafUrl = `https://127.0.0.1:${remoteHost.address.port}`;
+  const broker = createBroker({ hostUrl: rootUrl, brokerId: 'ws-federation-multi-broker' });
+  const guest = createGuest({ hostUrl: leafUrl, guestId: 'ws-federated-multi-target' });
+  try {
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', (data, options) => void ws.send(data, options));
+    }, 'ws-federated-multi.local.test');
+    await broker.connect();
+    await middleHost.connectUpstream({
+      upstreamId: 'root',
+      url: rootUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await remoteHost.connectUpstream({
+      upstreamId: 'middle',
+      url: middleUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await guest.connect();
+    await broker.waitForRoute('ws-federated-multi.local.test');
+    const ws = await broker.webSocket({
+      targetId: 'ws-federated-multi-target',
+      domain: 'ws-federated-multi.local.test',
+    });
+    const message = new Promise((resolve) => ws.once('message', resolve));
+    await ws.send('through-two-hops', { type: 'text' });
+    assert.equal(await message, 'through-two-hops');
+    ws.close();
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await remoteHost.close('test-complete');
+    await middleHost.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Established federated WebSocket closes abnormally when the selected Host is lost', async () => {
+  const host = createHost({ port: 0, hostId: 'ws-loss-root' });
+  const remoteHost = createHost({ port: 0, hostId: 'ws-loss-leaf' });
+  await host.start();
+  await remoteHost.start();
+  const rootUrl = `https://127.0.0.1:${host.address.port}`;
+  const leafUrl = `https://127.0.0.1:${remoteHost.address.port}`;
+  const broker = createBroker({ hostUrl: rootUrl, brokerId: 'ws-loss-broker' });
+  const guest = createGuest({ hostUrl: leafUrl, guestId: 'ws-loss-target' });
+  try {
+    guest.attachWebSocket(() => {}, 'ws-loss.local.test');
+    await broker.connect();
+    await remoteHost.connectUpstream({
+      upstreamId: 'root',
+      url: rootUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await guest.connect();
+    await broker.waitForRoute('ws-loss.local.test');
+    const ws = await broker.webSocket({ targetId: 'ws-loss-target', domain: 'ws-loss.local.test' });
+    const closed = new Promise((resolve) => {
+      ws.once('close', (code) => resolve(code));
+      ws.once('error', resolve);
+    });
+    await remoteHost.close('selected-host-loss');
+    const outcome = await Promise.race([
+      closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('federated close timed out')), 3000),
+      ),
     ]);
-    // The direct API accepts an explicit target/domain; give the Host one
-    // event-loop turn to publish the imported candidate before opening.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await assert.rejects(
-      () =>
-        broker.webSocket({ targetId: 'ws-federated-target', domain: 'ws-federated.local.test' }),
-      /Federated WebSocket routes are not supported/,
-    );
+    assert.ok(outcome instanceof Error || outcome === 1006);
   } finally {
     await broker.close('test-complete');
     await guest.close('test-complete');

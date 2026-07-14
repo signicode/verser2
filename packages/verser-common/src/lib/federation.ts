@@ -2,6 +2,7 @@ import { createVerserError } from './errors';
 import { createRoutedDomainRegistration } from './routing';
 import type {
   FederatedRouteRegistration,
+  VerserErrorCode,
   VerserFederatedRoutesControlFrame,
   VerserHostFederationHandshake,
   VerserHostId,
@@ -48,6 +49,7 @@ export interface FederationVwsError {
   readonly type: 'error';
   readonly version: typeof FEDERATION_VWS_VERSION;
   readonly message: string;
+  readonly code?: VerserErrorCode;
 }
 
 export function createFederationVwsOpen(input: FederationVwsOpenInput): FederationVwsOpen {
@@ -95,11 +97,14 @@ export function createFederationVwsAccept(input: { protocol?: string } = {}): Fe
   };
 }
 
-export function createFederationVwsError(message: string): FederationVwsError {
+export function createFederationVwsError(
+  message: string,
+  code: VerserErrorCode = 'protocol-error',
+): FederationVwsError {
   if (typeof message !== 'string' || message.length === 0) {
     throw createVerserError('protocol-error', 'Federation VWS error message is required');
   }
-  return { type: 'error', version: FEDERATION_VWS_VERSION, message };
+  return { type: 'error', version: FEDERATION_VWS_VERSION, message, code };
 }
 
 /** Creates the stable error used when a peer never returns accept/error. */
