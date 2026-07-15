@@ -1,6 +1,6 @@
 {
   "name": "@signicode/verser2-guest-bun",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Bun Guest and Broker APIs for Verser2 outbound Host routing.",
   "license": "MIT",
@@ -24,9 +24,9 @@
     "access": "public"
   },
   "dependencies": {
-    "@signicode/verser-common": "0.5.0",
-    "@signicode/verser2-guest-js-common": "0.5.0",
-    "@signicode/verser2-guest-node": "0.5.0"
+    "@signicode/verser-common": "0.6.0",
+    "@signicode/verser2-guest-js-common": "0.6.0",
+    "@signicode/verser2-guest-node": "0.6.0"
   },
   "scripts": {
     "test": "bun test ./test/adapter.test.ts",

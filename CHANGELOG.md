@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased - Federated VWS/1 WebSockets
+## v0.6.0 - Federated VWS/1 WebSockets
 
 - Documents Node, Bun, and Python runtime-facing WebSocket APIs over explicit
   VWS/1 frames, including authenticated multi-Host federation.
