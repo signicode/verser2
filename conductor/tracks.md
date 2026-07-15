@@ -4,5 +4,5 @@ This file tracks active major tracks for the project. Completed tracks are moved
 
 ---
 
-- [~] **Track: websocket federation implementation**
+- [x] **Track: websocket federation implementation**
 *Link: [./tracks/websocket_federation_20260713/](./tracks/websocket_federation_20260713/)*
