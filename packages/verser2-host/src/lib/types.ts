@@ -265,18 +265,20 @@ export interface VerserHostLifecycleEvent {
  *   TLS HTTP/2 peer connection.
  *
  * **Only protocol paths** `/verser/register`, `/verser/guest/control`,
- * `/verser/guest/lease`, `/verser/request`, `/verser/host/federation`,
- * `/verser/host/federation/routes`, `/verser/host/federation/request`, and
- * `/verser/host/federation/dispatch-request` are supported.
+ * `/verser/guest/lease`, `/verser/guest/websocket-lease`, `/verser/request`,
+ * `/verser/websocket`, `/verser/host/federation`,
+ * `/verser/host/federation/routes`, `/verser/host/federation/request`,
+ * `/verser/host/federation/dispatch-request`, and
+ * `/verser/host/federation/websocket` are supported.
  *
  * @remarks
  * - The Host requires TLS for remote peer connections. Local peers bypass TLS
  *   because they are attached in-process.
  * - Route matching uses exact hostname equality — no wildcard or suffix matching.
- * - The Host supports only explicit VWS/1 framed WebSockets over existing TLS
- *   HTTP/2. Generic HTTP upgrade, CONNECT/RFC8441, L4 forwarding, trailers, and
+ * - The Host supports explicit VWS/1 framed WebSockets over existing TLS HTTP/2,
+ *   including authenticated federation-VWS forwarding for imported routes.
+ *   Generic HTTP upgrade, CONNECT/RFC8441, L4 forwarding, trailers, and
  *   informational response forwarding are unsupported.
- * - Federated WebSocket routes are explicitly unsupported.
  * - Registration authorization via `tls.clientAuth.authorizeRegistration` is a
  *   registration-time mTLS hook only — not a complete per-request authentication
  *   or authorization gateway.

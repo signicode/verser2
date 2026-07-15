@@ -13,7 +13,8 @@ Also covers the package publishing runbook (version policy, staging, CI) and rep
   - `connecting.md` — Host creation, Guests (Node/Bun/Python), Broker connection
   - `exposing-http.md` — Node `http.Server`, Bun `fetch` handler, Python ASGI 3 attachment
   - `making-requests.md` — Broker.request(), Agent, Dispatcher, Fetch helper
-  - `websockets.md` — VWS/1 Node Broker/Guest and Python ASGI Guest usage
+  - `websockets.md` — VWS/1 Node, Bun, and Python Broker/Guest usage, topology,
+    federation, lifecycle, and limits
   - `routes.md` — Route registration, exact hostname matching, control frames, getRoutes/get_routes
   - `host-federation.md` — Host IDs, upstream Host links, route import/export, HA limits, topology, and non-goals
   - `certificates.md` — TLS config (PEM/PFX), mTLS client auth, cert reloading, self-signed

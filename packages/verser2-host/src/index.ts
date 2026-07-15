@@ -17,10 +17,14 @@
  * - `/verser/register` — peer registration (role `guest` or `broker`).
  * - `/verser/guest/control` — Guest control stream for coordination.
  * - `/verser/guest/lease` — Guest lease stream for request/response bodies.
+ * - `/verser/guest/websocket-lease` — dedicated VWS/1 Guest WebSocket lease.
  * - `/verser/request` — Broker request dispatch to target Guests.
+ * - `/verser/websocket` — Broker VWS/1 WebSocket dispatch.
  * - `/verser/host/federation` — Host-to-Host federation handshake.
  * - `/verser/host/federation/routes` — Host-to-Host federated route stream.
  * - `/verser/host/federation/request` — Host-to-Host federated request stream.
+ * - `/verser/host/federation/websocket` — versioned Host-to-Host federation-VWS
+ *   stream for imported WebSocket routes.
  *
  * ## TLS / Security
  *
@@ -44,8 +48,9 @@
  * ## Limitations
  *
  * - Route matching uses **exact** hostname equality — no wildcard/suffix matching.
- * - The Host does not implement WebSocket, HTTP upgrade, CONNECT tunneling,
- *   trailers, or informational (1xx) response forwarding.
+ * - The Host implements explicit VWS/1 WebSockets over TLS HTTP/2, including
+ *   authenticated federated VWS streams. It does not implement generic HTTP
+ *   upgrade, CONNECT tunneling, trailers, or informational (1xx) forwarding.
  * - Registration authorization is not a complete per-request authentication
  *   or authorization gateway.
  * - Only Node.js TLS HTTP/2 is supported (no HTTP/3, no browser, Rust, Go,

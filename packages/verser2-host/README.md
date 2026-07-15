@@ -95,13 +95,14 @@ await guest.close();
 
 ## VWS/1 WebSockets
 
-The Host admits explicit VWS/1 framed WebSocket streams from registered Node
-Brokers to Node or Python Guests over TLS HTTP/2. The Bun-facing Broker wrapper
-inherits the Node Broker's direct `webSocket()` API, while Python Broker does not
-initiate VWS/1 connections. The Host does not forward HTTP/1 upgrade bytes,
-CONNECT/RFC8441, or L4 traffic. Federated WebSocket routes are explicitly
-unsupported. Agent/Dispatcher upgrades and Bun `server.upgrade()` are outside
-this package's scope.
+The Host admits explicit VWS/1 framed WebSocket streams from registered Node,
+Bun-facing, or Python Brokers to Node, Bun, or Python Guests over TLS HTTP/2.
+Imported routes use the authenticated versioned federation-VWS stream hop by
+hop, with the normal route topology and hop/loop checks. Route advertisements
+remain neutral and do not preflight WebSocket capability. The Host does not
+forward HTTP/1 upgrade bytes, CONNECT/RFC8441, or L4 traffic. Agent/Dispatcher
+upgrades are unsupported; Bun `server.upgrade()` is implemented by the Bun Guest
+adapter, not by this Host package.
 
 ## Caveats
 

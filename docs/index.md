@@ -26,7 +26,7 @@ Three implemented roles work together:
 - [Making requests](./making-requests.md) — send requests through a Broker using
   `request()`, Agent, Dispatcher, or fetch.
 - [VWS/1 WebSockets](./websockets.md) — explicit framed WebSockets over TLS
-  HTTP/2 for Node and Python ASGI Guests.
+  HTTP/2 for Node, Bun, and Python ASGI Guests/Brokers, including federation.
 - [Routes](./routes.md) — route advertisement, exact hostname matching, and route
   state.
 - [Host federation and upstreams](./host-federation.md) — Host IDs, upstream
@@ -55,7 +55,8 @@ Three implemented roles work together:
 - HTTP/3 is roadmap work and is not implemented.
 - VWS/1 WebSockets use explicit framed messages over TLS HTTP/2; this is not
   generic HTTP/1 upgrade forwarding. CONNECT/RFC8441, L4 forwarding, and
-  federation WebSocket routes are unsupported.
+  generic upgrade forwarding is unsupported. VWS/1 federation is supported only
+  across Hosts that implement the authenticated federation-VWS endpoint.
 
 ## Terminology
 

@@ -114,18 +114,24 @@
 
 ## Phase 5: Documentation, Full Validation, and Review
 
-- [ ] Task: Document federated WebSocket behavior and compatibility
-    - [ ] Update public Node, Bun, and Python API documentation with standard runtime-facing examples and topology requirements.
-    - [ ] Document route-advertisement neutrality, explicit rejection versus no-response negotiation failure, multi-hop behavior, lifecycle closure, limits, and unsupported future runtimes.
-    - [ ] Update changelog, package READMEs, codemaps, and product/tech-stack documentation where public support status changes.
-    - [ ] Delegate documentation work to the configured documentation specialist after source behavior is final.
-    - [ ] Validate documentation claims against source and docs tests.
-- [ ] Task: Execute final validation and review
-    - [ ] Run targeted common, Host, Node, Bun, Python, federation, and WebSocket test suites; then run `npm run build`, `npm run lint`, and canonical `npm test`.
-    - [ ] Confirm 95% meaningful changed-behavior coverage, bounded-memory behavior, no leaked streams/leases, and direct HTTP/WebSocket regression safety.
-    - [ ] Delegate maintainability, security, lifecycle, and specification review to the configured review specialist.
-    - [ ] Resolve validated findings with focused tests and rerun affected validation.
-    - [ ] Post final validation results as a PR comment, mark the draft PR ready for review, and update the PR description if the implemented behavior requires clarification.
-- [ ] Task: Conductor - Phase Checkpoint 'Documentation, Full Validation, and Review' (Protocol in workflow.md)
-    - [ ] Confirm docs, tests, coverage, review findings, and PR state meet the track definition of done.
-    - [ ] Record the final deduplication result and validation summary, commit the completed checkpoint, push the branch, and record its SHA.
+- [x] Task: Document federated WebSocket behavior and compatibility
+    - [x] Update public Node, Bun, and Python API documentation with standard runtime-facing examples and topology requirements.
+    - [x] Document route-advertisement neutrality, explicit rejection versus no-response negotiation failure, multi-hop behavior, lifecycle closure, limits, and unsupported future runtimes.
+    - [x] Update changelog, package READMEs, and relevant codemaps; product and tech-stack documents were intentionally left unchanged by scope.
+    - [x] Delegate documentation work to the configured documentation specialist after source behavior is final.
+    - [x] Validate documentation claims against public exports and source behavior, and run the available documentation checks. Source/export review, `git diff --check`, Python documentation checks, and `node --test test/docs.test.js` (after updating stale expectations) all passed.
+- [x] Task: Execute final validation and review
+    - [x] Run targeted common, Host, Node, Bun, Python, federation, and WebSocket test suites; then run `npm run build`, `npm run lint`, and canonical `npm test`. Targeted bounded validation passed 238/238 tests; canonical `npm test` passed 408 tests with 4 expected skips; build and lint passed.
+    - [x] Confirm 95% meaningful changed-behavior coverage, bounded-memory behavior, no leaked streams/leases, and direct HTTP/WebSocket regression safety. Changed WebSocket behavior measured 99.30% line coverage and Python Broker WebSocket integration 96.66%; bounded runner, shutdown/reverse routing cleanup, direct HTTP, and WebSocket regressions passed.
+    - [x] Delegate maintainability, security, lifecycle, and specification review to the configured review specialist. Final Oracle review found and verified repairs for bidirectional federation stream ownership, atomic send-lease reservation, waiter cleanup, and deterministic federation negotiation errors.
+    - [x] Resolve validated findings with focused tests and rerun affected validation. Oracle federation stream ownership/error-contract repairs and concurrent bidirectional/reopen plus reverse Python Broker coverage passed.
+    - [x] Post final validation results as a PR comment, mark the draft PR ready for review, and update the PR description if the implemented behavior requires clarification. PR #52 is ready for review; its specification-based description remains accurate.
+- [x] Task: Conductor - Phase Checkpoint 'Documentation, Full Validation, and Review' (Protocol in workflow.md)
+    - [x] Confirm docs, tests, coverage, review findings, and PR state meet the track definition of done. The final Oracle review found no Critical or High findings; documentation, validation evidence, and PR state align with the specification.
+    - [x] Record the final deduplication result and validation summary, commit the completed checkpoint, push the branch, and record its SHA. Deduplication retains protocol-neutral VWS/federation framing in `@signicode/verser-common`, Host acquisition/relay mechanics in the Host, and runtime adapters in their own packages. Checkpoint commit: pending.
+
+### Phase 5 Validation Notes
+
+- Final bounded validation: 238 targeted tests passed; canonical `npm test` passed 408 tests with 4 expected skips; `npm run build`, `npm run lint`, and `git diff --check` passed.
+- Meaningful changed-behavior coverage: WebSocket 99.30% lines and Python Broker WebSocket integration 96.66% lines. The guarded runner enforced the 1 MiB per-test growth guard with bounded heap settings; shutdown, reverse-routing, stream, lease, and direct HTTP regressions passed.
+- Final Oracle review: no Critical or High findings remain. The accepted Python Broker size-accounting P2 is isolated for the required additive reconciliation phase; the proposed Host export removal was rejected as unrelated API hygiene.

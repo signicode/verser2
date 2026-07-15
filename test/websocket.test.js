@@ -951,6 +951,84 @@ test('Broker opens a WebSocket through an imported-only multi-hop route', async 
   }
 });
 
+test('Federated WebSocket opens both directions concurrently and can reopen', async () => {
+  const root = createHost({ port: 0, hostId: 'ws-bidir-root' });
+  const leaf = createHost({ port: 0, hostId: 'ws-bidir-leaf' });
+  await root.start();
+  await leaf.start();
+  const rootUrl = `https://127.0.0.1:${root.address.port}`;
+  const leafUrl = `https://127.0.0.1:${leaf.address.port}`;
+  const rootBroker = createBroker({ hostUrl: rootUrl, brokerId: 'ws-bidir-root-broker' });
+  const leafBroker = createBroker({ hostUrl: leafUrl, brokerId: 'ws-bidir-leaf-broker' });
+  const rootGuest = createGuest({ hostUrl: rootUrl, guestId: 'ws-bidir-root-guest' });
+  const leafGuest = createGuest({ hostUrl: leafUrl, guestId: 'ws-bidir-leaf-guest' });
+
+  const echo = (_open, ws) => {
+    ws.on('message', (data, options) => void ws.send(data, options));
+  };
+  try {
+    rootGuest.attachWebSocket(echo, 'ws-bidir-root.local.test');
+    leafGuest.attachWebSocket(echo, 'ws-bidir-leaf.local.test');
+    await rootBroker.connect();
+    await leafBroker.connect();
+    await leaf.connectUpstream({
+      upstreamId: 'root',
+      url: rootUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await rootGuest.connect();
+    await leafGuest.connect();
+    await rootBroker.waitForRoute('ws-bidir-leaf.local.test');
+    await leafBroker.waitForRoute('ws-bidir-root.local.test');
+
+    const opens = await Promise.all([
+      rootBroker.webSocket({
+        targetId: 'ws-bidir-leaf-guest',
+        domain: 'ws-bidir-leaf.local.test',
+        protocol: 'vws.base64',
+      }),
+      leafBroker.webSocket({
+        targetId: 'ws-bidir-root-guest',
+        domain: 'ws-bidir-root.local.test',
+        protocol: 'vws.base64',
+      }),
+    ]);
+    assert.deepEqual(
+      opens.map((ws) => ws.protocol),
+      ['vws.base64', 'vws.base64'],
+    );
+    for (const [index, ws] of opens.entries()) {
+      const text = new Promise((resolve) => ws.once('message', resolve));
+      await ws.send(`bidir-text-${index}`, { type: 'text' });
+      assert.equal(await text, `bidir-text-${index}`);
+      const binary = new Promise((resolve) => ws.once('message', resolve));
+      await ws.send(Buffer.from([0, 255, index]), { type: 'binary' });
+      assert.deepEqual(await binary, Buffer.from([0, 255, index]));
+      ws.close(1000, 'bidir-done');
+      await new Promise((resolve) => ws.once('close', resolve));
+    }
+
+    const reopened = await Promise.all([
+      rootBroker.webSocket({
+        targetId: 'ws-bidir-leaf-guest',
+        domain: 'ws-bidir-leaf.local.test',
+      }),
+      leafBroker.webSocket({
+        targetId: 'ws-bidir-root-guest',
+        domain: 'ws-bidir-root.local.test',
+      }),
+    ]);
+    for (const ws of reopened) ws.close();
+  } finally {
+    await rootBroker.close('test-complete');
+    await leafBroker.close('test-complete');
+    await rootGuest.close('test-complete');
+    await leafGuest.close('test-complete');
+    await leaf.close('test-complete');
+    await root.close('test-complete');
+  }
+});
+
 test('Established federated WebSocket closes abnormally when the selected Host is lost', async () => {
   const host = createHost({ port: 0, hostId: 'ws-loss-root' });
   const remoteHost = createHost({ port: 0, hostId: 'ws-loss-leaf' });

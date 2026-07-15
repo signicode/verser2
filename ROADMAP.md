@@ -37,10 +37,10 @@ Future gateway-oriented tracks, in priority order:
 - P2.1: HTTP/3/QUIC transport remains future work. Current remote
   Host/Guest/Broker transport uses TLS HTTP/2.
 - P2.2: Generic WebSocket/HTTP upgrade forwarding remains unsupported, including
-  CONNECT/RFC8441 and L4 forwarding. VWS/1 explicit framed WebSockets over the
-  existing TLS HTTP/2 transport are implemented for Node Broker/Guest and Python
-  ASGI Guest; Bun Guest `server.upgrade()` and federated WebSocket routes remain
-  unsupported.
+   CONNECT/RFC8441 and L4 forwarding. VWS/1 explicit framed WebSockets over the
+  existing TLS HTTP/2 transport are implemented for Node and Bun Broker/Guest
+  surfaces plus Python Broker/ASGI Guest surfaces, including authenticated
+  federated VWS/1 routes.
 ## Priority 3
 
 ### Runtime expansion

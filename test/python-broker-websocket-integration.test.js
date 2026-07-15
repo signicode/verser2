@@ -38,13 +38,13 @@ function waitForReady(child, label) {
   });
 }
 
-function runPythonBroker(hostUrl, domains) {
+function runPythonBroker(hostUrl, domains, brokerId = 'python-ws-integration') {
   const code = `
 import asyncio, json, os
 from verser2_guest_python import VerserWebSocketError, create_verser_broker
 
 async def main():
-    async with create_verser_broker(host_url=os.environ["HOST_URL"], broker_id="python-ws-integration", tls_ca_file=os.environ["CA_FILE"]) as broker:
+    async with create_verser_broker(host_url=os.environ["HOST_URL"], broker_id=os.environ["BROKER_ID"], tls_ca_file=os.environ["CA_FILE"]) as broker:
         results = []
         for domain in os.environ["DOMAINS"].split(","):
             await broker.wait_for_route(domain)
@@ -81,6 +81,7 @@ asyncio.run(main())
         PYTHONPATH: pythonSource,
         HOST_URL: hostUrl,
         CA_FILE: trusted.certificatePath,
+        BROKER_ID: brokerId,
         DOMAINS: domains.join(','),
         UNAVAILABLE_DOMAIN: 'python-ws-unavailable.local',
       },
@@ -294,6 +295,24 @@ asyncio.run(main())
       assert.equal(results[domains.length + 1][1], 'missing-guest');
       assert.equal(results[domains.length + 1][2].domain, 'python-ws-unavailable.local');
       assert.deepEqual(results[domains.length + 2], ['cleanup', true]);
+      const reverseTargets = targets.filter(
+        (target) =>
+          target.domain.startsWith('python-ws-node-0') ||
+          target.domain.startsWith('python-ws-bun-0') ||
+          target.domain.startsWith('python-ws-python-0'),
+      );
+      const reverseResults = await runPythonBroker(
+        leafUrl,
+        reverseTargets.map((target) => target.domain),
+        'python-ws-reverse-broker',
+      );
+      assert.deepEqual(
+        reverseResults.slice(0, reverseTargets.length).map((item) => item[0]),
+        reverseTargets.map((target) => target.domain),
+      );
+      assert.ok(
+        reverseResults.slice(0, reverseTargets.length).every((item) => item[1] === 'python.v1'),
+      );
     } finally {
       await Promise.all(pythonGuests.map((guest) => terminateChildProcess(guest)));
       await Promise.all(nodeGuests.map((guest) => guest.close('test-complete')));

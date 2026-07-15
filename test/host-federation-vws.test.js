@@ -69,7 +69,7 @@ test('Federation VWS preserves structured error codes and maps endpoint rejectio
   );
   for (const [statusCode, expected] of [
     [403, 'authorization-denied'],
-    [404, 'protocol-error'],
+    [404, 'websocket-negotiation-failed'],
   ]) {
     const session = {
       request() {

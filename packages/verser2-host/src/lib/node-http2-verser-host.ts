@@ -397,6 +397,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.stopDegradedRouteCleanupTimer();
     const server = this.server;
     this.server = undefined;
+    this.failAllFederationVwsPoolWaiters(`Host closing: ${reason}`);
 
     for (const link of [...this.upstreamLinks.values()]) {
       await this.closeUpstreamLink(link, reason);
@@ -1299,15 +1300,8 @@ export class NodeHttp2VerserHost implements VerserHost {
       link.vwsBusy = false;
       void this.handleFederationVwsPeerStream(stream, link.remoteHostId);
       stream.once('close', () => void this.replenishUpstreamVwsStream(upstreamId, stream));
-      this.resolveFederationVwsWaiters(link.remoteHostId);
     } catch (error) {
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
-      this.resolveFederationVwsWaiters(
-        link.remoteHostId,
-        createVerserError('websocket-negotiation-failed', 'Federation VWS replenishment failed', {
-          upstreamId,
-        }),
-      );
     }
   }
 
@@ -1328,16 +1322,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       link.vwsBusy = false;
       void this.handleFederationVwsPeerStream(stream, link.remoteHostId);
       stream.once('close', () => void this.replenishUpstreamVwsStream(link.upstreamId, stream));
-      this.resolveFederationVwsWaiters(link.remoteHostId);
     } catch {
       // VWS is an optional capability. Keep the authenticated HTTP federation
       // link alive; a later WebSocket open reports deterministic negotiation failure.
-      this.resolveFederationVwsWaiters(
-        link.remoteHostId,
-        createVerserError('websocket-negotiation-failed', 'Federation VWS capability unavailable', {
-          upstreamId: link.upstreamId,
-        }),
-      );
     }
   }
 
@@ -1406,6 +1393,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     this.inboundFederationHosts.delete(hostId);
     this.failFederatedRequestStreamWaiters(hostId, 'Federated Host disconnected');
+    this.failFederationVwsWaiters(hostId, 'Federated Host disconnected');
     this.removeImportedFederatedRoutes(hostId);
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.disconnected, peerId: hostId });
   }
@@ -2422,21 +2410,36 @@ export class NodeHttp2VerserHost implements VerserHost {
           destination = leases.shift() as http2.ServerHttp2Stream;
           if (leases.length === 0) this.wsIdleLeases.delete(candidate.targetId);
         } else {
-          const pooledResult = await this.waitForFederationVwsPool(
-            candidate.nextHopHostId,
-            5000,
-            signal,
-          );
-          const { pooled, inbound, upstream } = pooledResult;
-          if (inbound !== undefined && inbound.vwsStream === pooled) {
-            this.inboundFederationHosts.set(candidate.nextHopHostId, {
-              ...inbound,
-              vwsBusy: true,
-            });
-          } else if (upstream !== undefined) {
-            upstream.vwsBusy = true;
+          const inbound = this.inboundFederationHosts.get(candidate.nextHopHostId);
+          if (inbound !== undefined) {
+            const reserved = await this.waitForFederationVwsPool(
+              candidate.nextHopHostId,
+              5000,
+              signal,
+            );
+            destination = reserved.pooled;
+          } else {
+            const upstream = [...this.upstreamLinks.values()].find(
+              (link) =>
+                link.remoteHostId === candidate.nextHopHostId &&
+                !link.closing &&
+                !link.session.closed &&
+                !link.session.destroyed,
+            );
+            if (upstream === undefined) {
+              throw createVerserError(
+                'websocket-negotiation-failed',
+                'Federation VWS next hop is unavailable',
+                { nextHopHostId: candidate.nextHopHostId },
+              );
+            }
+            destination = await federation.openUpstreamFederationVwsStream(
+              upstream.session,
+              upstream.upstreamId,
+              this.getFederationHostId(),
+              'open',
+            );
           }
-          destination = pooled;
         }
 
         const forwardedOpen =
@@ -2582,26 +2585,19 @@ export class NodeHttp2VerserHost implements VerserHost {
     timeoutMs = 5000,
     signal?: AbortSignal,
   ): Promise<{
-    readonly pooled: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
-    readonly inbound?: InboundFederationLink;
-    readonly upstream?: UpstreamLink;
+    readonly pooled: http2.ServerHttp2Stream;
   }> {
     const available = ():
       | {
-          readonly pooled: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
-          readonly inbound?: InboundFederationLink;
-          readonly upstream?: UpstreamLink;
+          readonly pooled: http2.ServerHttp2Stream;
         }
       | undefined => {
       const inbound = this.inboundFederationHosts.get(hostId);
-      const upstream = [...this.upstreamLinks.values()].find(
-        (link) => link.remoteHostId === hostId && !link.closing,
-      );
-      const pooled = inbound?.vwsStream ?? upstream?.vwsStream;
-      const busy =
-        inbound !== undefined && inbound.vwsStream === pooled ? inbound.vwsBusy : upstream?.vwsBusy;
-      if (pooled !== undefined && !pooled.closed && !pooled.destroyed && !busy) {
-        return { pooled, inbound, upstream };
+      if (inbound === undefined) return undefined;
+      const pooled = inbound?.vwsStream;
+      if (pooled !== undefined && !pooled.closed && !pooled.destroyed && !inbound.vwsBusy) {
+        this.inboundFederationHosts.set(hostId, { ...inbound, vwsBusy: true });
+        return { pooled };
       }
       return undefined;
     };
@@ -2682,6 +2678,29 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (waiters.length === 0) this.federatedVwsPoolWaiters.delete(hostId);
     else this.federatedVwsPoolWaiters.set(hostId, waiters);
     waiter?.resolve(error);
+  }
+
+  private failFederationVwsWaiters(hostId: string, message: string): void {
+    const waiters = this.federatedVwsPoolWaiters.get(hostId) ?? [];
+    this.federatedVwsPoolWaiters.delete(hostId);
+    const error = createVerserError('upstream-unavailable', message, { hostId });
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout);
+      waiter.signal?.removeEventListener('abort', waiter.onAbort ?? (() => undefined));
+      waiter.reject(error);
+    }
+  }
+
+  private failAllFederationVwsPoolWaiters(message: string): void {
+    const error = createVerserError('upstream-unavailable', message);
+    for (const [hostId, waiters] of this.federatedVwsPoolWaiters) {
+      this.federatedVwsPoolWaiters.delete(hostId);
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timeout);
+        waiter.signal?.removeEventListener('abort', waiter.onAbort ?? (() => undefined));
+        waiter.reject(error);
+      }
+    }
   }
 
   private async readFederatedVwsNegotiationWithCancellation(

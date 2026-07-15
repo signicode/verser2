@@ -9,7 +9,8 @@ TLS HTTP/2 server implementation of the Verser Host — accepts outbound connect
 - **Node `http2.createSecureServer`** — the Host is a secure HTTP/2 server only. No HTTP/1, no plaintext, no HTTP/3. Connections are outbound-initiated (peers connect *to* the Host).
 - **Protocol paths** — `/verser/register`, `/verser/guest/control`,
   `/verser/guest/lease`, dedicated `/verser/guest/websocket-lease` VWS/1 leases,
-  `/verser/request`, `/verser/websocket`, and Host federation paths. Any other
+  `/verser/request`, `/verser/websocket`, and Host federation paths including
+  `/verser/host/federation/websocket` for versioned federation-VWS. Any other
   path is rejected.
 - **Lease stream pool** — each Guest establishes one or more lease streams. The Host acquires an idle lease for each incoming Broker request. If none is available, the request is queued with a configurable timeout. Lease acquisition uses `parseLeaseAcquireTimeoutMs` (default 5000 ms).
 - **Peer session tracking** — `Map<peerId, RegisteredPeer>` tracks all connected peers. Duplicate peer IDs rejected at registration. Sessions tracked in a `Set` for lifecycle cleanup on disconnect.
@@ -35,5 +36,6 @@ TLS HTTP/2 server implementation of the Verser Host — accepts outbound connect
 - **Consumed by**: Applications that create a Host via `createVerserHost(options)`. The `VerserHost` interface is the public API surface.
 - **Internal modules**: `node-http2-verser-host.ts` (orchestration), `lease-pool.ts` (Guest lease stream pool management), `degraded-route-cleanup.ts` (degraded route expiration timer), `broker-routing.ts` (Broker request dispatch, lease routing, federated fallback), `federation.ts` (federation handshake, route frames, lifecycle forwarding, upstream/inbound stream helpers), `local-peers.ts` (local Guest/Broker route, stream, request, and waiter helpers), `http2-io.ts` (stream write helpers), `types.ts` (options + interface types), `utils.ts` (error wrapping), `constants.ts` (package name).
 - **Not provided**: Authentication, authorization, rate limiting, logging, metrics,
-  generic upgrade/tunneling, or federated WebSocket support. VWS/1 is explicit
-  framed WebSocket over the existing TLS HTTP/2 transport.
+  generic upgrade/tunneling, or Python Host behavior. Federated WebSockets use
+  the dedicated authenticated federation-VWS path; generic upgrades remain
+  unsupported. VWS/1 is explicit framed WebSocket over TLS HTTP/2.

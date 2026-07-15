@@ -39,7 +39,7 @@ guest.attach(server);  // routes match guestId 'client-a'
 **Handler differences:** Local handlers receive minimal HTTP/1-style request and
 response objects. The following are outside the supported surface:
 
-- HTTP upgrade / WebSocket forwarding
+- Generic HTTP upgrade / WebSocket forwarding (VWS/1 is documented below)
 - CONNECT tunneling
 - Trailers and informational (1xx) responses
 - Full `IncomingMessage` / `ServerResponse` socket internals
@@ -65,8 +65,9 @@ ws.on('message', (data, options) => console.log(options.type, data));
 `send()` returns a promise and applies transport backpressure. Text and binary
 message boundaries are preserved; `ping()` is automatically answered with a
 `pong`. Abnormal transport loss is local close code `1006`. Agent/Dispatcher
-upgrades, generic CONNECT/RFC8441, L4 forwarding, and federated WebSocket routes
-are unsupported.
+upgrades, generic CONNECT/RFC8441, and L4 forwarding are unsupported. Federated
+VWS/1 routes are supported through authenticated Host links; see
+[Host federation](./host-federation.md).
 
 ### Local Host-side Node Guest
 
@@ -140,8 +141,9 @@ bunGuest.attach({
 });
 ```
 
-**WebSocket limitation:** `server.upgrade(request)` returns `false` — Bun
-WebSocket support is deferred and no upgrade is forwarded.
+**WebSocket boundary:** `server.upgrade(request)` claims the explicit VWS/1
+lease and invokes the Bun `websocket` callbacks. It does not forward a generic
+HTTP/1 upgrade or open a listening Bun server.
 
 ## Python Guest
 

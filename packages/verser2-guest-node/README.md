@@ -17,6 +17,8 @@ over TLS HTTP/2 and provides request routing without opening inbound ports.
 - Constant: `VERSER2_GUEST_NODE_PACKAGE_NAME`
 - `VerserWebSocket` — VWS/1 WebSocket object; `webSocket()` and
   `attachWebSocket()` provide the direct Broker/Guest APIs.
+- `NativeVerserWebSocket` — EventTarget-style adapter from
+  `broker.nativeWebSocket()` / `guest.attachNativeWebSocket()`.
 
 ## Basic usage
 
@@ -71,7 +73,9 @@ await ws.send('hello', { type: 'text' });
 
 `send()` observes backpressure. This is not generic HTTP/1 upgrade forwarding;
 Agent/Dispatcher upgrades, CONNECT/RFC8441, L4 forwarding, and federated
-WebSocket routes are unsupported.
+WebSocket routes use the authenticated versioned federation-VWS stream and are
+supported when every Host hop provides that endpoint. Route advertisements stay
+neutral: the Broker does not preflight WebSocket capability.
 
 ## Broker routing
 
@@ -136,7 +140,8 @@ The Host responds with `ack` (all revoked), `partial` (some failed), or `error`
 - Minimal HTTP objects do not implement the full Node `IncomingMessage` /
   `ServerResponse` / socket surface.
 - Generic WebSocket upgrade, CONNECT/RFC8441, trailers, and informational
-  responses are not forwarded. VWS/1 is the only supported WebSocket surface.
+  responses are not forwarded. VWS/1 is the only supported WebSocket surface;
+  Agent and Dispatcher upgrade requests remain unsupported.
 - Agent keep-alive pooling, HTTPS Agent behavior, and advanced socket features
   are not implemented.
 

@@ -311,7 +311,7 @@ export async function openUpstreamFederationVwsStream(
   if (statusCode < 200 || statusCode >= 300) {
     stream.close(http2.constants.NGHTTP2_CANCEL);
     throw createVerserError(
-      statusCode === 403 ? 'authorization-denied' : 'protocol-error',
+      statusCode === 403 ? 'authorization-denied' : 'websocket-negotiation-failed',
       'Upstream federation VWS stream rejected',
       {
         upstreamId,

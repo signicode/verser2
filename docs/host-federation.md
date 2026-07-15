@@ -8,8 +8,10 @@ Host link.
 This is route-aware Host-to-Host federation. It is not generic L4 tunneling or
 HTTP/2 CONNECT tunneling.
 
-VWS/1 WebSocket routes are not federated. An attempted federated WebSocket open
-fails with `Federated WebSocket routes are not supported`.
+VWS/1 WebSocket routes use a dedicated authenticated, versioned federation
+stream. They follow the same imported route topology as HTTP, but do not change
+the route advertisement shape or add a WebSocket capability preflight. These are
+federated WebSocket routes, not generic HTTP upgrade tunnels.
 
 ## Concepts
 
@@ -257,6 +259,11 @@ policy still belongs in the callback.
 ## Failure modes and limits
 
 - `upstream-unavailable` — no usable federated request stream is available.
+- `missing-guest` — the selected endpoint explicitly rejects an unavailable
+  WebSocket open (normally HTTP 404); this is distinct from a peer that never
+  returns a VWS accept/error.
+- `websocket-negotiation-failed` — the federation-VWS endpoint is unavailable,
+  mixed-version, reset, or otherwise provides no valid negotiation response.
 - `route-loop` — an imported route would revisit a Host or exceed the hop limit.
 - `authorization-denied` — upstream federation authorization rejected a link.
 - `unsafe-retry` — reserved for retry policy failures; non-replayable active
@@ -268,7 +275,8 @@ Current limits:
   durable route registry, or exactly-once delivery.
 - Automatic reconnect policy is not yet configurable. Applications can observe
   `getUpstreams()`/lifecycle events and reconnect at their boundary.
-- Host federation is implemented for the Node Host package only.
-- HTTP/3, browser/Rust/Go/Java/Python Host behavior, WebSocket/upgrade
-  forwarding, trailers, informational responses, generic L4 tunneling, and
-  HTTP/2 CONNECT tunneling are not implemented.
+- Host federation is implemented for the Node Host package only; Python Host is
+  not implemented.
+- HTTP/3, browser/Rust/Go/Java runtimes, generic upgrade forwarding, trailers,
+  informational responses, generic L4 tunneling, and HTTP/2 CONNECT tunneling
+  are not implemented. VWS/1 federation requires support at every Host hop.

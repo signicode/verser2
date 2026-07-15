@@ -1,3 +1,3 @@
 # Deferred Findings
 
-- [ ] P2: Host federation-VWS helpers are exported through the public package entrypoint although their module is internal; decide whether to keep an internal test seam or document a supported public API. (scope: phase; owner: implementation; verification: focused Host federation-VWS tests and public API review)
+- [ ] P2: Python Broker reserves six times UTF-8 payload size before VWS/1 serialization, rejecting valid text/ping/pong frames below the documented 1 MiB encoded-frame limit; use exact serialized-size admission and reservation accounting. (scope: track; owner: implementation; verification: focused Python Broker WebSocket size-boundary tests)
