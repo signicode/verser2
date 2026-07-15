@@ -1,6 +1,6 @@
 {
   "name": "@signicode/verser2-host",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "TLS HTTP/2 Host for routing Broker requests to outbound Verser2 Guests.",
   "license": "MIT",
@@ -24,7 +24,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@signicode/verser-common": "0.5.0"
+    "@signicode/verser-common": "0.6.0"
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
