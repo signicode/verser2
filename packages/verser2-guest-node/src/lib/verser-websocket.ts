@@ -37,6 +37,8 @@ const MAX_INBOUND_MESSAGES = 64;
 const MAX_INBOUND_BYTES = VWS_MAX_FRAME_BYTES;
 const MAX_PRE_ACCEPT_MESSAGES = 64;
 const MAX_PRE_ACCEPT_BYTES = VWS_MAX_FRAME_BYTES;
+const MAX_OUTBOUND_MESSAGES = 64;
+const MAX_OUTBOUND_BYTES = VWS_MAX_FRAME_BYTES;
 const VWS_CLOSE_TIMEOUT_MS = 1_000;
 
 /**
@@ -65,7 +67,7 @@ export class VerserWebSocket extends EventEmitter {
 
   /** True after the handshake accept frame has been sent. */
   private accepted = false;
-
+  private acceptWritten = false;
   /**
    * Queue of pre-accept send promises, keyed by JSON string.
    * Flushed (resolved) in order after accept is sent.
@@ -77,6 +79,14 @@ export class VerserWebSocket extends EventEmitter {
     reject: (error: Error) => void;
   }> = [];
   private sendQueueBytes = 0;
+  private outboundQueue: Array<{
+    json: string;
+    bytes: number;
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }> = [];
+  private outboundQueueBytes = 0;
+  private writingOutbound = false;
   private inboundQueue: Array<{
     data: string | Buffer;
     options: VerserWebSocketSendOptions;
@@ -102,6 +112,8 @@ export class VerserWebSocket extends EventEmitter {
     super();
     this.protocol = protocol;
     this.accepted = alreadyAccepted;
+    this.acceptWritten = alreadyAccepted;
+    void this.sendAccept;
 
     // Default error handler prevents process crash when remote sends
     // malformed/oversized frames and no ws.on('error') listener is attached.
@@ -165,6 +177,7 @@ export class VerserWebSocket extends EventEmitter {
       }
       if (!this.destroyed) {
         this.destroyed = true;
+        this.failOutboundQueue(new Error('WebSocket closed'));
         // Drain pre-accept queue on premature end
         if (!this.accepted) {
           this.drainSendQueue(false);
@@ -176,6 +189,7 @@ export class VerserWebSocket extends EventEmitter {
       if (this.closeTimer !== undefined) clearTimeout(this.closeTimer);
       if (!this.destroyed) {
         this.destroyed = true;
+        this.failOutboundQueue(new Error('WebSocket closed'));
         if (!this.accepted) this.drainSendQueue(false);
         this.emit('close', 1006, '');
       }
@@ -252,7 +266,25 @@ export class VerserWebSocket extends EventEmitter {
       });
     }
 
-    return this.writeLine(json);
+    const bytes = Buffer.byteLength(json, 'utf8') + 1;
+    if (
+      this.outboundQueue.length >= MAX_OUTBOUND_MESSAGES ||
+      this.outboundQueueBytes + bytes > MAX_OUTBOUND_BYTES
+    ) {
+      const error = new Error('VWS outbound send queue exceeded');
+      this.handleProtocolFault(error, 1009, 'message queue too large');
+      return Promise.reject(error);
+    }
+    return new Promise<void>((resolve, reject) => {
+      this.outboundQueue.push({ json, bytes, resolve, reject });
+      this.outboundQueueBytes += bytes;
+      if (this.acceptWritten) void this.pumpOutboundQueue();
+    });
+  }
+
+  /** Bytes queued or currently being drained by the underlying transport. */
+  public getBufferedAmount(): number {
+    return this.outboundQueueBytes;
   }
 
   /** Sends a VWS ping. The peer automatically responds with a pong. */
@@ -264,6 +296,11 @@ export class VerserWebSocket extends EventEmitter {
       return Promise.reject(error);
     }
     return this.writeLine(JSON.stringify({ type: 'ping', data: String(data) }));
+  }
+
+  public pong(data = ''): Promise<void> {
+    if (this.closeSent || this.destroyed) return Promise.resolve();
+    return this.writeLine(JSON.stringify({ type: 'pong', data }));
   }
 
   /**
@@ -280,6 +317,7 @@ export class VerserWebSocket extends EventEmitter {
     }
     validateClose(code, reason);
     this.closeSent = true;
+    this.failOutboundQueue(new Error('WebSocket is closing'));
     // Discard any pre-accept queued sends — data frames must not arrive
     // after close and should not appear before accept.
     if (!this.accepted) {
@@ -289,11 +327,22 @@ export class VerserWebSocket extends EventEmitter {
     this.closeTimer = setTimeout(() => {
       if (this.destroyed) return;
       this.destroyed = true;
+      this.failOutboundQueue(new Error('WebSocket close timed out'));
       this.endStream();
       const stream = this.stream as unknown as { destroy?: (error?: Error) => void };
       stream.destroy?.(new Error('VWS close handshake timed out'));
       this.emit('close', 1006, 'close handshake timeout');
     }, VWS_CLOSE_TIMEOUT_MS);
+  }
+
+  /** Aborts the transport without sending an invalid wire close code. */
+  public terminate(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.failOutboundQueue(new Error('WebSocket terminated'));
+    const stream = this.stream as unknown as { destroy?: () => void };
+    stream.destroy?.();
+    this.emit('close', 1006, 'terminated');
   }
 
   /**
@@ -306,7 +355,7 @@ export class VerserWebSocket extends EventEmitter {
    *
    * @internal
    */
-  public sendAccept(protocol?: string): void {
+  private sendAccept(protocol?: string): void {
     if (this.destroyed) {
       // Discard pre-accept queue on rejection/teardown
       this.drainSendQueue(false);
@@ -317,8 +366,9 @@ export class VerserWebSocket extends EventEmitter {
     // Write accept frame first
     void this.writeLine(JSON.stringify({ type: 'accept', protocol: this.protocol }))
       .then(() => {
+        this.acceptWritten = true;
         // Flush queued pre-accept sends in order
-        this.drainSendQueue(true);
+        void this.drainSendQueue(true).then(() => this.pumpOutboundQueue());
       })
       .catch(() => undefined);
   }
@@ -328,7 +378,7 @@ export class VerserWebSocket extends EventEmitter {
    * message is written to the stream in FIFO order. When false, the queue
    * is discarded (e.g. on rejection).
    */
-  private drainSendQueue(flush: boolean): void {
+  private async drainSendQueue(flush: boolean): Promise<void> {
     const queue = this.sendQueue;
     this.sendQueue = [];
     this.sendQueueBytes = 0;
@@ -346,10 +396,41 @@ export class VerserWebSocket extends EventEmitter {
             pending.reject(error instanceof Error ? error : new Error(String(error)));
         }
       };
-      void flushNext(0);
+      await flushNext(0);
     } else {
       for (const entry of queue) entry.reject(new Error('WebSocket closed before accept'));
     }
+  }
+
+  private async pumpOutboundQueue(): Promise<void> {
+    if (this.writingOutbound) return;
+    this.writingOutbound = true;
+    try {
+      while (!this.destroyed && this.outboundQueue.length > 0) {
+        const entry = this.outboundQueue.shift() as (typeof this.outboundQueue)[number];
+        try {
+          await this.writeLine(entry.json);
+          this.outboundQueueBytes = Math.max(0, this.outboundQueueBytes - entry.bytes);
+          entry.resolve();
+        } catch (error) {
+          this.outboundQueueBytes = Math.max(0, this.outboundQueueBytes - entry.bytes);
+          const failure = error instanceof Error ? error : new Error(String(error));
+          entry.reject(failure);
+          for (const pending of this.outboundQueue) pending.reject(failure);
+          this.outboundQueue = [];
+          this.outboundQueueBytes = 0;
+          break;
+        }
+      }
+    } finally {
+      this.writingOutbound = false;
+    }
+  }
+
+  private failOutboundQueue(error: Error): void {
+    for (const entry of this.outboundQueue) entry.reject(error);
+    this.outboundQueue = [];
+    this.outboundQueueBytes = 0;
   }
 
   /**
@@ -558,6 +639,11 @@ export class VerserWebSocket extends EventEmitter {
       }
     }
   }
+}
+
+/** Internal adapter hook, deliberately omitted from the package barrel. */
+export function acceptVerserWebSocket(ws: VerserWebSocket, protocol?: string): void {
+  (ws as unknown as { sendAccept(protocol?: string): void }).sendAccept(protocol);
 }
 
 function validateClose(code: number, reason: string): void {

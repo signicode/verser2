@@ -52,7 +52,10 @@ test('task docs document Bun Guest usage and non-listen behavior', () => {
   assert.doesNotMatch(exposingDocs, /dispatchVerserBunRequest/);
   assert.match(exposingDocs, /routes\s*:/);
   assert.match(exposingDocs, /WebSocket/i);
-  assert.match(exposingDocs, /server\.upgrade\(request\)[\s\S]*`false`/i);
+  assert.match(exposingDocs, /claims the explicit VWS\/1[\s\S]*lease/i);
+  assert.match(exposingDocs, /invokes the Bun[\s\S]*websocket[\s\S]*callbacks/i);
+  assert.match(exposingDocs, /does not forward a generic[\s\S]*HTTP\/1 upgrade/i);
+  assert.match(exposingDocs, /open a listening Bun server/i);
   assert.match(exposingDocs, /never needs\s+to call/i);
   assert.match(exposingDocs, /listen\(\)/);
 });
@@ -171,10 +174,8 @@ test('Bun package README documents handler and entrypoint semantics', () => {
   assert.match(bunReadme, /does \*\*not\*\* call/i);
   assert.match(bunReadme, /`Bun\.serve\(\)`/);
   assert.match(bunReadme, /`listen\(\)`/);
-  assert.match(
-    bunReadme,
-    /upgrade forwarding is \*\*not\*\* implemented|server\.upgrade\(request\)[\s\S]*returns `false`/i,
-  );
+  assert.match(bunReadme, /upgrade forwarding is \*\*not\*\* implemented/i);
+  assert.match(bunReadme, /server\.upgrade\(\)[\s\S]*VWS\/1 adapter/i);
 });
 
 test('VWS/1 documentation names supported APIs and preserves boundaries', () => {
@@ -211,6 +212,8 @@ test('VWS/1 documentation names supported APIs and preserves boundaries', () => 
     path.join(rootDirectory, 'packages/verser2-guest-bun/README.md'),
     'utf8',
   );
+  const indexDocs = fs.readFileSync(path.join(rootDirectory, 'docs/index.md'), 'utf8');
+  const roadmap = fs.readFileSync(path.join(rootDirectory, 'ROADMAP.md'), 'utf8');
 
   for (const content of [readme, exposing, nodeReadme, pythonReadme]) {
     assert.match(content, /VWS\/1/);
@@ -220,17 +223,20 @@ test('VWS/1 documentation names supported APIs and preserves boundaries', () => 
   assert.match(exposing, /broker\.webSocket/);
   assert.match(pythonReadme, /ASGI websocket/);
   assert.match(making, /Dispatcher rejects upgrade/);
-  assert.match(exposing, /server\.upgrade\(request\)[\s\S]*`false`/i);
+  assert.match(exposing, /claims the explicit VWS\/1[\s\S]*lease/i);
+  assert.match(exposing, /invokes the Bun[\s\S]*websocket[\s\S]*callbacks/i);
+  assert.match(exposing, /does not forward a generic[\s\S]*HTTP\/1 upgrade/i);
+  assert.match(exposing, /open a listening Bun server/i);
   assert.match(
     federation,
     /Federated WebSocket routes are not federated|federated WebSocket routes/i,
   );
   assert.match(hostTypes, /VWS\/1 framed WebSockets/);
-  assert.match(hostReadme, /Node or[\s\S]*Python/);
+  assert.match(hostReadme, /Node[\s\S]*Bun-facing[\s\S]*Python[\s\S]*Brokers[\s\S]*Guests/);
   assert.match(hostCodemap, /guest\/websocket-lease/);
   assert.match(hostCodemap, /\/verser\/websocket/);
   assert.match(pythonCodemap, /test_websocket_asgi\.py/);
-  assert.match(bunReadme, /Node direct VWS\/1/);
+  assert.match(bunReadme, /explicit VWS\/1 frames[\s\S]*authenticated multi-Host federation/);
   assert.match(nodeReadme, /VerserWebSocket/);
   assert.match(pythonReadme, /VwsAsgiConnection/);
   assert.match(readme, /CONNECT\/RFC8441/);
@@ -242,5 +248,21 @@ test('VWS/1 documentation names supported APIs and preserves boundaries', () => 
   assert.match(websocketDocs, /websocket\.accept/);
   assert.match(websocketDocs, /encoded VWS\/1 frame is[\s\S]*1 MiB/);
   assert.match(websocketDocs, /binary messages are base64 encoded[\s\S]*lower/);
-  assert.match(websocketDocs, /Federated WebSocket routes are explicitly unsupported/);
+  assert.match(websocketDocs, /authenticated\s+federation-VWS version 1/);
+  assert.match(websocketDocs, /hop by hop to the exact.*\(targetId,\s*domain\)/);
+  assert.match(websocketDocs, /Failover is permitted only before acceptance/);
+
+  // Python Broker VWS client API is documented, not said to be absent
+  assert.match(websocketDocs, /await broker\.websocket\(/);
+  assert.doesNotMatch(websocketDocs, /Python.*(?:Broker|lacks?|does not have|missing).*VWS/i);
+
+  // ROADMAP does not say Bun server.upgrade() or federated WebSocket routes are unsupported
+  assert.doesNotMatch(roadmap, /Bun.*server\.upgrade.*unsupported/i);
+  assert.doesNotMatch(roadmap, /federated WebSocket.*unsupported/i);
+
+  // Host docs mention VWS paths and federation behavior, not a blanket "no WebSockets"
+  assert.match(hostReadme, /VWS\/1 framed WebSocket/);
+  assert.match(hostReadme, /federation-VWS/);
+  assert.doesNotMatch(hostReadme, /Host does not implement WebSocket/i);
+  assert.doesNotMatch(indexDocs, /Host does not implement WebSocket/i);
 });

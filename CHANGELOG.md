@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - Federated VWS/1 WebSockets
+
+- Documents Node, Bun, and Python runtime-facing WebSocket APIs over explicit
+  VWS/1 frames, including authenticated multi-Host federation.
+- Clarifies protocol-neutral route advertisements, pre-accept failover,
+  lifecycle closure, bounded flow control, frame limits, and the distinct
+  `missing-guest` versus `websocket-negotiation-failed` outcomes.
+- Records unsupported generic upgrades, Python Host, browser, Rust, Go, Java,
+  and HTTP/3 runtimes.
+
 ## Unreleased - Explicit route-domain selection
 
 - Broker request surfaces may provide `routeDomain` (Node/Bun and local APIs) or

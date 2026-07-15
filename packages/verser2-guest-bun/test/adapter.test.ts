@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { Readable } from 'node:stream';
+import { PassThrough } from 'node:stream';
+import { NativeVerserWebSocket, VerserWebSocket } from '@signicode/verser2-guest-node';
 import { createVerserBroker, createVerserBunGuest } from '../src/index';
 import {
+  createBunWebSocketFacade,
   createNodeStyleHandler,
+  createNodeStyleWebSocketHandler,
   dispatchVerserBunRequestInternal,
   streamRequestBody,
 } from '../src/lib/adapter';
@@ -85,6 +89,113 @@ describe('createVerserBunGuest API', () => {
     unsubscribe();
     expect(typeof unsubscribe).toBe('function');
     expect(events).toHaveLength(0);
+  });
+});
+
+describe('createVerserBroker WebSocket API', () => {
+  test('exposes Bun and native WebSocket factories with distinct surfaces', () => {
+    const broker = createVerserBroker({
+      hostUrl: 'https://localhost:1',
+      brokerId: 'bun-websocket-api-test',
+    });
+
+    expect(typeof broker.webSocket).toBe('function');
+    expect(typeof broker.nativeWebSocket).toBe('function');
+  });
+});
+
+describe('Bun WebSocket backpressure facade', () => {
+  test('reports drain only after the real VWS transport drains', async () => {
+    const transport = new PassThrough();
+    transport.write = (() => false) as typeof transport.write;
+    const vws = new VerserWebSocket(transport as never, '', true);
+    const native = new NativeVerserWebSocket(vws);
+    const socket = createBunWebSocketFacade(native);
+    let drains = 0;
+    (socket as unknown as { setDrainListener(listener: () => void): void }).setDrainListener(() => {
+      drains += 1;
+    });
+
+    socket.send('waiting-for-drain');
+    expect(socket.bufferedAmount).toBeGreaterThan(0);
+    await Promise.resolve();
+    expect(drains).toBe(0);
+
+    transport.emit('drain');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(socket.bufferedAmount).toBe(0);
+    expect(drains).toBe(1);
+    transport.destroy();
+  });
+
+  test('returns -1 only while an underlying send is pending and drains on relief', async () => {
+    let release!: () => void;
+    const sendPromise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let closed = false;
+    const transport = {
+      readyState: 1,
+      protocol: '',
+      bufferedAmount: 0,
+      send: () => sendPromise,
+      close: () => {
+        closed = true;
+      },
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+    };
+    const socket = createBunWebSocketFacade(transport);
+    let drains = 0;
+    (socket as unknown as { setDrainListener(listener: () => void): void }).setDrainListener(() => {
+      drains += 1;
+    });
+
+    expect(socket.send('first')).toBe(5);
+    expect(socket.send('second')).toBe(-1);
+    expect(socket.bufferedAmount).toBe(11);
+    expect(drains).toBe(0);
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(socket.bufferedAmount).toBe(0);
+    expect(drains).toBe(1);
+    expect(closed).toBe(false);
+  });
+
+  test('awaits rejected async callbacks and closes the transport', async () => {
+    let closed = false;
+    const transport = {
+      readyState: 1,
+      protocol: '',
+      send: () => Promise.resolve(),
+      close: () => {
+        closed = true;
+      },
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+    };
+    const handler = createNodeStyleWebSocketHandler('async-callback.test', {
+      fetch: (_request, server) => {
+        server.upgrade(_request);
+        return undefined;
+      },
+      websocket: {
+        message: async () => {
+          throw new Error('async callback failed');
+        },
+      },
+    });
+
+    await handler({ domain: 'async-callback.test', path: '/', protocol: '' }, transport as never);
+    (transport.onmessage as unknown as (event: { data: string }) => void)({ data: 'boom' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(true);
   });
 });
 

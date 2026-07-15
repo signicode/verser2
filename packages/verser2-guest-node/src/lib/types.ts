@@ -2,6 +2,7 @@ import type * as http from 'node:http';
 import type { Readable } from 'node:stream';
 import type { Dispatcher, fetch as undiciFetch } from 'undici';
 
+import type { NativeVerserWebSocket } from './native-websocket';
 import type { VerserWebSocket } from './verser-websocket';
 
 import type {
@@ -225,6 +226,8 @@ export interface VerserBroker {
    * @returns A promise that resolves to a ready-to-use WebSocket.
    */
   webSocket(options: VerserBrokerWebSocketRequest): Promise<VerserWebSocket>;
+  /** Opens a native-facing EventTarget WebSocket adapter over VWS/1. */
+  nativeWebSocket(options: VerserBrokerWebSocketRequest): Promise<NativeVerserWebSocket>;
 }
 
 /**
@@ -298,6 +301,8 @@ export interface VerserNodeGuest {
    * @returns `this` for chaining.
    */
   attachWebSocket(handler: VerserWebSocketHandler, domain?: string): this;
+  /** Attaches a native-facing EventTarget WebSocket handler over VWS/1. */
+  attachNativeWebSocket(handler: VerserNativeWebSocketHandler, domain?: string): this;
 }
 
 /**
@@ -418,6 +423,11 @@ export type VerserWebSocketAcceptResult = { readonly protocol?: string } | false
 export type VerserWebSocketHandler = (
   open: { domain: string; path: string; protocol: string },
   ws: VerserWebSocket,
+) => VerserWebSocketAcceptResult | Promise<VerserWebSocketAcceptResult> | undefined;
+
+export type VerserNativeWebSocketHandler = (
+  open: { domain: string; path: string; protocol: string },
+  ws: NativeVerserWebSocket,
 ) => VerserWebSocketAcceptResult | Promise<VerserWebSocketAcceptResult> | undefined;
 
 /**

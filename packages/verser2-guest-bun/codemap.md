@@ -33,9 +33,10 @@ Key factory functions:
 - **Web Fetch response** — The Broker's `createFetch()` converts the Node
   `Readable` response body into a Web `ReadableStream<Uint8Array>` through
   async iteration.
-- **Bun WebSocket boundary** — Bun Guest `server.upgrade()` always returns
-  `false`; Bun Guest WebSocket support is deferred. The Bun-facing Broker
-  inherits Node's explicit VWS/1 `webSocket()` API, not generic upgrade support.
+- **Bun WebSocket boundary** — Bun Guest `server.upgrade()` claims a VWS/1
+  lease and invokes Bun-style callbacks. The Bun-facing Broker inherits Node's
+  explicit VWS/1 `webSocket()` and native-facing APIs; generic upgrade support
+  is not provided.
 - **Single dependency chain** — `verser2-guest-bun` → `verser2-guest-node` →
   `verser2-guest-js-common` → `verser-common`.
 

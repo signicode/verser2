@@ -63,7 +63,9 @@ export function toVerserErrorCode(code: string | undefined): VerserErrorCode {
     code === 'upstream-unavailable' ||
     code === 'route-loop' ||
     code === 'authorization-denied' ||
-    code === 'unsafe-retry'
+    code === 'unsafe-retry' ||
+    code === 'revocation-failed' ||
+    code === 'websocket-negotiation-failed'
   ) {
     return code;
   }

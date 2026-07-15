@@ -24,8 +24,10 @@ import {
 import { toVerserError } from './error-utils';
 import { requestJson } from './http2-client-utils';
 import { MinimalIncomingMessage, MinimalServerResponse } from './minimal-http';
+import { NativeVerserWebSocket, markNativeVerserWebSocketOpen } from './native-websocket';
 import type {
   NodeRequestListener,
+  VerserNativeWebSocketHandler,
   VerserNodeGuest,
   VerserNodeGuestDispatchRequest,
   VerserNodeGuestDispatchResponse,
@@ -34,7 +36,7 @@ import type {
   VerserWebSocketAcceptResult,
   VerserWebSocketHandler,
 } from './types';
-import { VerserWebSocket } from './verser-websocket';
+import { VerserWebSocket, acceptVerserWebSocket } from './verser-websocket';
 
 type GuestLeaseState = 'opening' | 'waiting' | 'active';
 type GuestRevocationResponse = ReturnType<typeof createGuestRevocationResponse>;
@@ -66,6 +68,8 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
   private attachedDomain?: string;
 
   private wsHandler?: VerserWebSocketHandler;
+
+  private nativeWsHandler?: VerserNativeWebSocketHandler;
 
   private wsDomain?: string;
 
@@ -110,6 +114,12 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
 
   public attachWebSocket(handler: VerserWebSocketHandler, domain?: string): this {
     this.wsHandler = handler;
+    this.wsDomain = domain ?? this.options.guestId;
+    return this;
+  }
+
+  public attachNativeWebSocket(handler: VerserNativeWebSocketHandler, domain?: string): this {
+    this.nativeWsHandler = handler;
     this.wsDomain = domain ?? this.options.guestId;
     return this;
   }
@@ -568,7 +578,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
    * Maintains one idle WebSocket lease stream when a WS handler is attached.
    */
   private maintainWsLeasePool(): void {
-    if (this.wsHandler === undefined || this.closing) {
+    if ((this.wsHandler === undefined && this.nativeWsHandler === undefined) || this.closing) {
       return;
     }
     const session = this.session;
@@ -659,16 +669,41 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
 
     // Call the handler to decide accept/reject
     const handler = this.wsHandler;
+    const nativeHandler = this.nativeWsHandler;
+    let nativeWs: NativeVerserWebSocket | undefined;
     let acceptResult: VerserWebSocketAcceptResult | undefined;
-    if (handler !== undefined) {
+    if (nativeHandler !== undefined) {
+      nativeWs = new NativeVerserWebSocket(ws, false);
+      try {
+        acceptResult =
+          (await nativeHandler({ domain, path, protocol: requestedProtocol }, nativeWs)) ??
+          undefined;
+      } catch (error) {
+        const failure = toVerserError(error);
+        this.writeWebSocketError(stream, failure);
+        stream.close();
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.error,
+          error: toVerserError(error),
+        });
+        return;
+      }
+    } else if (handler !== undefined) {
       acceptResult =
         (await handler({ domain, path, protocol: requestedProtocol }, ws)) ?? undefined;
     }
 
     // Accept or reject based on handler decision
     if (acceptResult === false || acceptResult === null) {
-      // Reject: send error frame, close the stream
-      stream.write(`${JSON.stringify({ type: 'error', message: 'Connection rejected' })}\n`);
+      this.writeWebSocketError(
+        stream,
+        createVerserError('missing-guest', 'WebSocket endpoint is unavailable', {
+          guestId: this.options.guestId,
+          domain,
+          path,
+          status: 404,
+        }),
+      );
       stream.close();
       return;
     }
@@ -691,8 +726,23 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
         'Guest-selected WebSocket subprotocol was not offered by the Broker',
       );
     }
-    ws.sendAccept(acceptProtocol);
+    acceptVerserWebSocket(ws, acceptProtocol);
+    if (nativeWs !== undefined) markNativeVerserWebSocketOpen(nativeWs);
     this.maintainWsLeasePool();
+  }
+
+  private writeWebSocketError(
+    stream: http2.ClientHttp2Stream,
+    error: ReturnType<typeof toVerserError>,
+  ): void {
+    stream.write(
+      `${JSON.stringify({
+        type: 'error',
+        code: error.code,
+        message: error.message,
+        context: error.context,
+      })}\n`,
+    );
   }
 
   /**

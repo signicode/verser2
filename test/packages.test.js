@@ -71,6 +71,8 @@ test('@signicode/verser-common package exposes common foundations', () => {
   assert.deepEqual(Object.keys(commonPackage).sort(), [
     'DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS',
     'DEFAULT_MAX_ENVELOPE_METADATA_BYTES',
+    'FEDERATION_VWS_PATH',
+    'FEDERATION_VWS_VERSION',
     'VERSER_COMMON_PACKAGE_NAME',
     'VERSER_ENVELOPE_PREFIX_BYTES',
     'VERSER_ENVELOPE_TYPES',
@@ -87,6 +89,10 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'createCommonBrokerRequest',
     'createFederatedRouteRegistration',
     'createFederatedRoutesControlFrame',
+    'createFederationVwsAccept',
+    'createFederationVwsError',
+    'createFederationVwsNegotiationFailure',
+    'createFederationVwsOpen',
     'createGuestId',
     'createGuestRevocationRequest',
     'createGuestRevocationResponse',
@@ -186,6 +192,8 @@ test('@signicode/verser2-host package exposes Host API', () => {
     'VERSER2_HOST_PACKAGE_NAME',
     'createHostRouteRegistry',
     'createVerserHost',
+    'openUpstreamFederationVwsStream',
+    'readFederationVwsNegotiation',
   ]);
   assert.equal(hostPackage.VERSER2_HOST_PACKAGE_NAME, '@signicode/verser2-host');
   assert.equal(typeof hostPackage.createVerserHost, 'function');
@@ -246,6 +254,7 @@ test('@signicode/verser2-guest-node package exposes Node Guest API', () => {
   assert.deepEqual(Object.keys(guestPackage).sort(), [
     'MinimalIncomingMessage',
     'MinimalServerResponse',
+    'NativeVerserWebSocket',
     'VERSER2_GUEST_NODE_PACKAGE_NAME',
     'VerserWebSocket',
     'createVerserBroker',

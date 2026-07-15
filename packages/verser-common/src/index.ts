@@ -100,12 +100,25 @@ export type {
 } from './lib/types';
 
 export {
+  FEDERATION_VWS_PATH,
+  FEDERATION_VWS_VERSION,
+  createFederationVwsAccept,
+  createFederationVwsError,
+  createFederationVwsNegotiationFailure,
+  createFederationVwsOpen,
   createFederatedRouteRegistration,
   createFederatedRoutesControlFrame,
   createVerserHostFederationHandshake,
   createVerserHostId,
   exceedsFederatedRouteHopLimit,
   isFederatedRouteLoop,
+} from './lib/federation';
+
+export type {
+  FederationVwsAccept,
+  FederationVwsError,
+  FederationVwsOpen,
+  FederationVwsOpenInput,
 } from './lib/federation';
 
 export {

@@ -246,7 +246,13 @@ test('Guest handler can reject WebSocket connections', async () => {
           targetId: 'ws-guest-reject',
           domain: 'ws-reject.local.test',
         }),
-      /rejected/i,
+      (error) => {
+        assert.equal(error.code, 'missing-guest');
+        assert.equal(error.context.targetId, 'ws-guest-reject');
+        assert.equal(error.context.domain, 'ws-reject.local.test');
+        assert.equal(error.context.status, 404);
+        return true;
+      },
     );
   } finally {
     await broker.close('test-complete');
@@ -388,6 +394,8 @@ test('Pre-accept send is queued and not written until after accept', async () =>
   assert.equal(written.length, 0, 'No data written before accept');
 
   // Now accept
+  // Accept is an internal lifecycle action; exercise it through the Guest
+  // adapter contract rather than making it part of the public WebSocket API.
   ws.sendAccept('vws.test');
 
   // Wait a tick for the queue to flush
@@ -403,6 +411,55 @@ test('Pre-accept send is queued and not written until after accept', async () =>
   const dataFrame = JSON.parse(written[1].toString().trimEnd());
   assert.equal(dataFrame.type, 'text');
   assert.equal(dataFrame.data, 'before-accept');
+});
+
+test('Accepted sends are bounded and buffered accounting follows transport drain', async () => {
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const { Duplex } = require('node:stream');
+  const stream = new Duplex({
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  let blocked = true;
+  const originalWrite = stream.write.bind(stream);
+  stream.write = (chunk, encoding, callback) => {
+    const result = originalWrite(chunk, encoding, callback);
+    return blocked ? false : result;
+  };
+  const ws = new VerserWebSocket(stream, '', true);
+  const pending = ws.send('drain-me', { type: 'text' });
+  assert.ok(ws.getBufferedAmount() > 0);
+  blocked = false;
+  stream.emit('drain');
+  await pending;
+  assert.equal(ws.getBufferedAmount(), 0);
+  stream.destroy();
+});
+
+test('Accepted send overflow rejects deterministically and reports protocol closure', async () => {
+  const { VerserWebSocket } = loadVerserGuestNode();
+  const { Duplex } = require('node:stream');
+  const stream = new Duplex({
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  stream.write = () => {
+    setImmediate(() => stream.emit('drain'));
+    return false;
+  };
+  const ws = new VerserWebSocket(stream, '', true);
+  const sends = Array.from({ length: 64 }, () =>
+    ws.send(Buffer.alloc(20 * 1024), { type: 'binary' }).catch((error) => error),
+  );
+  const results = await Promise.all(sends);
+  assert.ok(results.some((result) => result instanceof Error));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ws.getBufferedAmount(), 0);
+  stream.destroy();
 });
 
 test('VWS ping is automatically answered with pong and exposed as an event', async () => {
@@ -802,35 +859,208 @@ test('Route revocation blocks new opens but preserves an active WebSocket', asyn
   }
 });
 
-test('Federated WebSocket routes fail with an explicit unsupported error', async () => {
-  const host = createHost({ port: 0, hostId: 'ws-federation-host' });
+test('Broker opens a WebSocket through an imported-only one-hop route', async () => {
+  const host = createHost({ port: 0, hostId: 'ws-federation-manager' });
+  const remoteHost = createHost({ port: 0, hostId: 'ws-federation-remote' });
   await host.start();
+  await remoteHost.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const remoteUrl = `https://127.0.0.1:${remoteHost.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'ws-federation-broker' });
-  const guest = createGuest({ hostUrl, guestId: 'ws-federated-target' });
+  const guest = createGuest({
+    hostUrl: remoteUrl,
+    guestId: 'ws-federated-target',
+  });
   try {
-    guest.attachWebSocket(() => {}, 'ws-federated-local-only.local.test');
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', (data, options) => void ws.send(data, options));
+    }, 'ws-federated.local.test');
     await broker.connect();
+    await remoteHost.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl,
+      tls: { ca: trusted.certificate },
+    });
     await guest.connect();
-    host.setImportedFederatedRoutes('remote-host', [
-      {
-        targetId: 'ws-federated-target',
-        domain: 'ws-federated.local.test',
-        originHostId: 'remote-origin',
-        nextHopHostId: 'remote-host',
-        hopCount: 1,
-        viaHostIds: [],
-        source: 'upstream',
-      },
+    await broker.waitForRoute('ws-federated.local.test');
+    const ws = await broker.webSocket({
+      targetId: 'ws-federated-target',
+      domain: 'ws-federated.local.test',
+      protocol: 'vws.base64',
+    });
+    const message = new Promise((resolve) => ws.once('message', resolve));
+    await ws.send('through-one-hop', { type: 'text' });
+    assert.equal(await message, 'through-one-hop');
+    ws.close();
+    const second = await broker.webSocket({
+      targetId: 'ws-federated-target',
+      domain: 'ws-federated.local.test',
+    });
+    second.close();
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await remoteHost.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker opens a WebSocket through an imported-only multi-hop route', async () => {
+  const host = createHost({ port: 0, hostId: 'ws-federation-root' });
+  const middleHost = createHost({ port: 0, hostId: 'ws-federation-middle' });
+  const remoteHost = createHost({ port: 0, hostId: 'ws-federation-leaf' });
+  await host.start();
+  await middleHost.start();
+  await remoteHost.start();
+  const rootUrl = `https://127.0.0.1:${host.address.port}`;
+  const middleUrl = `https://127.0.0.1:${middleHost.address.port}`;
+  const leafUrl = `https://127.0.0.1:${remoteHost.address.port}`;
+  const broker = createBroker({ hostUrl: rootUrl, brokerId: 'ws-federation-multi-broker' });
+  const guest = createGuest({ hostUrl: leafUrl, guestId: 'ws-federated-multi-target' });
+  try {
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', (data, options) => void ws.send(data, options));
+    }, 'ws-federated-multi.local.test');
+    await broker.connect();
+    await middleHost.connectUpstream({
+      upstreamId: 'root',
+      url: rootUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await remoteHost.connectUpstream({
+      upstreamId: 'middle',
+      url: middleUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await guest.connect();
+    await broker.waitForRoute('ws-federated-multi.local.test');
+    const ws = await broker.webSocket({
+      targetId: 'ws-federated-multi-target',
+      domain: 'ws-federated-multi.local.test',
+    });
+    const message = new Promise((resolve) => ws.once('message', resolve));
+    await ws.send('through-two-hops', { type: 'text' });
+    assert.equal(await message, 'through-two-hops');
+    ws.close();
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await remoteHost.close('test-complete');
+    await middleHost.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Federated WebSocket opens both directions concurrently and can reopen', async () => {
+  const root = createHost({ port: 0, hostId: 'ws-bidir-root' });
+  const leaf = createHost({ port: 0, hostId: 'ws-bidir-leaf' });
+  await root.start();
+  await leaf.start();
+  const rootUrl = `https://127.0.0.1:${root.address.port}`;
+  const leafUrl = `https://127.0.0.1:${leaf.address.port}`;
+  const rootBroker = createBroker({ hostUrl: rootUrl, brokerId: 'ws-bidir-root-broker' });
+  const leafBroker = createBroker({ hostUrl: leafUrl, brokerId: 'ws-bidir-leaf-broker' });
+  const rootGuest = createGuest({ hostUrl: rootUrl, guestId: 'ws-bidir-root-guest' });
+  const leafGuest = createGuest({ hostUrl: leafUrl, guestId: 'ws-bidir-leaf-guest' });
+
+  const echo = (_open, ws) => {
+    ws.on('message', (data, options) => void ws.send(data, options));
+  };
+  try {
+    rootGuest.attachWebSocket(echo, 'ws-bidir-root.local.test');
+    leafGuest.attachWebSocket(echo, 'ws-bidir-leaf.local.test');
+    await rootBroker.connect();
+    await leafBroker.connect();
+    await leaf.connectUpstream({
+      upstreamId: 'root',
+      url: rootUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await rootGuest.connect();
+    await leafGuest.connect();
+    await rootBroker.waitForRoute('ws-bidir-leaf.local.test');
+    await leafBroker.waitForRoute('ws-bidir-root.local.test');
+
+    const opens = await Promise.all([
+      rootBroker.webSocket({
+        targetId: 'ws-bidir-leaf-guest',
+        domain: 'ws-bidir-leaf.local.test',
+        protocol: 'vws.base64',
+      }),
+      leafBroker.webSocket({
+        targetId: 'ws-bidir-root-guest',
+        domain: 'ws-bidir-root.local.test',
+        protocol: 'vws.base64',
+      }),
     ]);
-    // The direct API accepts an explicit target/domain; give the Host one
-    // event-loop turn to publish the imported candidate before opening.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await assert.rejects(
-      () =>
-        broker.webSocket({ targetId: 'ws-federated-target', domain: 'ws-federated.local.test' }),
-      /Federated WebSocket routes are not supported/,
+    assert.deepEqual(
+      opens.map((ws) => ws.protocol),
+      ['vws.base64', 'vws.base64'],
     );
+    for (const [index, ws] of opens.entries()) {
+      const text = new Promise((resolve) => ws.once('message', resolve));
+      await ws.send(`bidir-text-${index}`, { type: 'text' });
+      assert.equal(await text, `bidir-text-${index}`);
+      const binary = new Promise((resolve) => ws.once('message', resolve));
+      await ws.send(Buffer.from([0, 255, index]), { type: 'binary' });
+      assert.deepEqual(await binary, Buffer.from([0, 255, index]));
+      ws.close(1000, 'bidir-done');
+      await new Promise((resolve) => ws.once('close', resolve));
+    }
+
+    const reopened = await Promise.all([
+      rootBroker.webSocket({
+        targetId: 'ws-bidir-leaf-guest',
+        domain: 'ws-bidir-leaf.local.test',
+      }),
+      leafBroker.webSocket({
+        targetId: 'ws-bidir-root-guest',
+        domain: 'ws-bidir-root.local.test',
+      }),
+    ]);
+    for (const ws of reopened) ws.close();
+  } finally {
+    await rootBroker.close('test-complete');
+    await leafBroker.close('test-complete');
+    await rootGuest.close('test-complete');
+    await leafGuest.close('test-complete');
+    await leaf.close('test-complete');
+    await root.close('test-complete');
+  }
+});
+
+test('Established federated WebSocket closes abnormally when the selected Host is lost', async () => {
+  const host = createHost({ port: 0, hostId: 'ws-loss-root' });
+  const remoteHost = createHost({ port: 0, hostId: 'ws-loss-leaf' });
+  await host.start();
+  await remoteHost.start();
+  const rootUrl = `https://127.0.0.1:${host.address.port}`;
+  const leafUrl = `https://127.0.0.1:${remoteHost.address.port}`;
+  const broker = createBroker({ hostUrl: rootUrl, brokerId: 'ws-loss-broker' });
+  const guest = createGuest({ hostUrl: leafUrl, guestId: 'ws-loss-target' });
+  try {
+    guest.attachWebSocket(() => {}, 'ws-loss.local.test');
+    await broker.connect();
+    await remoteHost.connectUpstream({
+      upstreamId: 'root',
+      url: rootUrl,
+      tls: { ca: trusted.certificate },
+    });
+    await guest.connect();
+    await broker.waitForRoute('ws-loss.local.test');
+    const ws = await broker.webSocket({ targetId: 'ws-loss-target', domain: 'ws-loss.local.test' });
+    const closed = new Promise((resolve) => {
+      ws.once('close', (code) => resolve(code));
+      ws.once('error', resolve);
+    });
+    await remoteHost.close('selected-host-loss');
+    const outcome = await Promise.race([
+      closed,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('federated close timed out')), 3000),
+      ),
+    ]);
+    assert.ok(outcome instanceof Error || outcome === 1006);
   } finally {
     await broker.close('test-complete');
     await guest.close('test-complete');

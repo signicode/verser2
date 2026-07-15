@@ -28,6 +28,78 @@ test('shared protocol helpers create identifiers and route registrations', () =>
   );
 });
 
+test('shared federation VWS contract is versioned and preserves route metadata', () => {
+  assert.equal(common.FEDERATION_VWS_VERSION, 1);
+  assert.equal(common.FEDERATION_VWS_PATH, '/verser/host/federation/websocket');
+
+  const open = common.createFederationVwsOpen({
+    sourceId: 'broker-a',
+    targetId: 'guest-z',
+    domain: 'socket.verser.test',
+    path: '/chat',
+    protocol: 'chat.v1',
+    originHostId: 'host-a',
+    viaHostIds: ['host-a'],
+    hopCount: 1,
+  });
+  assert.deepEqual(open, {
+    type: 'open',
+    version: 1,
+    sourceId: 'broker-a',
+    targetId: 'guest-z',
+    domain: 'socket.verser.test',
+    path: '/chat',
+    protocol: 'chat.v1',
+    originHostId: 'host-a',
+    viaHostIds: ['host-a'],
+    hopCount: 1,
+  });
+  assert.deepEqual(common.createFederationVwsAccept({ protocol: 'chat.v1' }), {
+    type: 'accept',
+    version: 1,
+    protocol: 'chat.v1',
+  });
+});
+
+test('federation VWS negotiation without a response has a deterministic error', () => {
+  assert.throws(
+    () =>
+      common.createFederationVwsNegotiationFailure({
+        targetId: 'guest-z',
+        domain: 'socket.verser.test',
+      }),
+    (error) => {
+      assert.equal(error.code, 'websocket-negotiation-failed');
+      assert.match(error.message, /negotiation response/i);
+      assert.equal(error.context.targetId, 'guest-z');
+      return true;
+    },
+  );
+});
+
+test('federation VWS negotiation frames round-trip with VWS/1 wire shapes', () => {
+  const errorFrame = common.createFederationVwsError('peer rejected the open');
+  assert.deepEqual(errorFrame, {
+    type: 'error',
+    version: 1,
+    message: 'peer rejected the open',
+    code: 'protocol-error',
+  });
+  assert.deepEqual(common.decodeVwsFrame(JSON.stringify(errorFrame)), errorFrame);
+
+  const response = common.toVerserHttpErrorResponse(
+    common.createVerserError('websocket-negotiation-failed', 'no response', {
+      targetId: 'guest-z',
+    }),
+  );
+  const roundTrip = common.verserErrorFromResponseBody(
+    Buffer.from(JSON.stringify(response)),
+    'guest-z',
+  );
+  assert.equal(roundTrip.code, 'websocket-negotiation-failed');
+  assert.match(roundTrip.message, /no response/);
+});
+
 test('shared protocol resolves advertised routes by exact hostname', () => {
   assert.deepEqual(
     common.resolveRouteForHostname(

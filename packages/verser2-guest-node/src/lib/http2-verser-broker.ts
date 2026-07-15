@@ -17,6 +17,7 @@ import type { Dispatcher } from 'undici';
 import { fetch as undiciFetch } from 'undici';
 import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
+import { NativeVerserWebSocket } from './native-websocket';
 import type {
   BrokerControlFrame,
   BrokerRoute,
@@ -501,21 +502,37 @@ export class Http2VerserBroker implements VerserBroker {
         if (status !== 200) {
           // Collect body for error details
           const maxErrorBodyBytes = 64 * 1024;
-          let body = '';
+          const chunks: Buffer[] = [];
           let bodyBytes = 0;
-          stream.setEncoding('utf8');
-          stream.on('data', (chunk: string) => {
+          stream.on('data', (chunk: Buffer | string) => {
             if (bodyBytes < maxErrorBodyBytes) {
               const remaining = maxErrorBodyBytes - bodyBytes;
-              const bounded = chunk.slice(0, remaining);
-              body += bounded;
-              bodyBytes += Buffer.byteLength(bounded, 'utf8');
+              const bounded = Buffer.from(chunk).subarray(0, remaining);
+              chunks.push(bounded);
+              bodyBytes += bounded.byteLength;
             }
           });
           stream.on('end', () => {
             settleOnce(() => {
-              const msg = body.length > 0 ? body : `WebSocket request failed with status ${status}`;
-              reject(createVerserError('protocol-error', msg, { targetId: options.targetId }));
+              const body = Buffer.concat(chunks, bodyBytes);
+              try {
+                const parsed = verserErrorFromResponseBody(body, options.targetId);
+                reject(
+                  createVerserError(parsed.code, parsed.message, {
+                    ...parsed.context,
+                    domain: options.domain,
+                    status: parsed.code === 'missing-guest' ? 404 : status,
+                  }),
+                );
+              } catch {
+                reject(
+                  createVerserError(
+                    status === 404 ? 'missing-guest' : 'protocol-error',
+                    `WebSocket request failed with status ${status}`,
+                    { targetId: options.targetId, domain: options.domain },
+                  ),
+                );
+              }
             });
           });
           return;
@@ -551,6 +568,12 @@ export class Http2VerserBroker implements VerserBroker {
       // Do NOT call stream.end() — the H2 stream must remain open for
       // bidirectional VWS/1 frame exchange after the handshake.
     });
+  }
+
+  public async nativeWebSocket(
+    options: VerserBrokerWebSocketRequest,
+  ): Promise<NativeVerserWebSocket> {
+    return new NativeVerserWebSocket(await this.webSocket(options));
   }
 
   private async register(session: http2.ClientHttp2Session): Promise<void> {

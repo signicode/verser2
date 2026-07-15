@@ -1,11 +1,13 @@
 exceptions:
-  halt: conservative
+  halt: relaxed
 
 delegation:
   mode: omo-slim
   strategy: specialists
   agents:
-    implementation: fixer
+    implementation: engineer
+    fixes: fixer
+    cleanup: cleaner
     research: explorer
     review: oracle
     documentation: librarian
@@ -13,6 +15,16 @@ delegation:
 
 workflow:
   supervision: semi-automatic
+  commitFrequency: phase
 
 branching:
   mode: branched
+
+review:
+  advisoryPolicy: deferred
+
+lifecycle:
+  trackStart: { mode: automatic, instruction: "Resolve the exact track before starting." }
+  phaseStart: { mode: automatic, instruction: "Reconcile Todos for the active phase only." }
+  phaseComplete: { mode: automatic, instruction: "Verify and checkpoint the phase boundary." }
+  trackComplete: { mode: manual, instruction: "Require user approval after validation and review before finalizing." }

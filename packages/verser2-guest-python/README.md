@@ -121,8 +121,10 @@ async def app(scope, receive, send):
 ```
 
 This is explicit framing over the existing TLS HTTP/2 transport, not generic
-HTTP upgrade forwarding. Python Host, fetch, Agent, and Dispatcher APIs are not
-implemented.
+HTTP upgrade forwarding. Python Brokers can also initiate local, direct-remote,
+and federated VWS/1 connections with `await broker.websocket(url,
+protocol=...)`; `web_socket()` is an alias. Python Host, fetch, Agent, and
+Dispatcher APIs are not implemented.
 
 See [VWS/1 WebSockets](../../docs/websockets.md) for a complete Node Broker and
 Python ASGI example, runtime boundaries, and close/backpressure behavior.
@@ -253,6 +255,8 @@ types, reasons, and degraded-route behavior.
 - The first implementation focuses on Python Guest and Broker behavior.
 - Python Host, Python-side fetch helper APIs, and Python-side Agent/Dispatcher
   are not implemented.
+- Browser, Rust, Go, and Java WebSocket runtimes, HTTP/3, and Python Host
+  federation endpoints are unsupported roadmap work.
 - HTTP/3, complete application authentication, public gateway policy,
   per-request Broker target authorization, generic upgrades, CONNECT/RFC8441,
   trailers, Python Host/fetch/Agent/Dispatcher, and advanced ASGI lifespan
@@ -260,6 +264,8 @@ types, reasons, and degraded-route behavior.
 - The HTTP transport is intentionally minimal: one outbound TLS HTTP/2 session
   with a replenished pool of one-use HTTP Guest lease streams. Long-lived VWS/1
   WebSocket leases are dedicated streams and are not one-use request leases.
+  VWS frames are limited to 1 MiB, queues are bounded, and transport loss is
+  surfaced as a local abnormal close rather than replay or migration.
 
 ## Links
 

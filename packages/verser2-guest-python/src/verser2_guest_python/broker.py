@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json as _json
 import ssl
 from collections.abc import AsyncIterable, Callable, Iterable
@@ -14,6 +15,322 @@ import h2.config
 import h2.events
 
 from ._tls import create_client_ssl_context, load_pfx_client_identity, validate_h2_alpn
+
+VWS_MAX_FRAME_BYTES = 1 * 1024 * 1024
+VWS_MAX_QUEUE_MESSAGES = 64
+
+
+class VerserWebSocketError(RuntimeError):
+    """Structured pre-accept or transport failure for a Broker WebSocket."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        context: dict[str, Any] | None = None,
+        status: int | None = None,
+    ) -> None:
+        self.code = code
+        self.context = dict(context or {})
+        self.status = status
+        super().__init__(message)
+
+
+class VerserBrokerWebSocket:
+    """Async runtime-facing handle for one accepted VWS/1 connection."""
+
+    def __init__(self, broker: "VerserBroker", stream_id: int, protocol: str) -> None:
+        self._broker = broker
+        self._stream_id = stream_id
+        self.protocol = protocol
+        self.closed = False
+        self._close_sent = False
+        self._buffer = b""
+        self._outbound_bytes = 0
+        self._reserved_bytes = 0
+        self._pending_messages = 0
+        self._send_lock = asyncio.Lock()
+        self._peer_close_waiter: asyncio.Future[None] | None = None
+        self._finalized = False
+        self._incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
+            maxsize=VWS_MAX_QUEUE_MESSAGES
+        )
+        self._reader_task = asyncio.create_task(self._pump())
+
+    @property
+    def buffered_amount(self) -> int:
+        return self._outbound_bytes
+
+    async def send_text(self, data: str) -> None:
+        if not isinstance(data, str):
+            raise TypeError("WebSocket text data must be a string")
+        await self._send_frame(
+            {"type": "text", "data": data},
+        )
+
+    async def send_bytes(self, data: bytes | bytearray | memoryview) -> None:
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("WebSocket binary data must be bytes-like")
+        raw = bytes(data)
+        await self._send_frame(
+            {"type": "binary", "data": base64.b64encode(raw).decode("ascii")},
+        )
+
+    async def ping(self, data: str = "") -> None:
+        await self._send_frame(
+            {"type": "ping", "data": data},
+        )
+
+    async def pong(self, data: str = "") -> None:
+        await self._send_frame(
+            {"type": "pong", "data": data},
+        )
+
+    async def _send_frame(
+        self,
+        frame: dict[str, Any],
+        *,
+        end_stream: bool = False,
+    ) -> None:
+        if self.closed:
+            raise VerserWebSocketError("disconnected-target", "WebSocket is closed")
+        payload = (json_dumps(frame) + "\n").encode("utf-8")
+        frame_bytes = len(payload)
+        if frame_bytes > VWS_MAX_FRAME_BYTES:
+            raise VerserWebSocketError(
+                "protocol-error",
+                "WebSocket frame exceeds maximum size",
+                {"streamId": self._stream_id},
+            )
+        if self._pending_messages >= VWS_MAX_QUEUE_MESSAGES or (
+            self._reserved_bytes + frame_bytes > VWS_MAX_FRAME_BYTES
+        ):
+            raise VerserWebSocketError(
+                "protocol-error",
+                "WebSocket outbound queue exceeded",
+                {"streamId": self._stream_id},
+            )
+        self._pending_messages += 1
+        self._reserved_bytes += frame_bytes
+        try:
+            async with self._send_lock:
+                self._outbound_bytes += len(payload)
+                try:
+                    await self._broker._send_data(self._stream_id, payload, end_stream)
+                finally:
+                    self._outbound_bytes = max(0, self._outbound_bytes - len(payload))
+        finally:
+            self._pending_messages = max(0, self._pending_messages - 1)
+            self._reserved_bytes = max(0, self._reserved_bytes - frame_bytes)
+
+    async def receive(self) -> dict[str, Any]:
+        """Receive the next text, binary, pong, or close event.
+
+        Transport reads are performed by the per-socket pump, so callers may
+        not accidentally race the connection-wide HTTP/2 reader.
+        """
+        if self.closed and self._incoming.empty():
+            return {"type": "close", "code": 1006, "reason": "closed"}
+        event = await self._incoming.get()
+        if event.get("type") == "error":
+            error = event["error"]
+            raise error
+        return event
+
+    async def _pump(self) -> None:
+        try:
+            while not self._finalized:
+                event = await self._broker._events[self._stream_id].get()
+                if isinstance(event, Exception):
+                    error = VerserWebSocketError("disconnected-target", str(event))
+                    await self._publish_error(error)
+                    await self._finalize(reset=True)
+                    return
+                if isinstance(event, h2.events.DataReceived):
+                    await self._broker._acknowledge_received_data(
+                        self._stream_id, int(event.flow_controlled_length)
+                    )
+                    self._buffer += event.data
+                    if len(self._buffer) > VWS_MAX_FRAME_BYTES:
+                        await self._protocol_abort(
+                            1009, "WebSocket frame exceeds maximum size"
+                        )
+                        return
+                if isinstance(event, (h2.events.StreamReset, h2.events.StreamEnded)):
+                    if self._peer_close_waiter and not self._peer_close_waiter.done():
+                        self._peer_close_waiter.set_result(None)
+                    await self._publish(
+                        {"type": "close", "code": 1006, "reason": "transport closed"}
+                    )
+                    await self._finalize(reset=False)
+                    return
+                while b"\n" in self._buffer:
+                    line, self._buffer = self._buffer.split(b"\n", 1)
+                    if not line.strip():
+                        continue
+                    try:
+                        frame = self._decode_frame(line)
+                        message = await self._handle_inbound_frame(frame)
+                    except VerserWebSocketError as error:
+                        await self._protocol_abort(
+                            1009 if "maximum" in str(error) else 1002,
+                            str(error),
+                        )
+                        await self._publish_error(error)
+                        return
+                    if message is not None:
+                        await self._publish(message)
+                        if message["type"] == "close":
+                            await self._finalize(reset=False)
+                            return
+        except asyncio.CancelledError:
+            if not self._finalized:
+                await self._finalize(reset=True)
+            raise
+        except Exception as error:
+            terminal_error = VerserWebSocketError("disconnected-target", str(error))
+            await self._publish_error(terminal_error)
+            await self._finalize(reset=True)
+
+    async def _handle_inbound_frame(
+        self, frame: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        frame_type = frame.get("type")
+        if frame_type == "text" and isinstance(frame.get("data"), str):
+            return {"type": "text", "data": frame["data"]}
+        if frame_type == "binary" and isinstance(frame.get("data"), str):
+            try:
+                data = base64.b64decode(frame["data"], validate=True)
+            except (ValueError, TypeError):
+                raise VerserWebSocketError("protocol-error", "Invalid binary frame")
+            return {"type": "binary", "data": data}
+        if frame_type in ("ping", "pong"):
+            data = frame.get("data", "")
+            if not isinstance(data, str):
+                raise VerserWebSocketError("protocol-error", "Invalid ping/pong frame")
+            if frame_type == "ping":
+                await self.pong(data)
+                return None
+            return {"type": "pong", "data": data}
+        if frame_type == "close":
+            code, reason = frame.get("code", 1000), frame.get("reason", "")
+            if (
+                not _valid_close(code)
+                or not isinstance(reason, str)
+                or len(reason.encode()) > 123
+            ):
+                raise VerserWebSocketError("protocol-error", "Invalid close frame")
+            if not self._close_sent:
+                self._close_sent = True
+                await self._send_frame(
+                    {"type": "close", "code": code, "reason": reason}
+                )
+            waiter = self._peer_close_waiter or self._new_peer_close_waiter()
+            if not waiter.done():
+                waiter.set_result(None)
+            return {"type": "close", "code": code, "reason": reason}
+        if frame_type == "error":
+            raise VerserWebSocketError(
+                str(frame.get("code") or "protocol-error"),
+                str(frame.get("message") or "WebSocket negotiation failed"),
+                frame.get("context") if isinstance(frame.get("context"), dict) else {},
+            )
+        raise VerserWebSocketError("protocol-error", "Malformed WebSocket frame")
+
+    def _decode_frame(self, line: bytes) -> dict[str, Any]:
+        try:
+            frame = _json.loads(line.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise VerserWebSocketError(
+                "protocol-error", "Malformed WebSocket frame"
+            ) from exc
+        if not isinstance(frame, dict):
+            raise VerserWebSocketError("protocol-error", "Malformed WebSocket frame")
+        return frame
+
+    async def _publish(self, event: dict[str, Any]) -> None:
+        try:
+            self._incoming.put_nowait(event)
+        except asyncio.QueueFull:
+            await self._protocol_abort(1009, "WebSocket event queue exceeded")
+
+    async def _publish_error(self, error: VerserWebSocketError) -> None:
+        try:
+            self._incoming.put_nowait({"type": "error", "error": error})
+        except asyncio.QueueFull:
+            pass
+
+    async def _protocol_abort(self, code: int, reason: str) -> None:
+        if not self._close_sent and not self._finalized:
+            self._close_sent = True
+            try:
+                await self._send_frame(
+                    {"type": "close", "code": code, "reason": reason}
+                )
+            except Exception:
+                pass
+        await self._finalize(reset=True)
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        if self._finalized:
+            return
+        if not _valid_close(code) or len(reason.encode("utf-8")) > 123:
+            raise ValueError("Invalid WebSocket close code or reason")
+        self._close_sent = True
+        await self._send_frame(
+            {"type": "close", "code": code, "reason": reason},
+        )
+        waiter = self._peer_close_waiter or self._new_peer_close_waiter()
+        try:
+            await asyncio.wait_for(asyncio.shield(waiter), 1.0)
+        except asyncio.TimeoutError:
+            await self._finalize(reset=True)
+
+    def _new_peer_close_waiter(self) -> asyncio.Future[None]:
+        self._peer_close_waiter = asyncio.get_running_loop().create_future()
+        return self._peer_close_waiter
+
+    async def _finalize(self, *, reset: bool) -> None:
+        if self._finalized:
+            return
+        self._finalized = True
+        self.closed = True
+        reader_task = self._reader_task
+        if reader_task is not None and reader_task is not asyncio.current_task():
+            reader_task.cancel()
+        if reset:
+            await self._broker._reset_stream(self._stream_id)
+        self._broker._events.pop(self._stream_id, None)
+        self._broker._websockets.discard(self)
+        if self._peer_close_waiter is not None and not self._peer_close_waiter.done():
+            self._peer_close_waiter.set_result(None)
+
+    async def abort(self, close_code: int | None = None) -> None:
+        if self._finalized:
+            return
+        if close_code is not None and not self._close_sent:
+            try:
+                await self._send_frame(
+                    {"type": "close", "code": close_code, "reason": "protocol error"}
+                )
+            except Exception:
+                pass
+        await self._finalize(reset=True)
+
+
+def _valid_close(code: Any) -> bool:
+    return (
+        isinstance(code, int)
+        and not isinstance(code, bool)
+        and (
+            (1000 <= code <= 1014 and code not in (1004, 1005, 1006))
+            or 3000 <= code <= 4999
+        )
+    )
+
+
+def json_dumps(value: dict[str, Any]) -> str:
+    return _json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
 class VerserBrokerResponse:
@@ -235,7 +552,8 @@ class VerserBroker:
         self._request_counter: int = 0
         self._control_stream_id: int | None = None
         self._control_task: asyncio.Task[None] | None = None
-        self._window_waiters: list[asyncio.Future[None]] = []
+        self._window_waiters: dict[int, list[asyncio.Future[None]]] = {}
+        self._websockets: set[VerserBrokerWebSocket] = set()
 
     async def __aenter__(self) -> "VerserBroker":
         """Enter async context: calls :meth:`connect`."""
@@ -353,10 +671,16 @@ class VerserBroker:
                 "Broker closed while request body was waiting for flow-control"
             )
         )
+        for websocket in list(self._websockets):
+            await websocket.abort()
+        self._websockets.clear()
         writer = self._writer
         if writer is not None:
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, ssl.SSLError, asyncio.CancelledError):
+                pass
         self._conn = None
 
     def _registration_payload(self) -> dict[str, str]:
@@ -629,6 +953,118 @@ class VerserBroker:
 
         return response
 
+    async def websocket(
+        self,
+        url: str,
+        *,
+        protocol: str | None = None,
+        route_domain: str | None = None,
+    ) -> VerserBrokerWebSocket:
+        """Open a VWS/1 WebSocket through the advertised route topology.
+
+        ``url`` supplies the routed hostname and path.  The returned handle
+        provides async ``send_text``, ``send_bytes``, ``receive``, ``ping``,
+        ``pong``, ``close``, and ``abort`` operations.
+        """
+        parsed = urlsplit(url)
+        domain = route_domain or parsed.hostname or ""
+        route = next(
+            (item for item in self._routes if item.get("domain") == domain), None
+        )
+        if route is None:
+            raise VerserWebSocketError(
+                "missing-guest",
+                "WebSocket endpoint is unavailable",
+                {"domain": domain, "status": 404},
+                404,
+            )
+        path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+        headers: list[tuple[str, str]] = [
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":authority", self._authority()),
+            (":path", "/verser/websocket"),
+            ("x-verser-target-id", route["targetId"]),
+            ("x-verser-domain", domain),
+            ("x-verser-source-id", self.broker_id),
+            ("x-verser-ws-path", path),
+        ]
+        if protocol:
+            headers.append(("x-verser-ws-protocol", protocol))
+        stream_id = await self._send_headers(
+            headers, end_stream=False, queue_maxsize=VWS_MAX_QUEUE_MESSAGES
+        )
+        try:
+            while True:
+                event = await self._events[stream_id].get()
+                if isinstance(event, Exception):
+                    raise VerserWebSocketError(
+                        "stream-failure", str(event), {"domain": domain}
+                    ) from event
+                if isinstance(event, h2.events.ResponseReceived):
+                    response_headers = dict(event.headers)
+                    status = int(response_headers.get(":status") or 0)
+                    if status != 200:
+                        body = await self._collect_error_response_body(stream_id)
+                        raise self._websocket_error_from_body(
+                            body, status, route["targetId"], domain
+                        )
+                    websocket = VerserBrokerWebSocket(
+                        self,
+                        stream_id,
+                        str(response_headers.get("x-verser-ws-protocol") or ""),
+                    )
+                    self._websockets.add(websocket)
+                    return websocket
+                if isinstance(event, (h2.events.StreamReset, h2.events.StreamEnded)):
+                    raise VerserWebSocketError(
+                        "websocket-negotiation-failed",
+                        "WebSocket negotiation response missing",
+                        {"targetId": route["targetId"], "domain": domain},
+                    )
+        except BaseException:
+            cleanup = self._cleanup_negotiation_stream(stream_id)
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                await cleanup
+            raise
+
+    async def _cleanup_negotiation_stream(self, stream_id: int) -> None:
+        try:
+            await self._reset_stream(stream_id)
+        finally:
+            self._events.pop(stream_id, None)
+
+    async def web_socket(self, url: str, **kwargs: Any) -> VerserBrokerWebSocket:
+        """Alias for :meth:`websocket`."""
+        return await self.websocket(url, **kwargs)
+
+    def _websocket_error_from_body(
+        self, body: bytes, status: int, target_id: str, domain: str
+    ) -> VerserWebSocketError:
+        try:
+            payload = _json.loads(body.decode("utf-8")) if body else {}
+        except (ValueError, UnicodeDecodeError):
+            payload = {}
+        error = payload.get("error", payload) if isinstance(payload, dict) else {}
+        if not isinstance(error, dict):
+            error = {}
+        code = str(
+            error.get("code")
+            or ("missing-guest" if status == 404 else "websocket-negotiation-failed")
+        )
+        context = error.get("context") if isinstance(error.get("context"), dict) else {}
+        context = {**context, "targetId": target_id, "domain": domain}
+        if code == "missing-guest":
+            context.setdefault("status", 404)
+        return VerserWebSocketError(
+            code,
+            str(error.get("message") or "WebSocket request failed"),
+            context,
+            status,
+        )
+
     async def _send_body(
         self,
         stream_id: int,
@@ -721,12 +1157,17 @@ class VerserBroker:
 
     async def _collect_error_response_body(self, stream_id: int) -> bytes:
         chunks: list[bytes] = []
+        total = 0
+        max_error_bytes = 64 * 1024
         while True:
             event = await self._events[stream_id].get()
             if isinstance(event, Exception):
                 raise event
             if isinstance(event, h2.events.DataReceived):
-                chunks.append(event.data)
+                if total < max_error_bytes:
+                    chunk = event.data[: max_error_bytes - total]
+                    chunks.append(chunk)
+                    total += len(chunk)
                 await self._acknowledge_received_data(
                     stream_id, int(event.flow_controlled_length)
                 )
@@ -1038,12 +1479,13 @@ class VerserBroker:
         *,
         end_stream: bool,
         create_queue: bool = True,
+        queue_maxsize: int | None = None,
     ) -> int:
         conn = self._require_conn()
         async with self._io_lock:
             stream_id = conn.get_next_available_stream_id()
             if create_queue:
-                self._events[stream_id] = asyncio.Queue()
+                self._events[stream_id] = asyncio.Queue(maxsize=queue_maxsize or 0)
             conn.send_headers(stream_id, list(headers), end_stream=end_stream)
             await self._flush_unlocked()
             return stream_id
@@ -1072,21 +1514,38 @@ class VerserBroker:
                     await self._flush_unlocked()
                     continue
                 waiter = asyncio.get_running_loop().create_future()
-                self._window_waiters.append(waiter)
+                self._window_waiters.setdefault(stream_id, []).append(waiter)
                 await self._flush_unlocked()
-            await waiter
+            try:
+                await waiter
+            finally:
+                waiters = self._window_waiters.get(stream_id, [])
+                if waiter in waiters:
+                    waiters.remove(waiter)
+                if not waiters:
+                    self._window_waiters.pop(stream_id, None)
 
-    def _notify_window_waiters(self) -> None:
-        waiters = self._window_waiters
-        self._window_waiters = []
+    def _notify_window_waiters(self, stream_id: int | None = None) -> None:
+        if stream_id in (None, 0):
+            waiters = [
+                item for group in self._window_waiters.values() for item in group
+            ]
+            self._window_waiters.clear()
+        else:
+            waiters = self._window_waiters.pop(stream_id, [])
         for waiter in waiters:
             if not waiter.done():
                 waiter.set_result(None)
 
     def _fail_window_waiters(self, error: Exception) -> None:
-        waiters = self._window_waiters
-        self._window_waiters = []
+        waiters = [item for group in self._window_waiters.values() for item in group]
+        self._window_waiters.clear()
         for waiter in waiters:
+            if not waiter.done():
+                waiter.set_exception(error)
+
+    def _fail_window_waiters_for_stream(self, stream_id: int, error: Exception) -> None:
+        for waiter in self._window_waiters.pop(stream_id, []):
             if not waiter.done():
                 waiter.set_exception(error)
 
@@ -1135,18 +1594,22 @@ class VerserBroker:
                     events = self._require_conn().receive_data(data)
                     for event in events:
                         if isinstance(event, h2.events.WindowUpdated):
-                            self._notify_window_waiters()
+                            self._notify_window_waiters(getattr(event, "stream_id", 0))
                         if isinstance(event, h2.events.StreamReset):
-                            self._fail_window_waiters(
+                            self._fail_window_waiters_for_stream(
+                                getattr(event, "stream_id", 0),
                                 RuntimeError(
                                     "Broker stream was reset while sending request body"
-                                )
+                                ),
                             )
                         if isinstance(event, h2.events.StreamEnded):
-                            self._notify_window_waiters()
+                            self._fail_window_waiters_for_stream(
+                                getattr(event, "stream_id", 0),
+                                RuntimeError("Broker stream ended while sending"),
+                            )
                         stream_id = getattr(event, "stream_id", None)
                         if stream_id in self._events:
-                            self._events[stream_id].put_nowait(event)
+                            self._queue_event(stream_id, event)
                     await self._flush_unlocked()
         except Exception as exc:
             self._fail_pending_streams(
@@ -1156,8 +1619,26 @@ class VerserBroker:
 
     def _fail_pending_streams(self, error: Exception) -> None:
         for queue in list(self._events.values()):
-            queue.put_nowait(error)
+            try:
+                queue.put_nowait(error)
+            except asyncio.QueueFull:
+                queue.get_nowait()
+                queue.put_nowait(error)
         self._fail_window_waiters(error)
+
+    def _queue_event(self, stream_id: int, event: Any) -> None:
+        queue = self._events[stream_id]
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            queue.get_nowait()
+            queue.put_nowait(
+                RuntimeError(f"WebSocket event queue exceeded for stream {stream_id}")
+            )
+            try:
+                self._require_conn().reset_stream(stream_id)
+            except Exception:
+                pass
 
     def _resolve_waiters(self, domains: list[str | None]) -> None:
         for domain in set(domains):

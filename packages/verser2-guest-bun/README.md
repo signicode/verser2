@@ -119,14 +119,37 @@ guest.attach({
 Matching precedence: exact path → `:param` routes → `*` wildcard → `fetch`
 fallback.
 
+## WebSockets
+
+Bun Guests expose Bun's usual upgrade shape over VWS/1, without opening a Bun
+listener:
+
+```ts
+guest.attach({
+  fetch(request, server) {
+    if (server.upgrade(request, { protocol: 'chat.v1' })) return undefined;
+    return new Response('not found', { status: 404 });
+  },
+  websocket: {
+    message(ws, message) { ws.send(message); },
+    close(_ws, code, reason) { console.log(code, reason); },
+  },
+}, 'bun-client-a.local.test');
+```
+
+The Bun-facing Broker inherits `webSocket()` and adds `nativeWebSocket()` from
+the Node transport. Both use explicit VWS/1 frames and can follow an
+authenticated multi-Host federation path. The route advertisement contains no
+WebSocket capability bit; an advertised endpoint may still reject an open.
+
 ## Caveats
 
 - The Bun Guest uses the same transport as the Node Guest; route advertisement,
   lifecycle events, close behavior, and lease management are consistent.
-- WebSocket upgrade forwarding is **not** implemented — `server.upgrade(request)`
-  returns `false`.
-- The Bun-facing Broker reuses the Node direct VWS/1 `webSocket()` API; Bun Guest
-  `server.upgrade()` remains unsupported.
+- Generic HTTP/1 upgrade forwarding is **not** implemented. `server.upgrade()`
+  is only the Bun Guest VWS/1 adapter described above.
+- CONNECT/RFC8441, L4 forwarding, and Agent/Dispatcher upgrades remain
+  unsupported.
 - Direct Broker request bodies use the Node Broker surface: omit the body, pass
   `Buffer` chunks, or stream with a Node `Readable`. Fetch-style request bodies
   are available through `createFetch()` / `createDispatcher()`.

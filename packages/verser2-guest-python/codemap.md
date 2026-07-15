@@ -23,8 +23,9 @@ Key differences from Node/Bun Guests:
 - **Async context manager** — `VerserBroker` supports `async with broker:` to auto-connect and auto-close.
 - **VWS/1 WebSocket leases** — Dedicated `/verser/guest/websocket-lease` streams
   map explicit framed WebSocket messages to ASGI websocket scopes. They are
-  separate from HTTP envelope leases; generic upgrades and Python Host/fetch/
-  Agent/Dispatcher APIs are unsupported.
+  separate from HTTP envelope leases. `VerserBroker.websocket()` opens the same
+  VWS/1 protocol through advertised direct or federated routes. Generic upgrades
+  and Python Host/fetch/Agent/Dispatcher APIs are unsupported.
 - **npm workspace bridge** — `package.json` declares `"main": "dist/index.js"` for npm workspace tooling. The `scripts/build.mjs` writes a minimal JS entrypoint that exports package name constants. Actual Python logic lives under `src/verser2_guest_python/`.
 
 ## Data & Control Flow

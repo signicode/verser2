@@ -1,3 +1,4 @@
+import { createVerserError } from '@signicode/verser-common';
 import { DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE } from './constants';
 import { resolveRoute } from './routes';
 import type {
@@ -5,6 +6,9 @@ import type {
   VerserBunGuestServer,
   VerserBunRequest,
   VerserBunRoutes,
+  VerserBunUpgradeOptions,
+  VerserBunWebSocket,
+  VerserBunWebSocketHandler,
 } from './types';
 
 export interface NodeStyleRequest {
@@ -62,6 +66,7 @@ interface VerserBunDispatchRequestHandler {
     request: VerserBunRequest,
     server: VerserBunGuestServer,
   ) => Promise<unknown> | unknown;
+  readonly websocket?: VerserBunWebSocketHandler;
 }
 
 const asRequestUrl = (request: VerserBunDispatchRequest): string => {
@@ -270,6 +275,281 @@ export async function dispatchVerserBunRequestInternal(
     await resolveResponse(await handler.fetch(toWebRequest(request), server)),
   );
 }
+
+/**
+ * Adapts Bun's synchronous `server.upgrade()` convention to the Guest's
+ * VWS/1 lease handler. The returned callback is intentionally separate from
+ * the HTTP adapter: an HTTP request can never accidentally consume a WebSocket
+ * lease, and route advertisements remain unchanged.
+ */
+export const createNodeStyleWebSocketHandler = (
+  domain: string,
+  handler: VerserBunDispatchRequestHandler,
+): ((
+  open: { domain: string; path: string; protocol: string },
+  ws: VerserBunWebSocket,
+) => { protocol?: string } | false | Promise<{ protocol?: string } | false>) => {
+  return (open, ws) => {
+    let upgraded = false;
+    let upgradeOptions: VerserBunUpgradeOptions | undefined;
+    const server: VerserBunGuestServer = {
+      upgrade(request, options) {
+        if (upgraded || request !== webRequest) return false;
+        // VWS/1 has no response-header field. Do not silently discard Bun
+        // upgrade headers; callers must use the application protocol instead.
+        if (options?.headers !== undefined) return false;
+        const selectedProtocol = options?.protocol ?? open.protocol;
+        if (selectedProtocol !== '' && selectedProtocol !== open.protocol) return false;
+        upgradeOptions = options;
+        upgraded = true;
+        return upgraded;
+      },
+    };
+    const webRequest = toWebRequest({
+      method: 'GET',
+      path: open.path,
+      origin: `http://${domain}`,
+      headers: {},
+    });
+
+    const invoke = async (): Promise<{ protocol?: string } | false> => {
+      const requestPath = new URL(webRequest.url).pathname;
+      const routeMatch =
+        handler.routes === undefined ? undefined : resolveRoute(handler.routes, requestPath, 'GET');
+      let value: unknown;
+      if (routeMatch?.allow !== undefined) {
+        throw createVerserError('missing-guest', 'WebSocket endpoint is unavailable', {
+          domain,
+          path: open.path,
+          status: 404,
+        });
+      }
+      if (routeMatch?.value !== undefined) {
+        value = isResponseLike(routeMatch.value)
+          ? routeMatch.value
+          : await routeMatch.value(
+              Object.assign(webRequest, { params: routeMatch.params }),
+              server,
+            );
+      } else if (handler.fetch !== undefined) {
+        value = await handler.fetch(webRequest, server);
+      }
+
+      // Bun treats a request as upgraded only when the handler calls upgrade.
+      if (upgraded) {
+        const selectedProtocol = upgradeOptions?.protocol ?? open.protocol;
+        (ws as unknown as { protocol: string; data?: unknown }).protocol = selectedProtocol;
+        (ws as unknown as { data?: unknown }).data = upgradeOptions?.data;
+        wireBunWebSocketCallbacks(ws, handler.websocket);
+        return { protocol: selectedProtocol };
+      }
+      // A Response is an explicit endpoint result (normally 404). A missing
+      // response is a negotiation failure; close without sending an error frame.
+      if (value === undefined) {
+        throw createVerserError(
+          'websocket-negotiation-failed',
+          'WebSocket negotiation response missing',
+          { domain, path: open.path },
+        );
+      }
+      const status = value instanceof Response ? value.status : 404;
+      throw createVerserError('missing-guest', 'WebSocket endpoint is unavailable', {
+        domain,
+        path: open.path,
+        status,
+      });
+    };
+
+    return invoke();
+  };
+};
+
+interface BunNodeWebSocket {
+  readonly readyState: number;
+  readonly protocol: string;
+  readonly data?: unknown;
+  send(
+    data: string | Uint8Array | ArrayBuffer,
+    options?: { type: 'text' | 'binary' },
+  ): Promise<void> | void;
+  close(code?: number, reason?: string): void;
+  terminate?: () => void;
+  getBufferedAmount?: () => number;
+  readonly bufferedAmount?: number;
+  ping?: (data?: string) => Promise<void>;
+  pong?: (data?: string) => Promise<void>;
+  onopen: BunEventHandler<unknown> | null;
+  onmessage: BunEventHandler<{ data: string | Buffer | ArrayBuffer }> | null;
+  onclose: BunEventHandler<{ code: number; reason: string }> | null;
+  onerror: ((error: Error) => void | Promise<void>) | null;
+}
+
+type BunEventHandler<T> = { bivarianceHack(event: T): void }['bivarianceHack'];
+
+/** Wraps the Node VWS object with Bun's default-send and EventHandler shape. */
+export const createBunWebSocketFacade = (ws: BunNodeWebSocket): VerserBunWebSocket => {
+  let pendingBytes = 0;
+  let drainListener: (() => void) | undefined;
+  const bunSocket: VerserBunWebSocket = {
+    get readyState() {
+      return ws.readyState;
+    },
+    get protocol() {
+      return ws.protocol;
+    },
+    get data() {
+      return ws.data;
+    },
+    get bufferedAmount() {
+      const transportBuffered =
+        typeof ws.getBufferedAmount === 'function'
+          ? ws.getBufferedAmount()
+          : (ws.bufferedAmount ?? 0);
+      return Math.max(pendingBytes, transportBuffered);
+    },
+    send(data) {
+      if (ws.readyState !== 1) return 0;
+      const payload =
+        typeof data === 'string'
+          ? data
+          : Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data);
+      const byteLength = Buffer.byteLength(payload);
+      const underPressure = pendingBytes > 0;
+      pendingBytes += byteLength;
+      const sendOptions = {
+        type: typeof data === 'string' ? ('text' as const) : ('binary' as const),
+      };
+      const completeWhenDrained = (): void => {
+        const getBufferedAmount = ws.getBufferedAmount;
+        const readBufferedAmount =
+          typeof getBufferedAmount === 'function'
+            ? () => getBufferedAmount.call(ws)
+            : ws.bufferedAmount === undefined
+              ? undefined
+              : () => ws.bufferedAmount ?? 0;
+        if (readBufferedAmount === undefined) {
+          pendingBytes -= byteLength;
+          if (pendingBytes === 0) drainListener?.();
+          return;
+        }
+        const waitForZero = (): void => {
+          if (readBufferedAmount() === 0) {
+            pendingBytes -= byteLength;
+            if (pendingBytes === 0) drainListener?.();
+            return;
+          }
+          setImmediate(waitForZero);
+        };
+        waitForZero();
+      };
+      try {
+        const result = ws.send(payload, sendOptions);
+        if (
+          result === undefined &&
+          typeof ws.getBufferedAmount !== 'function' &&
+          ws.bufferedAmount === undefined
+        )
+          return byteLength;
+        Promise.resolve(result).then(completeWhenDrained, (error: unknown) => {
+          pendingBytes -= byteLength;
+          void Promise.resolve(
+            bunSocket.onerror?.(error instanceof Error ? error : new Error(String(error))),
+          ).catch(() => undefined);
+          ws.close(1011, 'send failed');
+        });
+      } catch (error: unknown) {
+        pendingBytes -= byteLength;
+        void Promise.resolve(
+          bunSocket.onerror?.(error instanceof Error ? error : new Error(String(error))),
+        ).catch(() => undefined);
+        ws.close(1011, 'send failed');
+      }
+      return underPressure ? -1 : byteLength;
+    },
+    close(code, reason) {
+      ws.close(code, reason);
+    },
+    terminate() {
+      ws.terminate?.();
+    },
+    getBufferedAmount() {
+      return typeof ws.getBufferedAmount === 'function'
+        ? ws.getBufferedAmount()
+        : (ws.bufferedAmount ?? 0);
+    },
+    ping(data) {
+      return ws.ping?.(data) ?? Promise.resolve();
+    },
+    pong(data) {
+      return ws.pong?.(data) ?? Promise.resolve();
+    },
+    onopen: null,
+    onmessage: null,
+    onclose: null,
+    onerror: null,
+  };
+  ws.onopen = () => bunSocket.onopen?.({ type: 'open', target: bunSocket });
+  ws.onmessage = (event) => {
+    const data =
+      event.data instanceof Buffer
+        ? event.data
+        : event.data instanceof ArrayBuffer
+          ? Buffer.from(new Uint8Array(event.data))
+          : event.data;
+    bunSocket.onmessage?.({ data });
+  };
+  ws.onclose = (event) => bunSocket.onclose?.(event);
+  ws.onerror = (error) => {
+    void Promise.resolve(bunSocket.onerror?.(error)).catch(() => ws.close(1011, 'callback failed'));
+  };
+  (
+    bunSocket as VerserBunWebSocket & { setDrainListener(listener: () => void): void }
+  ).setDrainListener = (listener) => {
+    drainListener = listener;
+  };
+  return bunSocket;
+};
+
+const wireBunWebSocketCallbacks = (
+  ws: VerserBunWebSocket,
+  callbacks: VerserBunWebSocketHandler | undefined,
+): void => {
+  if (callbacks === undefined) return;
+  const nodeSocket = ws as unknown as BunNodeWebSocket;
+  const bunSocket = createBunWebSocketFacade(nodeSocket);
+  const cleanupAfterCallbackFailure = (error: unknown): void => {
+    try {
+      bunSocket.close(
+        1011,
+        error instanceof Error ? error.message.slice(0, 123) : 'callback failed',
+      );
+    } catch {
+      // The transport may already be closed; cleanup is best effort.
+    }
+  };
+  const handleCallback = (callback: () => void | Promise<void>): void => {
+    try {
+      void Promise.resolve(callback()).catch(cleanupAfterCallbackFailure);
+    } catch (error) {
+      cleanupAfterCallbackFailure(error);
+    }
+  };
+  (
+    bunSocket as VerserBunWebSocket & { setDrainListener(listener: () => void): void }
+  ).setDrainListener(() => handleCallback(() => callbacks.drain?.(bunSocket)));
+  bunSocket.onopen = () => {
+    handleCallback(() => callbacks.open?.(bunSocket));
+  };
+  bunSocket.onmessage = (event) => {
+    handleCallback(() => callbacks.message?.(bunSocket, event.data));
+  };
+  bunSocket.onclose = (event) => {
+    handleCallback(() => callbacks.close?.(bunSocket, event.code, event.reason));
+  };
+  bunSocket.onerror = (error) => {
+    handleCallback(() => callbacks.error?.(bunSocket, error));
+  };
+};
 
 const writeResponseBody = async (
   source: ReadableStream<Uint8Array> | null,

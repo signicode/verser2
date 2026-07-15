@@ -7,6 +7,7 @@ import type {
   VerserBrokerRouteChangeEvent,
   VerserGuestRevocationResponse,
 } from '@signicode/verser2-guest-node';
+import type { NativeVerserWebSocket } from '@signicode/verser2-guest-node';
 
 /**
  * Re-exports the Node Broker types used by the Bun Broker wrapper.
@@ -21,6 +22,20 @@ export type {
   VerserBrokerRouteChangeEvent,
   VerserGuestRevocationResponse,
 };
+
+/** Bun Broker surface with runtime-appropriate WebSocket return types. */
+export interface VerserBunBroker extends Omit<VerserBroker, 'nativeWebSocket'> {
+  /** Preserves the existing VWS EventEmitter API. */
+  webSocket(
+    options: Parameters<VerserBroker['webSocket']>[0],
+  ): ReturnType<VerserBroker['webSocket']>;
+  nativeWebSocket(
+    options: Parameters<VerserBroker['webSocket']>[0],
+  ): Promise<VerserBunNativeWebSocket>;
+}
+
+/** Native EventTarget-compatible WebSocket exposed by `nativeWebSocket()`. */
+export type VerserBunNativeWebSocket = InstanceType<typeof NativeVerserWebSocket>;
 
 /**
  * Options for creating a Bun Guest via {@link createVerserBunGuest}.
@@ -92,8 +107,7 @@ export interface VerserBunGuest {
    * and/or a `routes` table for path-based routing. Route tables support exact
    * paths, `:param` segments, wildcard `*`, and method maps.
    *
-   * **WebSocket upgrade is not implemented.** The `server.upgrade()` call in
-   * route handlers always returns `false`.
+   * `server.upgrade()` claims a VWS/1 lease and invokes `websocket` callbacks.
    *
    * @param handler - Handler object with `fetch` and/or `routes`.
    * @param domain - Optional route domain (defaults to Guest ID).
@@ -172,15 +186,15 @@ export type VerserBunRouteMethod =
 /**
  * Handler function for a Bun route.
  *
- * Receives the request with parsed `params` and a `server` object (with
- * unimplemented `upgrade`), and returns a `Response`.
+ * Receives the request with parsed `params` and a `server` object whose
+ * `upgrade()` claims the request for the VWS/1 WebSocket callbacks.
  *
  * @public
  */
 export type VerserBunRouteHandler = (
   request: VerserBunRequest,
   server: VerserBunGuestServer,
-) => Promise<Response> | Response;
+) => Promise<Response | undefined> | Response | undefined;
 
 /**
  * A route value — either a static `Response` or a handler function.
@@ -226,9 +240,11 @@ export interface VerserBunGuestRequestHandler {
   readonly fetch?: (
     request: VerserBunRequest,
     server: VerserBunGuestServer,
-  ) => Promise<unknown> | unknown;
+  ) => Response | undefined | Promise<Response | undefined>;
   /** Path-based route table. */
   readonly routes?: VerserBunRoutes;
+  /** Bun `Bun.serve()`-style WebSocket callbacks used after `server.upgrade()`. */
+  readonly websocket?: VerserBunWebSocketHandler;
 }
 
 /**
@@ -247,8 +263,8 @@ export interface VerserBunGuestResponse {
 /**
  * Server object passed to Bun route handlers.
  *
- * The `upgrade` method always returns `false` — WebSocket upgrade is
- * **not implemented**.
+ * `upgrade()` claims the request for the VWS/1 WebSocket transport. It does not
+ * open a listening Bun server or expose the HTTP/2 stream to application code.
  *
  * @public
  */
@@ -256,9 +272,51 @@ export interface VerserBunGuestServer {
   /**
    * Attempt to upgrade the request to a WebSocket connection.
    *
-   * **Not implemented.** Always returns `false`.
+   * Returns `true` when the request has been claimed by a WebSocket handler.
+   * The actual connection is carried over VWS/1 by the Guest transport.
    */
-  upgrade: (request: Request) => boolean;
+  upgrade: (request: Request, options?: VerserBunUpgradeOptions) => boolean;
+}
+
+/** Options accepted by Bun's `server.upgrade()` surface. */
+export interface VerserBunUpgradeOptions {
+  readonly data?: unknown;
+  readonly headers?: HeadersInit;
+  readonly protocol?: string;
+}
+
+/** Bun-compatible callbacks for an accepted Guest WebSocket. */
+export interface VerserBunWebSocketHandler {
+  readonly open?: (webSocket: VerserBunWebSocket) => void | Promise<void>;
+  readonly message?: (
+    webSocket: VerserBunWebSocket,
+    message: string | Buffer,
+  ) => void | Promise<void>;
+  readonly drain?: (webSocket: VerserBunWebSocket) => void | Promise<void>;
+  readonly close?: (
+    webSocket: VerserBunWebSocket,
+    code: number,
+    reason: string,
+  ) => void | Promise<void>;
+  readonly error?: (webSocket: VerserBunWebSocket, error: Error) => void | Promise<void>;
+}
+
+/** The WebSocket shape supplied to Bun callbacks. */
+export interface VerserBunWebSocket {
+  readonly readyState: number;
+  readonly protocol: string;
+  readonly data?: unknown;
+  readonly bufferedAmount: number;
+  send(data: string | Buffer | Uint8Array | ArrayBuffer): number;
+  close(code?: number, reason?: string): void;
+  terminate(): void;
+  getBufferedAmount(): number;
+  ping(data?: string): Promise<void>;
+  pong(data?: string): Promise<void>;
+  onopen: ((event: { type: 'open'; target: VerserBunWebSocket }) => void) | null;
+  onmessage: ((event: { data: string | Buffer }) => void) | null;
+  onclose: ((event: { code: number; reason: string }) => void) | null;
+  onerror: ((error: Error) => void | Promise<void>) | null;
 }
 
 export { DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE } from './constants';

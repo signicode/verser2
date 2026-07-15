@@ -79,7 +79,8 @@ response.body.pipe(process.stdout);
 - [Connecting](./docs/connecting.md) — create a Host, connect Guests and Brokers
 - [Exposing HTTP handlers](./docs/exposing-http.md) — attach Node, Bun, or Python handlers
 - [Making requests](./docs/making-requests.md) — Broker request, Agent, Dispatcher, Fetch
-- [VWS/1 WebSockets](./docs/websockets.md) — direct Node and Python ASGI WebSocket APIs
+- [VWS/1 WebSockets](./docs/websockets.md) — Node, Bun, and Python ASGI WebSocket APIs,
+  including Host federation
 - [Routes](./docs/routes.md) — route advertisement and exact hostname matching
 - [Host federation and upstreams](./docs/host-federation.md) — Host-to-Host links, topology, and HA limits
 - [Certificates](./docs/certificates.md) — TLS configuration, mTLS, self-signed certs
@@ -115,13 +116,15 @@ validation commands.
   the Python Guest maps VWS leases to ASGI websocket scopes. Generic HTTP/1
   upgrades, CONNECT/RFC8441, and L4 forwarding are unsupported.
 - Dispatcher/Agent upgrade handling remains unsupported. Bun
-  `server.upgrade()` returns `false`; Bun WebSocket Guest support is deferred.
+  `server.upgrade()` is supported only as the VWS/1 Guest adapter; it does not
+  expose a generic HTTP/1 upgrade or a listening Bun server.
 - verser2 is not a complete public gateway. Applications remain responsible for
   authentication, authorization, and routing policy.
 - Per-request Broker target authorization is not implemented.
 - Host-to-Host federation is route-aware; generic L4 tunneling and active
   in-flight request migration are not implemented.
-- Federated WebSocket routes are explicitly unsupported.
+- Federated VWS/1 WebSocket routes are supported across Hosts that implement the
+  authenticated versioned federation endpoint; generic upgrade tunneling is not.
 
 ## Status
 

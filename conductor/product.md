@@ -35,11 +35,11 @@ The implemented foundation includes the TypeScript/Node.js package path, a Bun G
 - A Node Guest that owns or receives a normal `http.Server` or request listener without calling `listen()`.
 - A Bun Guest that adapts Bun/Fetch-style handlers and local Bun-style routes without calling `Bun.serve()` or opening an inbound port, plus a Bun-facing Broker API that reuses the existing transport internally.
 - A Python Guest that connects outbound to the existing Host and dispatches routed requests into an ASGI 3 app without opening an inbound port.
-- Node, Bun-facing, and Python Broker APIs that can present client certificate identity when configured, observe route lifecycle changes, and route requests through the Host into a connected Guest's local handler; Node Broker request paths also follow eligible internal `307`/`308` redirects for advertised routes with bounded body replay.
+- Node, Bun-facing, and Python Broker APIs that can present client certificate identity when configured, observe route lifecycle changes, and route HTTP requests and VWS/1 WebSockets through the Host into a connected Guest's local handler, including authenticated multi-Host federation where the topology permits it; Node Broker request paths also follow eligible internal `307`/`308` redirects for advertised routes with bounded body replay.
 - A minimal plain `node:http` Agent path for Host-advertised domains.
 - End-to-end request and response forwarding for the MVP path while preserving core HTTP method, path, header, status, and body semantics.
 
-Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Java guests, advanced Agent behavior, Broker per-request authorization, complete authentication/authorization systems, WebSocket forwarding for Bun, and public gateway policy are future track work. Python Host is not implemented and is not on the current roadmap.
+Current MVP limitations are documented in the README: HTTP/3, browser/Rust/Go/Java guests, advanced Agent behavior, Broker per-request authorization, complete authentication/authorization systems, and public gateway policy are future track work. VWS/1 WebSocket routing is implemented for Node, Bun, and Python Broker/Guest paths; generic HTTP upgrade, CONNECT/RFC8441, HTTP/3, and Python Host behavior remain unsupported.
 
 ## Product Principles
 

@@ -2,11 +2,124 @@ import { createVerserError } from './errors';
 import { createRoutedDomainRegistration } from './routing';
 import type {
   FederatedRouteRegistration,
+  VerserErrorCode,
   VerserFederatedRoutesControlFrame,
   VerserHostFederationHandshake,
   VerserHostId,
 } from './types';
 import { isRecord, requireNonEmpty } from './utils';
+
+/** Version negotiated by the dedicated Host-to-Host VWS stream. */
+export const FEDERATION_VWS_VERSION = 1;
+
+/** Dedicated, versioned Host-to-Host VWS stream endpoint. */
+export const FEDERATION_VWS_PATH = '/verser/host/federation/websocket';
+
+export interface FederationVwsOpen {
+  readonly type: 'open';
+  readonly version: typeof FEDERATION_VWS_VERSION;
+  readonly sourceId: string;
+  readonly targetId: string;
+  readonly domain: string;
+  readonly path: string;
+  readonly protocol?: string;
+  readonly originHostId: VerserHostId;
+  readonly viaHostIds: readonly VerserHostId[];
+  readonly hopCount: number;
+}
+
+export interface FederationVwsAccept {
+  readonly type: 'accept';
+  readonly version: typeof FEDERATION_VWS_VERSION;
+  readonly protocol?: string;
+}
+
+export interface FederationVwsOpenInput {
+  readonly sourceId: string;
+  readonly targetId: string;
+  readonly domain: string;
+  readonly path: string;
+  readonly protocol?: string;
+  readonly originHostId: string;
+  readonly viaHostIds: readonly string[];
+  readonly hopCount: number;
+}
+
+export interface FederationVwsError {
+  readonly type: 'error';
+  readonly version: typeof FEDERATION_VWS_VERSION;
+  readonly message: string;
+  readonly code?: VerserErrorCode;
+}
+
+export function createFederationVwsOpen(input: FederationVwsOpenInput): FederationVwsOpen {
+  if (!isRecord(input) || typeof input.sourceId !== 'string' || input.sourceId.length === 0) {
+    throw createVerserError('protocol-error', 'Federation VWS open source id is required');
+  }
+  if (typeof input.targetId !== 'string' || input.targetId.length === 0) {
+    throw createVerserError('protocol-error', 'Federation VWS open target id is required');
+  }
+  if (typeof input.domain !== 'string' || input.domain.length === 0) {
+    throw createVerserError('protocol-error', 'Federation VWS open domain is required');
+  }
+  if (typeof input.path !== 'string' || input.path.length === 0) {
+    throw createVerserError('protocol-error', 'Federation VWS open path is required');
+  }
+  if (!isValidHopCount(input.hopCount) || !Array.isArray(input.viaHostIds)) {
+    throw createVerserError('protocol-error', 'Federation VWS route metadata is invalid');
+  }
+  if (input.protocol !== undefined && typeof input.protocol !== 'string') {
+    throw createVerserError('protocol-error', 'Federation VWS protocol must be a string');
+  }
+  return {
+    type: 'open',
+    version: FEDERATION_VWS_VERSION,
+    sourceId: input.sourceId,
+    targetId: input.targetId,
+    domain: input.domain,
+    path: input.path,
+    ...(input.protocol === undefined ? {} : { protocol: input.protocol }),
+    originHostId: createVerserHostId(input.originHostId),
+    viaHostIds: input.viaHostIds.map((hostId) => createVerserHostId(hostId)),
+    hopCount: input.hopCount,
+  };
+}
+
+export function createFederationVwsAccept(input: { protocol?: string } = {}): FederationVwsAccept {
+  const { protocol } = input;
+  if (protocol !== undefined && typeof protocol !== 'string') {
+    throw createVerserError('protocol-error', 'Federation VWS accepted protocol must be a string');
+  }
+  return {
+    type: 'accept',
+    version: FEDERATION_VWS_VERSION,
+    ...(protocol === undefined ? {} : { protocol }),
+  };
+}
+
+export function createFederationVwsError(
+  message: string,
+  code: VerserErrorCode = 'protocol-error',
+): FederationVwsError {
+  if (typeof message !== 'string' || message.length === 0) {
+    throw createVerserError('protocol-error', 'Federation VWS error message is required');
+  }
+  return { type: 'error', version: FEDERATION_VWS_VERSION, message, code };
+}
+
+/** Creates the stable error used when a peer never returns accept/error. */
+export function createFederationVwsNegotiationFailure(
+  context: {
+    targetId?: string;
+    domain?: string;
+  } = {},
+): never {
+  throw createVerserError(
+    'websocket-negotiation-failed',
+    'Federation VWS negotiation response was not received',
+    context,
+  );
+}
 
 /**
  * Validates and creates a {@link VerserHostId}.

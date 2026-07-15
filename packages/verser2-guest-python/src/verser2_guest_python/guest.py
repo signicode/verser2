@@ -84,6 +84,8 @@ class VerserGuest:
         tls_pfx_file: str | None = None,
         tls_pfx_password: str | None = None,
         min_waiting_streams: int = 1,
+        min_waiting_websocket_streams: int = 2,
+        max_websocket_streams: int = 8,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         """Initialise the Guest peer.
@@ -132,6 +134,10 @@ class VerserGuest:
         self.tls_pfx_file = tls_pfx_file
         self.tls_pfx_password = tls_pfx_password
         self.min_waiting_streams = max(1, min_waiting_streams)
+        self.min_waiting_websocket_streams = max(1, min_waiting_websocket_streams)
+        self.max_websocket_streams = max(
+            self.min_waiting_websocket_streams, max_websocket_streams
+        )
         self.max_response_bytes = max_response_bytes
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -141,6 +147,8 @@ class VerserGuest:
         self._reader_task: asyncio.Task[None] | None = None
         self._lease_counter = 0
         self._lease_tasks: list[asyncio.Task[None]] = []
+        self._ws_lease_tasks: list[asyncio.Task[None]] = []
+        self._ws_active_stream_ids: set[int] = set()
         self._closed = False
         self._window_waiters: dict[int, list[asyncio.Future[None]]] = {}
 
@@ -269,7 +277,8 @@ class VerserGuest:
         for _ in range(self.min_waiting_streams):
             self._start_lease_task()
         if self.app is not None:
-            self._start_ws_lease_task()
+            for _ in range(self.min_waiting_websocket_streams):
+                self._start_ws_lease_task()
 
     def _create_ssl_context(self) -> ssl.SSLContext:
         return create_client_ssl_context(
@@ -422,16 +431,35 @@ class VerserGuest:
         task.add_done_callback(prune)
 
     def _start_ws_lease_task(self) -> None:
+        if len(self._ws_lease_tasks) >= self.max_websocket_streams:
+            return
         task = asyncio.create_task(self._open_websocket_lease_stream())
         self._lease_tasks.append(task)
+        self._ws_lease_tasks.append(task)
 
         def prune(completed_task: asyncio.Task[None]) -> None:
             try:
                 self._lease_tasks.remove(completed_task)
             except ValueError:
                 pass
+            try:
+                self._ws_lease_tasks.remove(completed_task)
+            except ValueError:
+                pass
+            self._replenish_ws_leases()
 
         task.add_done_callback(prune)
+
+    def _replenish_ws_leases(self) -> None:
+        waiting = len(self._ws_lease_tasks) - len(self._ws_active_stream_ids)
+        while (
+            not self._closed
+            and self._writer is not None
+            and waiting < self.min_waiting_websocket_streams
+            and len(self._ws_lease_tasks) < self.max_websocket_streams
+        ):
+            self._start_ws_lease_task()
+            waiting += 1
 
     async def _open_websocket_lease_stream(self) -> None:
         stream_id = await self._send_headers(
@@ -451,12 +479,39 @@ class VerserGuest:
         except asyncio.CancelledError:
             cancelled = True
             raise
+        except Exception as error:
+            code = (
+                1009 if "maximum" in str(error) or "too large" in str(error) else 1002
+            )
+            try:
+                await self._send_data(
+                    stream_id,
+                    (
+                        json.dumps(
+                            {"type": "close", "code": code, "reason": "protocol error"}
+                        )
+                        + "\n"
+                    ).encode(),
+                    False,
+                )
+            except Exception:
+                pass
         finally:
+            if not self._closed:
+                await self._reset_stream(stream_id)
             self._events.pop(stream_id, None)
             if not self._closed and not cancelled:
-                self._start_ws_lease_task()
+                self._replenish_ws_leases()
 
     async def _read_websocket_lease(self, stream_id: int) -> None:
+        try:
+            await self._read_websocket_lease_impl(stream_id)
+        finally:
+            self._ws_active_stream_ids.discard(stream_id)
+            if not self._closed:
+                self._replenish_ws_leases()
+
+    async def _read_websocket_lease_impl(self, stream_id: int) -> None:
         buffer = b""
         while not self._closed:
             event = await self._events[stream_id].get()
@@ -520,6 +575,8 @@ class VerserGuest:
                         False,
                     )
                     return
+                self._ws_active_stream_ids.add(stream_id)
+                self._replenish_ws_leases()
                 await self._dispatch_leased_websocket_stream(
                     stream_id, line + b"\n" + buffer
                 )
@@ -825,13 +882,20 @@ class VerserGuest:
             if requested_protocol
             else []
         )
-        connection = VwsAsgiConnection(write, offered_protocols=offered_protocols)
+        connection = VwsAsgiConnection(
+            write,
+            offered_protocols=offered_protocols,
+            error_context={"guestId": self.guest_id, "domain": domain, "path": path},
+        )
         metadata = {
             "path": path,
             "headers": (
-                {"sec-websocket-protocol": requested_protocol}
+                {
+                    "host": domain,
+                    "sec-websocket-protocol": requested_protocol,
+                }
                 if requested_protocol
-                else {}
+                else {"host": domain}
             ),
         }
 
@@ -890,12 +954,53 @@ class VerserGuest:
                     h2_ended = True
                     transport_terminated = True
                     break
+                await asyncio.sleep(0)
             if not app_task.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(app_task), 0.25)
                 except asyncio.TimeoutError:
                     app_task.cancel()
                     await asyncio.gather(app_task, return_exceptions=True)
+            app_failure = None
+            if app_task.done() and not app_task.cancelled():
+                app_failure = app_task.exception()
+            if app_failure is not None:
+                if connection.accepted and not connection.closed:
+                    await connection.send(
+                        {
+                            "type": "websocket.close",
+                            "code": 1011,
+                            "reason": "application failure",
+                        }
+                    )
+                elif not connection.closed:
+                    await write(
+                        {
+                            "type": "error",
+                            "code": "local-handler-failure",
+                            "message": str(app_failure),
+                            "context": {
+                                "guestId": self.guest_id,
+                                "domain": domain,
+                                "path": path,
+                            },
+                        }
+                    )
+                    connection.closed = True
+            if not connection.accepted and not connection.closed:
+                await write(
+                    {
+                        "type": "error",
+                        "code": "websocket-negotiation-failed",
+                        "message": "WebSocket negotiation response missing",
+                        "context": {
+                            "guestId": self.guest_id,
+                            "domain": domain,
+                            "path": path,
+                        },
+                    }
+                )
+                connection.closed = True
             if not connection.closed and not connection.close_sent:
                 await connection.send({"type": "websocket.close", "code": 1000})
             while not connection.closed and connection.close_sent:
