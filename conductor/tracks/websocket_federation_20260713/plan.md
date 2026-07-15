@@ -143,7 +143,7 @@
     - [x] Add focused boundary tests for valid below-limit and invalid oversized UTF-8 text, ping, and pong frames.
     - [x] Run Python workspace tests, focused bounded integration, build, lint, and changed-behavior coverage; confirm aggregate queues remain bounded.
 - [x] Task: Conductor - Phase Checkpoint 'Python Broker Frame-Size Reconciliation' (Protocol in workflow.md)
-    - [x] Obtain focused review, reconcile the deferred ledger, commit the checkpoint, push the branch, and record its SHA. Oracle confirmed exact boundary accounting and bounded reservations; checkpoint commit: pending.
+    - [x] Obtain focused review, reconcile the deferred ledger, commit the checkpoint, push the branch, and record its SHA. Oracle confirmed exact boundary accounting and bounded reservations; checkpoint commit: `0de4454` (`fix(websocket): account for exact Python VWS frames`).
 
 ### Phase 6 Validation Notes
 
