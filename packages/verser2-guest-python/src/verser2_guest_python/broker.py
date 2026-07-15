@@ -66,35 +66,24 @@ class VerserBrokerWebSocket:
             raise TypeError("WebSocket text data must be a string")
         await self._send_frame(
             {"type": "text", "data": data},
-            estimated_bytes=len(data.encode("utf-8")) * 6 + 128,
         )
 
     async def send_bytes(self, data: bytes | bytearray | memoryview) -> None:
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("WebSocket binary data must be bytes-like")
         raw = bytes(data)
-        estimated_bytes = ((len(raw) + 2) // 3) * 4 + 64
-        if estimated_bytes > VWS_MAX_FRAME_BYTES:
-            raise VerserWebSocketError(
-                "protocol-error",
-                "WebSocket frame exceeds maximum size",
-                {"streamId": self._stream_id},
-            )
         await self._send_frame(
             {"type": "binary", "data": base64.b64encode(raw).decode("ascii")},
-            estimated_bytes=estimated_bytes,
         )
 
     async def ping(self, data: str = "") -> None:
         await self._send_frame(
             {"type": "ping", "data": data},
-            estimated_bytes=len(data.encode("utf-8")) * 6 + 128,
         )
 
     async def pong(self, data: str = "") -> None:
         await self._send_frame(
             {"type": "pong", "data": data},
-            estimated_bytes=len(data.encode("utf-8")) * 6 + 128,
         )
 
     async def _send_frame(
@@ -102,19 +91,19 @@ class VerserBrokerWebSocket:
         frame: dict[str, Any],
         *,
         end_stream: bool = False,
-        estimated_bytes: int | None = None,
     ) -> None:
         if self.closed:
             raise VerserWebSocketError("disconnected-target", "WebSocket is closed")
-        estimate = estimated_bytes or 128
-        if estimate > VWS_MAX_FRAME_BYTES:
+        payload = (json_dumps(frame) + "\n").encode("utf-8")
+        frame_bytes = len(payload)
+        if frame_bytes > VWS_MAX_FRAME_BYTES:
             raise VerserWebSocketError(
                 "protocol-error",
                 "WebSocket frame exceeds maximum size",
                 {"streamId": self._stream_id},
             )
         if self._pending_messages >= VWS_MAX_QUEUE_MESSAGES or (
-            self._reserved_bytes + estimate > VWS_MAX_FRAME_BYTES
+            self._reserved_bytes + frame_bytes > VWS_MAX_FRAME_BYTES
         ):
             raise VerserWebSocketError(
                 "protocol-error",
@@ -122,15 +111,8 @@ class VerserBrokerWebSocket:
                 {"streamId": self._stream_id},
             )
         self._pending_messages += 1
-        self._reserved_bytes += estimate
+        self._reserved_bytes += frame_bytes
         try:
-            payload = (json_dumps(frame) + "\n").encode("utf-8")
-            if len(payload) > VWS_MAX_FRAME_BYTES:
-                raise VerserWebSocketError(
-                    "protocol-error",
-                    "WebSocket frame exceeds maximum size",
-                    {"streamId": self._stream_id},
-                )
             async with self._send_lock:
                 self._outbound_bytes += len(payload)
                 try:
@@ -139,7 +121,7 @@ class VerserBrokerWebSocket:
                     self._outbound_bytes = max(0, self._outbound_bytes - len(payload))
         finally:
             self._pending_messages = max(0, self._pending_messages - 1)
-            self._reserved_bytes = max(0, self._reserved_bytes - estimate)
+            self._reserved_bytes = max(0, self._reserved_bytes - frame_bytes)
 
     async def receive(self) -> dict[str, Any]:
         """Receive the next text, binary, pong, or close event.
@@ -297,7 +279,6 @@ class VerserBrokerWebSocket:
         self._close_sent = True
         await self._send_frame(
             {"type": "close", "code": code, "reason": reason},
-            estimated_bytes=len(reason.encode("utf-8")) * 6 + 128,
         )
         waiter = self._peer_close_waiter or self._new_peer_close_waiter()
         try:

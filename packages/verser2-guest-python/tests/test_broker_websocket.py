@@ -12,6 +12,31 @@ from verser2_guest_python import (
 )
 
 
+VWS_MAX_FRAME_BYTES = 1 * 1024 * 1024
+
+
+def boundary_text(frame_type: str) -> tuple[str, str]:
+    def encoded_size(data: str) -> int:
+        return len(
+            (
+                json.dumps(
+                    {"type": frame_type, "data": data},
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+
+    data = "é" * 524_288
+    while encoded_size(data) >= VWS_MAX_FRAME_BYTES:
+        data = data[:-1]
+    oversized = data + "é" * 2
+    assert encoded_size(data) < VWS_MAX_FRAME_BYTES
+    assert encoded_size(oversized) > VWS_MAX_FRAME_BYTES
+    return data, oversized
+
+
 class BrokerWebSocketTest(unittest.TestCase):
     def broker(self):
         broker = create_verser_broker(
@@ -164,6 +189,57 @@ class BrokerWebSocketTest(unittest.TestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await first
             self.assertNotIn(12, broker._window_waiters)
+
+        self.run_async(run())
+
+    def test_utf8_text_ping_and_pong_use_encoded_frame_boundary(self):
+        broker = self.broker()
+        broker._conn = MagicMock()
+        broker._events[19] = asyncio.Queue(maxsize=64)
+        sent = []
+
+        async def run():
+            async def send_data(_stream_id, data, _end_stream):
+                sent.append(data)
+
+            broker._send_data = send_data
+            websocket = VerserBrokerWebSocket(broker, 19, "")
+            for frame_type, method in (
+                ("text", websocket.send_text),
+                ("ping", websocket.ping),
+                ("pong", websocket.pong),
+            ):
+                data, _ = boundary_text(frame_type)
+                await method(data)
+                frame = json.loads(sent[-1].decode())
+                self.assertEqual(frame["type"], frame_type)
+                self.assertLess(len(sent[-1]), VWS_MAX_FRAME_BYTES)
+            await websocket.abort()
+
+        self.run_async(run())
+
+    def test_utf8_text_ping_and_pong_reject_encoded_frames_over_one_mib(self):
+        broker = self.broker()
+        broker._conn = MagicMock()
+        broker._events[20] = asyncio.Queue(maxsize=64)
+
+        async def run():
+            async def send_data(_stream_id, data, _end_stream):
+                self.fail(f"oversized frame was sent: {len(data)}")
+
+            broker._send_data = send_data
+            websocket = VerserBrokerWebSocket(broker, 20, "")
+            for frame_type, method in (
+                ("text", websocket.send_text),
+                ("ping", websocket.ping),
+                ("pong", websocket.pong),
+            ):
+                _, data = boundary_text(frame_type)
+                with self.assertRaisesRegex(
+                    VerserWebSocketError, "frame exceeds maximum size"
+                ):
+                    await method(data)
+            await websocket.abort()
 
         self.run_async(run())
 

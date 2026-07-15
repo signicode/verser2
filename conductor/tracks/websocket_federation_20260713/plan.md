@@ -135,3 +135,18 @@
 - Final bounded validation: 238 targeted tests passed; canonical `npm test` passed 408 tests with 4 expected skips; `npm run build`, `npm run lint`, and `git diff --check` passed.
 - Meaningful changed-behavior coverage: WebSocket 99.30% lines and Python Broker WebSocket integration 96.66% lines. The guarded runner enforced the 1 MiB per-test growth guard with bounded heap settings; shutdown, reverse-routing, stream, lease, and direct HTTP regressions passed.
 - Final Oracle review: no Critical or High findings remain. The accepted Python Broker size-accounting P2 is isolated for the required additive reconciliation phase; the proposed Host export removal was rejected as unrelated API hygiene.
+
+## Phase 6: Python Broker Frame-Size Reconciliation
+
+- [x] Task: Correct Python Broker VWS/1 frame admission accounting
+    - [x] Replace the conservative six-times UTF-8 reservation with exact serialized VWS/1 frame-size admission and bounded reservation accounting for text, ping, and pong frames.
+    - [x] Add focused boundary tests for valid below-limit and invalid oversized UTF-8 text, ping, and pong frames.
+    - [x] Run Python workspace tests, focused bounded integration, build, lint, and changed-behavior coverage; confirm aggregate queues remain bounded.
+- [x] Task: Conductor - Phase Checkpoint 'Python Broker Frame-Size Reconciliation' (Protocol in workflow.md)
+    - [x] Obtain focused review, reconcile the deferred ledger, commit the checkpoint, push the branch, and record its SHA. Oracle confirmed exact boundary accounting and bounded reservations; checkpoint commit: pending.
+
+### Phase 6 Validation Notes
+
+- Exact admission serializes compact UTF-8 VWS/1 JSON plus its newline before reserving bytes; aggregate reservations still enforce the 64-message and 1 MiB limits and are released in `finally`.
+- Validation: Python workspace 125 tests passed; focused bounded federation integration passed; `npm run build`, `npm run lint`, and `git diff --check` passed.
+- Coverage evidence: focused boundary coverage and full Python coverage run passed; no repository Python numeric threshold is configured (full `broker.py` report: 66%).
