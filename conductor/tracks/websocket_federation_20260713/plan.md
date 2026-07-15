@@ -128,7 +128,7 @@
     - [x] Post final validation results as a PR comment, mark the draft PR ready for review, and update the PR description if the implemented behavior requires clarification. PR #52 is ready for review; its specification-based description remains accurate.
 - [x] Task: Conductor - Phase Checkpoint 'Documentation, Full Validation, and Review' (Protocol in workflow.md)
     - [x] Confirm docs, tests, coverage, review findings, and PR state meet the track definition of done. The final Oracle review found no Critical or High findings; documentation, validation evidence, and PR state align with the specification.
-    - [x] Record the final deduplication result and validation summary, commit the completed checkpoint, push the branch, and record its SHA. Deduplication retains protocol-neutral VWS/federation framing in `@signicode/verser-common`, Host acquisition/relay mechanics in the Host, and runtime adapters in their own packages. Checkpoint commit: pending.
+    - [x] Record the final deduplication result and validation summary, commit the completed checkpoint, push the branch, and record its SHA. Deduplication retains protocol-neutral VWS/federation framing in `@signicode/verser-common`, Host acquisition/relay mechanics in the Host, and runtime adapters in their own packages. Checkpoint commit: `e16cf3f` (`feat(websocket): finalize federation validation`).
 
 ### Phase 5 Validation Notes
 
