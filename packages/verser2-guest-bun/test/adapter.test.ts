@@ -59,6 +59,18 @@ const baseRequest = {
 };
 
 describe('createVerserBunGuest API', () => {
+  test('inherits rejected-Promise local Broker header validation and native Fetch ByteString boundaries', async () => {
+    const broker = createVerserBroker({
+      hostUrl: 'https://localhost:1',
+      brokerId: 'bun-local-headers',
+    });
+    await expect(
+      broker.request({ targetId: 'guest', method: 'GET', path: '/', headers: { 'x-emoji': '😀' } }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(() => new Headers({ 'x-emoji': '😀' })).toThrow();
+    expect(() => new Response('ok', { headers: { 'x-emoji': '😀' } })).toThrow();
+  });
+
   test('attaches a fetch-style handler and returns the guest', () => {
     const guest = createVerserBunGuest({
       hostUrl: 'https://localhost:1',
@@ -227,6 +239,18 @@ describe('createVerserBunGuest routes API', () => {
 });
 
 describe('Bun adapter response body consumers', () => {
+  test('forwards native Fetch header failures through a MinimalServerResponse error channel', async () => {
+    const response = new MinimalServerResponse();
+    const receivedError = new Promise<Error>((resolve) => response.once('error', resolve));
+    createNodeStyleHandler('metadata.test', {
+      fetch: () => new Response('ok', { headers: { 'x-emoji': '😀' } }),
+    })({ method: 'GET', url: '/', headers: {}, on() {} }, response);
+
+    await expect(receivedError).resolves.toBeInstanceOf(TypeError);
+    expect(response.headersStarted).toBe(false);
+    expect(response.finished).toBe(false);
+  });
+
   test('writes Bun metadata into a real MinimalServerResponse without numeric headers', async () => {
     const dispatch = async (response: Response, requestId: string) => {
       const nodeResponse = new MinimalServerResponse();

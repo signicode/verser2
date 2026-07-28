@@ -802,7 +802,7 @@ test('Broker Agent handles omitted, empty, and Latin-1 status text from Node Gue
   }
 });
 
-test('Broker rejects non-Latin-1 Node Guest response metadata with a protocol error', async () => {
+test('Broker reports uncaught non-Latin-1 Node Guest response input as local-handler-failure', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
@@ -826,7 +826,7 @@ test('Broker rejects non-Latin-1 Node Guest response metadata with a protocol er
         method: 'GET',
         path: '/',
       }),
-      (error) => error.code === 'protocol-error',
+      (error) => error.code === 'local-handler-failure',
     );
   } finally {
     await withTimeout(

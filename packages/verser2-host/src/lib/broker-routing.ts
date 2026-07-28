@@ -21,6 +21,7 @@ import {
   readVerserEnvelopeFromStream,
   sanitizeHttp2ResponseHeaders,
   toVerserErrorCode,
+  validateLocalHeaders,
   validateVerserHeaders,
 } from '@signicode/verser-common';
 
@@ -710,6 +711,7 @@ export async function routeLocalBrokerRequest(
   const requestId = `${sourceId}-${++broker.requestCounter}`;
   const targetId = createPeerId(request.targetId);
   const body = toReadableBody(request.body);
+  const headers = validateLocalHeaders(request.headers ?? {});
   return routeLocalRequestDispatch(
     {
       requestId,
@@ -718,7 +720,7 @@ export async function routeLocalBrokerRequest(
       routeDomain: request.routeDomain,
       method: request.method,
       path: request.path,
-      headers: flattenVerserHeaders(validateVerserHeaders(request.headers ?? {})),
+      headers: flattenVerserHeaders(headers),
       body,
       leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs({
         'x-verser-lease-acquire-timeout-ms': request.leaseAcquireTimeoutMs,

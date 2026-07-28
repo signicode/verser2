@@ -8,11 +8,12 @@ import {
   classifyVerserResponseMetadata,
   createVerserError,
   flattenVerserHeaderPairs,
+  flattenVerserHeaders,
   normalizeClientTlsOptions,
   readNdjsonLines,
   resolveRouteForUrl,
   stripHttp2PseudoHeaders,
-  validateVerserHeaders,
+  validateLocalHeaders,
   verserErrorFromResponseBody,
 } from '@signicode/verser-common';
 import type { Dispatcher } from 'undici';
@@ -169,6 +170,12 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   public request(request: VerserBrokerRequest): Promise<VerserBrokerResponse> {
+    let headers: Record<string, string>;
+    try {
+      headers = flattenVerserHeaders(validateLocalHeaders(request.headers ?? {}));
+    } catch (error) {
+      return Promise.reject(error);
+    }
     if (this.session === undefined) {
       return Promise.reject(createVerserError('disconnected-target', 'Broker is not connected'));
     }
@@ -180,7 +187,7 @@ export class Http2VerserBroker implements VerserBroker {
       DEFAULT_INTERNAL_REDIRECT_REPLAY_BUFFER_BYTES;
     const replayableBody = this.createReplayableRequestBody(request.body, replayBufferLimit);
     return this.requestWithInternalRedirects(
-      { ...request, body: replayableBody.body },
+      { ...request, headers, body: replayableBody.body },
       replayableBody,
       maxInternalRedirects,
     ).catch((error: unknown) => {
@@ -250,7 +257,7 @@ export class Http2VerserBroker implements VerserBroker {
           : { 'x-verser-route-domain': request.routeDomain }),
         'x-verser-method': request.method,
         'x-verser-path': request.path,
-        'x-verser-headers': JSON.stringify(validateVerserHeaders(request.headers ?? {})),
+        'x-verser-headers': JSON.stringify(request.headers ?? {}),
       };
       if (this.options.leaseAcquireTimeoutMs !== undefined) {
         requestHeaders['x-verser-lease-acquire-timeout-ms'] = String(

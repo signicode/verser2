@@ -13,7 +13,6 @@ import {
   createRoutedResponseEnvelope,
   createVerserError,
   requireFinalResponseStatusCode,
-  validateVerserStatusText,
 } from '@signicode/verser-common';
 import type {
   VerserLocalBrokerRequest,
@@ -181,7 +180,7 @@ class LocalServerResponse extends EventEmitter {
         : (headers ?? statusMessageOrHeaders ?? {});
     requireFinalResponseStatusCode(statusCode);
     if (typeof statusMessageOrHeaders === 'string')
-      validateVerserStatusText(statusMessageOrHeaders);
+      validateHeaderValue('statusMessage', statusMessageOrHeaders);
     const nextHeaders = new Map(this.headers);
     const nextPairs = [...this.headerPairs];
     if (Array.isArray(responseHeaders)) {
@@ -272,6 +271,7 @@ class LocalServerResponse extends EventEmitter {
   }
 
   private createCanonicalResponse(requestId: string): Omit<VerserLocalBrokerResponse, 'body'> {
+    if (this.statusMessage !== undefined) validateHeaderValue('statusMessage', this.statusMessage);
     const envelope = createRoutedResponseEnvelope({
       requestId,
       statusCode: this.statusCode,

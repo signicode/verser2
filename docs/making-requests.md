@@ -101,10 +101,10 @@ and `headerPairs`. `headers` is a last-value-wins compatibility map;
 `headerPairs` is the exact ordered representation for repeated fields such as
 `set-cookie`. Use `headerPairs` when duplicate-field fidelity matters.
 
-Response status text and header values must be valid HTTP values representable
-as Latin-1/ByteString (each code unit is at most `0xFF`). For example, `café`
-is supported, while emoji are rejected with `protocol-error` rather than being
-corrupted by Node HTTP/1, Fetch, or Bun response adapters. Existing UTF-8
+Local request headers and local response status text/header values must be valid
+HTTP ByteString values (each code unit is at most `0xFF`). For example, `café`
+is supported; emoji, control characters, and invalid field names are rejected
+locally (`TypeError` in JavaScript and `ValueError` in Python). Existing UTF-8
 encoded metadata byte limits still apply.
 
 Node Broker request paths follow internal `307` and `308` redirects by default

@@ -116,6 +116,57 @@ def normalize_headers(headers: dict[str, Any] | None) -> dict[str, str]:
     return normalized
 
 
+def validate_local_headers(headers: dict[str, Any] | None) -> dict[str, str]:
+    """Validate Broker API header input before it reaches the transport.
+
+    Local input failures are ``ValueError``; protocol metadata decoders retain
+    their separate malformed-remote-data handling.
+    """
+    normalized: dict[str, str] = {}
+    for name, value in (headers or {}).items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise ValueError("Local HTTP headers must use string names and values")
+        if not _valid_header_name(name):
+            raise ValueError(f"Invalid local HTTP header name: {name}")
+        if not _valid_header_value(value):
+            raise ValueError(f"Invalid local HTTP header value for {name}")
+        normalized_name = name.lower()
+        if normalized_name in {"connection", "upgrade", "keep-alive"}:
+            raise ValueError(f"Forbidden local HTTP header: {normalized_name}")
+        normalized[normalized_name] = value
+    return normalized
+
+
+class RemoteRequestMetadataError(ValueError):
+    """Malformed request metadata received from a Host lease stream."""
+
+
+def validate_remote_request_metadata(metadata: object) -> dict[str, Any]:
+    """Validate Host-supplied request metadata before ASGI scope construction.
+
+    This is intentionally distinct from local Broker API validation: callers
+    must classify this as a wire protocol failure rather than application input.
+    """
+    if not isinstance(metadata, dict):
+        raise RemoteRequestMetadataError("Request metadata must be an object")
+    headers = metadata.get("headers", {})
+    if not isinstance(headers, dict):
+        raise RemoteRequestMetadataError("Request metadata headers must be an object")
+    normalized: dict[str, str] = {}
+    for name, value in headers.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise RemoteRequestMetadataError("Invalid request metadata header")
+        normalized_name = name.lower()
+        if (
+            not _valid_header_name(normalized_name)
+            or not _valid_header_value(value)
+            or normalized_name in {"connection", "upgrade", "keep-alive"}
+        ):
+            raise RemoteRequestMetadataError("Invalid request metadata header")
+        normalized[normalized_name] = value
+    return {**metadata, "headers": normalized}
+
+
 # Standard HTTP/1 hop-by-hop headers that MUST NOT be forwarded over HTTP/2.
 _HOP_BY_HOP_HEADERS: set[str] = {
     "connection",

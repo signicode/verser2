@@ -7,6 +7,7 @@ import {
   VERSER_ENVELOPE_VERSION,
 } from './constants';
 import { createVerserError } from './errors';
+import { validateVerserHeaders } from './headers';
 import { readExactly } from './stream-readers';
 import type {
   LeaseRequestMetadataReadOptions,
@@ -253,7 +254,8 @@ export async function readLeaseRequestMetadataFromStream(
   });
 
   if (parsed.type === 'request') {
-    return parsed.metadata as VerserRequestEnvelopeMetadata;
+    const metadata = parsed.metadata as VerserRequestEnvelopeMetadata;
+    return { ...metadata, headers: validateVerserHeaders(metadata.headers) };
   }
 
   throw createVerserError('protocol-error', 'Lease stream received a non-request envelope', {

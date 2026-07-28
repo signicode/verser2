@@ -750,7 +750,62 @@ test('Local Guest rejects invalid final response metadata without emitting a par
   }
 });
 
-test('HTTP/2 Broker receives protocol-error when a local Guest commits invalid response metadata', async () => {
+test('Broker API boundaries reject invalid local request headers before routing and preserve Latin-1', async () => {
+  const disconnectedBroker = createBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'local-input',
+  });
+  await assert.rejects(
+    () =>
+      disconnectedBroker.request({
+        targetId: 'guest',
+        method: 'GET',
+        path: '/',
+        headers: { 'x-emoji': '😀' },
+      }),
+    TypeError,
+  );
+
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localGuest;
+  let localBroker;
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-header-guest',
+      routedDomains: ['local-header-guest.test'],
+      listener: (request, response) => {
+        assert.equal(request.headers['x-cafe'], 'café');
+        response.end();
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-header-broker' });
+    await localBroker.waitForRoute('local-header-guest.test');
+    await assert.rejects(
+      () =>
+        localBroker.request({
+          targetId: 'local-header-guest',
+          method: 'GET',
+          path: '/',
+          headers: { Connection: 'close' },
+        }),
+      TypeError,
+    );
+    const response = await localBroker.request({
+      targetId: 'local-header-guest',
+      method: 'GET',
+      path: '/',
+      headers: { 'x-cafe': 'café' },
+    });
+    response.body.resume();
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('HTTP/2 Broker receives local-handler-failure when a local Guest commits invalid local status input', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
@@ -770,7 +825,7 @@ test('HTTP/2 Broker receives protocol-error when a local Guest commits invalid r
 
     await assert.rejects(
       () => broker.request({ targetId: 'h2-invalid-local-response', method: 'GET', path: '/' }),
-      (error) => error.code === 'protocol-error',
+      (error) => error.code === 'local-handler-failure',
     );
   } finally {
     await broker.close('test-complete');

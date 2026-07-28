@@ -380,7 +380,7 @@ def build_websocket_scope(
     split = urlsplit(str(metadata.get("path") or "/"))
     path = unquote(split.path or "/")
     headers = [
-        (name.encode("ascii", "ignore"), value.encode("utf-8"))
+        (name.encode("ascii", "ignore"), value.encode("latin-1"))
         for name, value in normalize_headers(metadata.get("headers")).items()
     ]
     # Extract subprotocols from the sec-websocket-protocol header.
@@ -482,7 +482,7 @@ def build_http_scope(metadata: dict[str, Any]) -> dict[str, Any]:
     split = urlsplit(str(metadata.get("path") or "/"))
     path = unquote(split.path or "/")
     headers = [
-        (name.encode("ascii", "ignore"), value.encode("utf-8"))
+        (name.encode("ascii", "ignore"), value.encode("latin-1"))
         for name, value in normalize_headers(metadata.get("headers")).items()
     ]
     return {

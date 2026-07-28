@@ -15,7 +15,11 @@ import h2.config
 import h2.events
 
 from ._tls import create_client_ssl_context, load_pfx_client_identity, validate_h2_alpn
-from .protocol import decode_response_metadata, flatten_response_header_pairs
+from .protocol import (
+    decode_response_metadata,
+    flatten_response_header_pairs,
+    validate_local_headers,
+)
 
 VWS_MAX_FRAME_BYTES = 1 * 1024 * 1024
 VWS_MAX_QUEUE_MESSAGES = 64
@@ -887,6 +891,7 @@ class VerserBroker:
         ValueError
             If the response stream ends before response headers are received.
         """
+        user_headers = validate_local_headers(headers)
         parsed = urlsplit(url)
         hostname = parsed.hostname or ""
         path = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
@@ -901,7 +906,6 @@ class VerserBroker:
         if not target_id:
             raise RuntimeError(f"No advertised route found for domain '{hostname}'")
 
-        user_headers = dict(headers or {})
         has_host = any(key.lower() in {"host", ":authority"} for key in user_headers)
         if not has_host:
             authority = parsed.hostname or ""

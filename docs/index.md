@@ -25,6 +25,8 @@ Three implemented roles work together:
   handlers without opening a port.
 - [Making requests](./making-requests.md) — send requests through a Broker using
   `request()`, Agent, Dispatcher, or fetch.
+- [HTTP and Fetch compatibility](./http-fetch-compatibility.md) — routed HTTP/2
+  boundaries and adapter differences from ordinary HTTP and Fetch behavior.
 - [VWS/1 WebSockets](./websockets.md) — explicit framed WebSockets over TLS
   HTTP/2 for Node, Bun, and Python ASGI Guests/Brokers, including federation.
 - [Routes](./routes.md) — route advertisement, exact hostname matching, and route

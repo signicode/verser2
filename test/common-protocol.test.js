@@ -175,14 +175,16 @@ test('shared broker request normalization normalizes method, path, headers, and 
     undefined,
   );
 
-  assert.throws(() => {
-    common.createCommonBrokerRequest({
-      targetId: 'guest-alpha',
-      method: 'GET',
-      path: '/',
-      headers: { 'bad header': 'x' },
-    });
-  }, /VerserError/);
+  assert.throws(
+    () =>
+      common.createCommonBrokerRequest({
+        targetId: 'guest-alpha',
+        method: 'GET',
+        path: '/',
+        headers: { 'bad header': 'x' },
+      }),
+    TypeError,
+  );
 });
 
 test('shared registration protocol helpers parse registration requests and responses', () => {
@@ -508,6 +510,7 @@ test('shared request header map decoder is strict while preserving scalar compat
     '{"x":["safe",2]}',
     '{"bad name":"x"}',
     '{"x":"bad\\nvalue"}',
+    '{"x":"emoji 😀"}',
   ]) {
     assert.throws(
       () => common.decodeHeaderMap(value),
@@ -684,6 +687,18 @@ test('shared response metadata codec rejects malformed, unsafe, and incompatible
   }
 });
 
+test('local header validation accepts Latin-1 and rejects non-ByteString input as TypeError', () => {
+  assert.deepEqual(common.validateLocalHeaders({ 'X-Cafe': 'café' }), { 'x-cafe': 'café' });
+  for (const headers of [
+    { 'bad name': 'value' },
+    { 'x-control': 'line\nbreak' },
+    { 'x-emoji': '😀' },
+    { Connection: 'close' },
+  ]) {
+    assert.throws(() => common.validateLocalHeaders(headers), TypeError);
+  }
+});
+
 test('shared response metadata sanitizes encoding and rejects locked decoding fields', () => {
   const base = { version: 1, requestId: 'req-locked', statusCode: 200 };
   const encoded = common.encodeVerserResponseMetadata({
@@ -851,9 +866,9 @@ test('shared broad headers normalize array joins and validates names/values', ()
   assert.equal(common.flattenHeaderValue(['a', 'b', 1]), 'a,b,1');
   assert.equal(common.flattenHeaderValue(undefined), undefined);
 
-  assert.throws(() => {
-    common.normalizeHeaders({ 'bad header': 'value' });
-  }, /VerserError/);
+  for (const headers of [{ 'bad header': 'value' }, { 'x-emoji': '😀' }]) {
+    assert.throws(() => common.normalizeHeaders(headers), TypeError);
+  }
 
   assert.deepStrictEqual(common.validateRuntimeNeutralHeaders({ 'x-good': 'value' }), {
     'x-good': 'value',
@@ -861,6 +876,7 @@ test('shared broad headers normalize array joins and validates names/values', ()
   assert.equal(common.isValidHeaderName('x-good'), true);
   assert.equal(common.isValidHeaderName('bad header'), false);
   assert.equal(common.isValidHeaderValue('safe\u0000value'), false);
+  assert.equal(common.isValidHeaderValue('emoji 😀'), false);
   assert.equal(common.isValidHeaderValue('safe-value'), true);
   assert.equal(common.isValidHeaderValue(''), true);
 });

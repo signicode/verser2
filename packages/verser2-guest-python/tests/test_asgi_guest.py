@@ -720,6 +720,79 @@ class ProtocolEnvelopeTest(unittest.TestCase):
 
 
 class LeaseTaskTest(unittest.TestCase):
+    def test_lease_request_preserves_latin1_header_octets_in_http_scope(self) -> None:
+        received_headers: list[tuple[bytes, bytes]] = []
+
+        async def app(scope, receive, send):
+            received_headers.extend(scope["headers"])
+            await receive()
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        request = encode_envelope(
+            "request",
+            {
+                "requestId": "latin1-request-headers",
+                "method": "GET",
+                "path": "/",
+                "headers": {"x-cafe": "café"},
+            },
+        )
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="latin1-request-headers", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(stream_id=1, data=request, flow_controlled_length=len(request))
+            )
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await task
+
+        asyncio.run(run())
+        self.assertIn((b"x-cafe", b"caf\xe9"), received_headers)
+
+    def test_malformed_lease_request_headers_do_not_invoke_asgi_app(self) -> None:
+        invoked = False
+
+        async def app(scope, receive, send):
+            nonlocal invoked
+            invoked = True
+
+        request = encode_envelope(
+            "request",
+            {
+                "requestId": "invalid-request-headers",
+                "method": "GET",
+                "path": "/",
+                "headers": {"x-emoji": "😀"},
+            },
+        )
+
+        async def run() -> dict[str, Any]:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="invalid-request-headers", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(stream_id=1, data=request, flow_controlled_length=len(request))
+            )
+            await task
+            envelope_type, metadata, _ = decode_envelope(conn.sent_data[0][1])
+            self.assertEqual(envelope_type, "error")
+            return metadata
+
+        metadata = asyncio.run(run())
+        self.assertFalse(invoked)
+        self.assertEqual(metadata["code"], "protocol-error")
+
     def test_read_loop_does_not_ack_request_body_data_on_frame_receipt(self) -> None:
         async def run() -> list[tuple[int, int]]:
             event = h2.events.DataReceived(

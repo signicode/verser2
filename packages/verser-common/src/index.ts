@@ -205,6 +205,7 @@ export {
   normalizeHeaders,
   normalizeHeaderPairs,
   normalizeRequestHeaders,
+  validateLocalHeaders,
   validateRuntimeNeutralHeaders,
   validateVerserStatusText,
 } from './lib/headers';

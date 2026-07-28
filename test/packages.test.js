@@ -160,6 +160,7 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'toVerserError',
     'toVerserErrorCode',
     'toVerserHttpErrorResponse',
+    'validateLocalHeaders',
     'validateRuntimeNeutralHeaders',
     'validateVerserHeaders',
     'validateVerserStatusText',

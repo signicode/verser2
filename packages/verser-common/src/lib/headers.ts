@@ -37,7 +37,8 @@ export function isValidHeaderName(headerName: string): boolean {
 /**
  * Checks whether a string is a valid HTTP header value per RFC 7230.
  *
- * Rejects control characters (0x00–0x08, 0x0a–0x1f, 0x7f).
+ * Rejects control characters (0x00–0x08, 0x0a–0x1f, 0x7f) and code units
+ * outside the HTTP ByteString range (0x00–0xff).
  * Backslash and DEL are also rejected.
  *
  * @param headerValue - The header value to validate.
@@ -47,7 +48,12 @@ export function isValidHeaderName(headerName: string): boolean {
 export function isValidHeaderValue(headerValue: string): boolean {
   for (let index = 0; index < headerValue.length; index += 1) {
     const code = headerValue.charCodeAt(index);
-    if ((code >= 0x00 && code <= 0x08) || (code >= 0x0a && code <= 0x1f) || code === 0x7f) {
+    if (
+      code > 0xff ||
+      (code >= 0x00 && code <= 0x08) ||
+      (code >= 0x0a && code <= 0x1f) ||
+      code === 0x7f
+    ) {
       return false;
     }
   }
@@ -61,6 +67,34 @@ function isLatin1(value: string): boolean {
     if (value.charCodeAt(index) > 0xff) return false;
   }
   return true;
+}
+
+/**
+ * Validates headers supplied through a local JavaScript API boundary.
+ *
+ * Unlike protocol decoders, invalid local input is a programming error and is
+ * reported as a `TypeError`, never as a `protocol-error`.
+ *
+ * @public
+ */
+export function validateLocalHeaders(headers: VerserHeaders): Record<string, string | string[]> {
+  const validatedHeaders: Record<string, string | string[]> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === null || value === undefined) continue;
+    const values = Array.isArray(value) ? value.map((entry) => String(entry)) : [String(value)];
+    const normalizedName = name.toLowerCase();
+    if (!isValidHeaderName(normalizedName)) {
+      throw new TypeError(`Invalid local HTTP header name: ${name}`);
+    }
+    if (FORBIDDEN_HTTP1_HEADERS.has(normalizedName)) {
+      throw new TypeError(`Forbidden local HTTP header: ${normalizedName}`);
+    }
+    if (values.some((entry) => !isValidHeaderValue(entry))) {
+      throw new TypeError(`Invalid local HTTP header value for ${name}`);
+    }
+    validatedHeaders[normalizedName] = Array.isArray(value) ? values : values[0];
+  }
+  return validatedHeaders;
 }
 
 /** Validates an optional HTTP response reason phrase for the response metadata contract. @public */
@@ -79,12 +113,11 @@ export function validateVerserStatusText(statusText: string): string {
 /**
  * Validates header names and values according to runtime-neutral HTTP rules.
  *
- * Throws a `VerserError` with code `protocol-error` if any header name or value
- * is invalid.
+ * Throws a `TypeError` if any header name or value is invalid local input.
  *
  * @param headers - The headers to validate (name → string).
  * @returns The same headers object if valid (pass-through).
- * @throws {VerserError} If any header name or value is invalid.
+ * @throws {TypeError} If any header name or value is invalid.
  * @public
  */
 export function validateRuntimeNeutralHeaders(
@@ -93,14 +126,10 @@ export function validateRuntimeNeutralHeaders(
   const validatedHeaders: Record<string, string> = {};
   for (const [headerName, headerValue] of Object.entries(headers)) {
     if (!isValidHeaderName(headerName)) {
-      throw createVerserError('protocol-error', `Invalid header name: ${headerName}`, {
-        header: headerName,
-      });
+      throw new TypeError(`Invalid local HTTP header name: ${headerName}`);
     }
     if (!isValidHeaderValue(headerValue)) {
-      throw createVerserError('protocol-error', `Invalid header value for ${headerName}`, {
-        header: headerName,
-      });
+      throw new TypeError(`Invalid local HTTP header value for ${headerName}`);
     }
     validatedHeaders[headerName] = headerValue;
   }
@@ -141,7 +170,7 @@ export function flattenHeaderValue(value: VerserHeaderValue): string | undefined
  *
  * @param headers - The headers to normalize.
  * @returns A flat record of lowercase header names to string values.
- * @throws {VerserError} If any header name or value is invalid.
+ * @throws {TypeError} If any header name or value is invalid.
  * @public
  */
 export function normalizeHeaders(headers: VerserHeaderInput | undefined): Record<string, string> {
@@ -236,9 +265,13 @@ export function validateVerserHeaders(headers: VerserHeaders): Record<string, st
       });
     }
 
-    validatedHeaders[normalizedName] = Array.isArray(value)
-      ? value.map((entry) => String(entry))
-      : String(value);
+    const values = Array.isArray(value) ? value.map((entry) => String(entry)) : [String(value)];
+    if (values.some((entry) => !isValidHeaderValue(entry))) {
+      throw createVerserError('protocol-error', 'Invalid header value', {
+        header: normalizedName,
+      });
+    }
+    validatedHeaders[normalizedName] = Array.isArray(value) ? values : values[0];
   }
 
   return validatedHeaders;

@@ -74,6 +74,29 @@ test('shared envelope helpers encode request, response, and error metadata', () 
   assert.equal(requestEnvelope.readUInt32BE(2), requestEnvelope.length - 6);
 });
 
+test('lease request metadata rejects non-ByteString scalar and array headers as protocol errors', async () => {
+  for (const headers of [{ 'x-emoji': '😀' }, { 'x-emoji': ['😀'] }]) {
+    const stream = new PassThrough();
+    const metadata = common.encodeVerserEnvelope({
+      type: 'request',
+      metadata: {
+        requestId: 'req-invalid-header',
+        sourceId: 'broker',
+        targetId: 'guest',
+        method: 'GET',
+        path: '/',
+        headers,
+      },
+    });
+    const read = common.readLeaseRequestMetadataFromStream(stream, {
+      guestId: 'guest',
+      leaseId: 'lease',
+    });
+    stream.end(metadata);
+    await assert.rejects(read, (error) => error.code === 'protocol-error');
+  }
+});
+
 test('shared envelope parser supports partial prefix, partial metadata, and body remainder', () => {
   const envelope = common.encodeVerserEnvelope({
     type: 'request',

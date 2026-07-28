@@ -670,7 +670,7 @@ test('Broker maps missing guests and Guest handler failures to actionable errors
   }
 });
 
-test('Broker validates routed request headers before forwarding metadata', async () => {
+test('Broker rejects local forbidden headers before forwarding', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
@@ -688,8 +688,8 @@ test('Broker validates routed request headers before forwarding metadata', async
           headers: { connection: 'close' },
         }),
       (error) => {
-        assert.equal(error.code, 'protocol-error');
-        assert.match(error.message, /forbidden header/i);
+        assert.ok(error instanceof TypeError);
+        assert.match(error.message, /Forbidden local HTTP header/i);
         return true;
       },
     );
@@ -699,7 +699,7 @@ test('Broker validates routed request headers before forwarding metadata', async
   }
 });
 
-test('Broker terminates the original replayable upload source when request setup aborts', async () => {
+test('Broker leaves the caller-owned upload source intact when local header validation rejects', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
@@ -717,9 +717,13 @@ test('Broker terminates the original replayable upload source when request setup
           headers: { connection: 'close' },
           body: source,
         }),
-      /forbidden header/i,
+      (error) => {
+        assert.ok(error instanceof TypeError);
+        assert.match(error.message, /Forbidden local HTTP header/i);
+        return true;
+      },
     );
-    assert.equal(source.destroyed, true);
+    assert.equal(source.destroyed, false);
   } finally {
     await broker.close('test-complete');
     await host.close('test-complete');

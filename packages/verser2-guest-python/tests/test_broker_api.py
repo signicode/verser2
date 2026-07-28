@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import h2.events
+from verser2_guest_python.protocol import validate_local_headers
 
 
 def _build_broker_response(**kwargs):
@@ -668,7 +669,7 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
             self.fail("expected x-verser-headers value for JSON request headers")
         self.assertIn("x-test", request_headers_meta)
         self.assertEqual(
-            json.loads(request_headers_meta).get("HoSt"), "public.example:9443"
+            json.loads(request_headers_meta).get("host"), "public.example:9443"
         )
         ipv6_headers = dict(headers_calls[1]["headers"])
         self.assertEqual(
@@ -686,6 +687,32 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
         message = str(context.exception).lower()
         self.assertIn("route", message)
         self.assertIn("unknown.local", message)
+
+    def test_request_rejects_invalid_local_headers_before_sending(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        async def fail_send_headers(*_args: Any, **_kwargs: Any) -> int:
+            self.fail("invalid local headers must not be sent")
+
+        with patch.object(type(broker), "_send_headers", new=AsyncMock(side_effect=fail_send_headers)):
+            for headers in (
+                {"x-emoji": "😀"},
+                {"bad name": "value"},
+                {"x-control": "line\nbreak"},
+                {"Connection": "close"},
+            ):
+                with self.subTest(headers=headers):
+                    with self.assertRaises(ValueError):
+                        self._run(broker.get("http://alpha.local/", headers=headers))
+
+        # Latin-1 obs-text remains valid local input.
+        self.assertEqual(validate_local_headers({"x-cafe": "café"}), {"x-cafe": "café"})
+
+    def test_request_validates_headers_before_route_lookup(self) -> None:
+        broker = self._broker_factory()
+        with self.assertRaises(ValueError):
+            self._run(broker.get("http://unknown.local/", headers={"x-emoji": "😀"}))
 
     def test_binary_request_body_chunks_are_not_utf8_coerced(self) -> None:
         broker = self._broker_factory()

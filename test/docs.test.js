@@ -60,6 +60,41 @@ test('task docs document Bun Guest usage and non-listen behavior', () => {
   assert.match(exposingDocs, /listen\(\)/);
 });
 
+test('HTTP and Fetch compatibility page documents routed adapter boundaries', () => {
+  const indexDocs = fs.readFileSync(path.join(rootDirectory, 'docs/index.md'), 'utf8');
+  const compatibilityDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/http-fetch-compatibility.md'),
+    'utf8',
+  );
+
+  assert.match(indexDocs, /http-fetch-compatibility\.md/);
+  assert.match(compatibilityDocs, /not a claim to implement every\s+HTTP server/i);
+  assert.match(compatibilityDocs, /Routed responses remove HTTP\/1 hop-by-hop fields/i);
+  assert.match(
+    compatibilityDocs,
+    /Routed request validation rejects `Connection`, `Upgrade`, and `Keep-Alive`/,
+  );
+  assert.doesNotMatch(compatibilityDocs, /Routed request and response headers omit/i);
+  assert.match(compatibilityDocs, /does not synthesize `Date` or `Server`/);
+  assert.match(compatibilityDocs, /does not synthesize `Host` or\s+`Content-Length`/);
+  assert.match(
+    compatibilityDocs,
+    /Host routing still sets the downstream `Host` to the\s+selected route domain/,
+  );
+  assert.match(compatibilityDocs, /making-requests\.md#route-domain-selection/);
+  assert.match(compatibilityDocs, /route table rather than DNS/i);
+  assert.match(
+    compatibilityDocs,
+    /no real socket, trailers, generic upgrades, or informational \(1xx\)/i,
+  );
+  assert.match(compatibilityDocs, /setNoDelay.*setKeepAlive.*no-ops/);
+  assert.match(compatibilityDocs, /Dispatcher rejects generic upgrade requests/);
+  assert.match(compatibilityDocs, /`http_version` set to `'1\.1'`/);
+  assert.match(compatibilityDocs, /raw_path.*reconstructed/i);
+  assert.match(compatibilityDocs, /one-shot/i);
+  assert.match(compatibilityDocs, /VWS\/1 lease adapter/i);
+});
+
 test('user docs document local Host peer attachment APIs', () => {
   const hostReadme = fs.readFileSync(
     path.join(rootDirectory, 'packages/verser2-host/README.md'),

@@ -30,10 +30,23 @@ export interface NodeStyleResponse {
   end(chunk?: string | Buffer, encoding?: BufferEncoding): unknown;
   on?(event: string, handler: (...args: readonly unknown[]) => void): unknown;
   off?(event: string, handler: (...args: readonly unknown[]) => void): unknown;
+  emit?(event: string | symbol, ...args: readonly unknown[]): boolean;
 }
 
 const getErrorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
+};
+
+interface NodeStyleErrorResponse extends NodeStyleResponse {
+  emit(event: 'error', error: Error): boolean;
+}
+
+const hasErrorChannel = (response: NodeStyleResponse): response is NodeStyleErrorResponse => {
+  return typeof response.emit === 'function';
+};
+
+const toError = (error: unknown): Error => {
+  return error instanceof Error ? error : new Error(String(error));
 };
 
 const toHeaderPairs = (headers: Headers): VerserHeaderPair[] => {
@@ -685,6 +698,10 @@ export const createNodeStyleHandler = (
         response.writeHead(webResponse.status, webResponse.statusText, webResponse.headerPairs);
         await writeResponseBody(webResponse.body, response);
       } catch (error: unknown) {
+        if (hasErrorChannel(response)) {
+          response.emit('error', toError(error));
+          return;
+        }
         response.writeHead(500, { 'content-type': 'text/plain' });
         response.end(`Bun handler failed: ${getErrorMessage(error)}`);
       }

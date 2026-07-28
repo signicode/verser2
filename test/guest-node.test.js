@@ -6,6 +6,7 @@ const test = require('node:test');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
 const { createVerserNodeGuest } = require('../packages/verser2-guest-node/dist/index.js');
+const { encodeVerserEnvelope } = require('../packages/verser-common/dist/index.js');
 const { trusted } = require('./support/tls-fixtures.cjs');
 
 function once(emitter, eventName) {
@@ -265,6 +266,11 @@ test('Node Guest response shim validates mutations promptly and preserves state 
     assert.throws(() => response.appendHeader('x-invalid', 'bad\nvalue'), {
       code: 'ERR_INVALID_CHAR',
     });
+    assert.throws(() => response.setHeader('x-emoji', '😀'), { code: 'ERR_INVALID_CHAR' });
+    assert.throws(() => response.appendHeader('x-emoji', '😀'), { code: 'ERR_INVALID_CHAR' });
+    assert.throws(() => response.writeHead(200, { 'x-emoji': '😀' }), {
+      code: 'ERR_INVALID_CHAR',
+    });
     assert.throws(() => response.writeHead(199, 'Invalid', { 'x-new': 'value' }), {
       code: 'protocol-error',
     });
@@ -287,6 +293,44 @@ test('Node Guest response shim validates mutations promptly and preserves state 
   assert.equal(result.statusCode, 200);
   assert.deepEqual(result.headers, { 'x-kept': 'before' });
   assert.deepEqual(result.body, Buffer.from('ok'));
+});
+
+test('Node Guest rejects malformed lease request headers before invoking its listener', async () => {
+  const host = await createLeaseTrackingHost();
+  let guest;
+  let invoked = 0;
+  const events = [];
+  try {
+    guest = createGuest({ hostUrl: host.url, guestId: 'guest-invalid-lease-request' });
+    guest.onLifecycle((event) => events.push(event));
+    guest.attach(() => {
+      invoked += 1;
+    });
+    await guest.connect();
+    await waitForLeaseCount(host.leases, 1);
+    host.leases[0].stream.end(
+      encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId: 'invalid-request',
+          sourceId: 'host',
+          targetId: 'guest-invalid-lease-request',
+          method: 'GET',
+          path: '/',
+          headers: { 'x-emoji': '😀' },
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(invoked, 0);
+    assert.equal(
+      events.some((event) => event.error?.code === 'protocol-error'),
+      true,
+    );
+  } finally {
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close();
+  }
 });
 
 test('Node Guest rejects direct invalid response metadata before sending a lease response envelope', async () => {
@@ -549,7 +593,7 @@ test('Node Guest writeHead retains headers when status text is explicitly undefi
   assert.equal(response.headers['x-test'], 'yes');
 });
 
-test('Node Guest lease routing returns asynchronous commit validation failures as protocol errors', async () => {
+test('Node Guest lease routing reports asynchronous local status validation failures as local-handler-failure', async () => {
   const host = createHost({ port: 0 });
   await host.start();
   let guest;
@@ -575,7 +619,7 @@ test('Node Guest lease routing returns asynchronous commit validation failures a
         settlesWithoutProcessFault(() =>
           broker.request({ targetId: 'guest-async-lease-error', method: 'GET', path: '/' }),
         ),
-      (error) => error.code === 'protocol-error',
+      (error) => error.code === 'local-handler-failure',
     );
   } finally {
     if (broker !== undefined) await broker.close('test-complete');
