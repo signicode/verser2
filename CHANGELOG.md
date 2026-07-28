@@ -33,6 +33,22 @@
   writing, the consumer owns reading, and cancellation/close transfers a
   terminal lifecycle event rather than silently reusing a stream.
 
+### Small breaking change — Local header input validation
+
+- Broker request APIs (Node/Bun and local) reject invalid local header names and
+  values with `TypeError`; Node/Bun Guest response APIs validate header values
+  and status text with `TypeError`; Python Broker rejects invalid request headers
+  with `ValueError`.
+- Unhandled Guest response header or status-text validation shifts from
+  `protocol-error` to `local-handler-failure`.
+- Valid Latin-1 / ByteString header values remain fully supported. Malformed
+  remote metadata (e.g. from a misbehaving federated peer) continues to produce
+  `protocol-error`.
+- Only callers that supplied invalid header names, values, or status text, or
+  relied on deferred `protocol-error` reporting, are affected.
+- Compatibility impact is small: update error-handling logic rather than retrying
+  invalid input.
+
 ## v0.5.0 - Route revocation and lifecycle observation
 
 - Adds Guest-owned route revocation APIs across Node, Bun, Python, and local Guest surfaces.

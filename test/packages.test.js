@@ -80,10 +80,16 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'VERSER_GUEST_REVOCATION_PATH',
     'VERSER_LEASE_ACQUIRE_TIMEOUT_HEADER',
     'VERSER_LIFECYCLE_EVENTS',
+    'VERSER_RESPONSE_METADATA_HEADER',
+    'VERSER_RESPONSE_METADATA_MAX_BYTES',
+    'VERSER_RESPONSE_METADATA_MAX_HEADER_PAIRS',
+    'VERSER_RESPONSE_METADATA_MAX_STATUS_TEXT_BYTES',
+    'VERSER_RESPONSE_METADATA_VERSION',
     'VERSER_ROUTE_EVENT_REASONS',
     'VERSER_ROUTE_LIFECYCLE_EVENT_TYPES',
     'VWS_MAX_FRAME_BYTES',
     'VerserError',
+    'classifyVerserResponseMetadata',
     'createBrokerRouteLifecycleControlFrame',
     'createBrokerRoutesControlFrame',
     'createCommonBrokerRequest',
@@ -107,13 +113,16 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'createVerserHostId',
     'createVerserRouteGeneration',
     'decodeHeaderMap',
+    'decodeVerserResponseMetadata',
     'decodeVwsFrame',
     'encodeJsonLine',
     'encodeVerserEnvelope',
+    'encodeVerserResponseMetadata',
     'encodeVwsFrame',
     'exceedsFederatedRouteHopLimit',
     'extractCertificateIdentity',
     'flattenHeaderValue',
+    'flattenVerserHeaderPairs',
     'flattenVerserHeaders',
     'fromHttp2RequestHeaders',
     'fromHttp2ResponseHeaders',
@@ -126,6 +135,7 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'isValidHeaderValue',
     'normalizeBrokerRequestBody',
     'normalizeClientTlsOptions',
+    'normalizeHeaderPairs',
     'normalizeHeaders',
     'normalizeHostClientAuthTlsOptions',
     'normalizeRequestHeaders',
@@ -139,8 +149,10 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'readNdjsonLines',
     'readVerserEnvelopeFromStream',
     'readVwsLine',
+    'requireFinalResponseStatusCode',
     'resolveRouteForHostname',
     'resolveRouteForUrl',
+    'sanitizeHttp2ResponseHeaderPairs',
     'sanitizeHttp2ResponseHeaders',
     'stripHttp2PseudoHeaders',
     'toHttp2RequestHeaders',
@@ -148,8 +160,10 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'toVerserError',
     'toVerserErrorCode',
     'toVerserHttpErrorResponse',
+    'validateLocalHeaders',
     'validateRuntimeNeutralHeaders',
     'validateVerserHeaders',
+    'validateVerserStatusText',
     'verifyPinnedCertificate',
     'verserErrorFromResponseBody',
   ]);
@@ -211,7 +225,7 @@ test('@signicode/verser2-host package exposes Host API', () => {
   assert.match(hostDeclarations, /VerserLocalGuestResponse/);
   assert.match(hostDeclarations, /VerserLocalGuestHandle/);
   assert.match(hostDeclarations, /VerserLocalBrokerHandle/);
-  assert.match(hostDeclarations, /setHeader\([^)]*\):[^;]*this/);
+  assert.match(hostDeclarations, /setHeader\([\s\S]*?\):\s*this/);
   assert.match(hostDeclarations, /writeHead\([^)]*\):[^;]*this/);
   assert.match(hostDeclarations, /end\([^)]*\):[^;]*this/);
   assert.match(hostDeclarations, /leaseAcquireTimeoutMs\?: number/);

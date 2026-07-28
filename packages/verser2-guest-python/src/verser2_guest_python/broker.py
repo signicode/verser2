@@ -15,6 +15,11 @@ import h2.config
 import h2.events
 
 from ._tls import create_client_ssl_context, load_pfx_client_identity, validate_h2_alpn
+from .protocol import (
+    decode_response_metadata,
+    flatten_response_header_pairs,
+    validate_local_headers,
+)
 
 VWS_MAX_FRAME_BYTES = 1 * 1024 * 1024
 VWS_MAX_QUEUE_MESSAGES = 64
@@ -351,6 +356,21 @@ class VerserBrokerResponse:
     chunks (streamed from the Host).  ``read()``/``text()``/``json()`` always
     collect and buffer the complete body first; ``aiter_bytes()`` yields
     chunks incrementally.
+
+    Public attributes
+    -----------------
+    ``status``
+        Application HTTP status code.
+    ``headers``
+        Compatibility header map using last-value-wins semantics for repeated
+        field names.
+    ``header_pairs``
+        Exact ordered ``(name, value)`` fields, preserving repeated headers
+        such as ``set-cookie``.
+    ``status_text``
+        Received application reason phrase, or ``None`` when it is unavailable.
+    ``request_id``
+        Verser request identifier for the routed request.
     """
 
     def __init__(
@@ -360,9 +380,13 @@ class VerserBrokerResponse:
         headers: dict[str, str],
         request_id: str,
         body: bytes | AsyncIterable[bytes],
+        header_pairs: list[tuple[str, str]] | None = None,
+        status_text: str | None = None,
     ) -> None:
         self.status = status
         self.headers = dict(headers)
+        self.header_pairs = list(self.headers.items()) if header_pairs is None else list(header_pairs)
+        self.status_text = status_text
         self.request_id = request_id
         if hasattr(body, "__aiter__"):
             self._body = body
@@ -867,6 +891,7 @@ class VerserBroker:
         ValueError
             If the response stream ends before response headers are received.
         """
+        user_headers = validate_local_headers(headers)
         parsed = urlsplit(url)
         hostname = parsed.hostname or ""
         path = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
@@ -881,7 +906,6 @@ class VerserBroker:
         if not target_id:
             raise RuntimeError(f"No advertised route found for domain '{hostname}'")
 
-        user_headers = dict(headers or {})
         has_host = any(key.lower() in {"host", ":authority"} for key in user_headers)
         if not has_host:
             authority = parsed.hostname or ""
@@ -1123,20 +1147,46 @@ class VerserBroker:
                 self._events.pop(stream_id, None)
                 raise event
             if isinstance(event, h2.events.ResponseReceived):
-                raw_headers = dict(event.headers)
-                status = int(raw_headers.get(":status") or 200)
-                headers = {
-                    str(name).lower(): str(value)
-                    for name, value in raw_headers.items()
-                    if not str(name).startswith(":")
-                }
-                if status >= 400:
+                raw_headers = [(str(name).lower(), str(value)) for name, value in event.headers]
+                status_values = [value for name, value in raw_headers if name == ":status"]
+                try:
+                    status = int(status_values[-1]) if status_values else 0
+                except ValueError:
+                    status = 0
+                metadata_values = [
+                    value for name, value in raw_headers if name == "x-verser-response-metadata"
+                ]
+                try:
+                    metadata = self._classify_response_metadata(
+                        status, request_id, metadata_values
+                    )
+                except ValueError as exc:
+                    try:
+                        await asyncio.shield(self._reset_stream(stream_id))
+                    finally:
+                        self._events.pop(stream_id, None)
+                    raise RuntimeError(
+                        f"Broker request {request_id} failed (protocol-error): {exc}"
+                    ) from exc
+                if metadata is None and status >= 400:
                     body = await self._collect_error_response_body(stream_id)
                     self._events.pop(stream_id, None)
                     raise self._error_from_response_body(body, status, request_id)
+                header_pairs = (
+                    metadata["headers"]
+                    if metadata is not None
+                    else [
+                        (name, value)
+                        for name, value in raw_headers
+                        if not name.startswith(":")
+                        and name != "x-verser-response-metadata"
+                    ]
+                )
                 return VerserBrokerResponse(
-                    status=status,
-                    headers=headers,
+                    status=metadata["statusCode"] if metadata is not None else status,
+                    headers=flatten_response_header_pairs(header_pairs),
+                    header_pairs=header_pairs,
+                    status_text=metadata.get("statusText") if metadata is not None else None,
                     request_id=request_id,
                     body=self._response_body_iter(stream_id),
                 )
@@ -1154,6 +1204,21 @@ class VerserBroker:
                 raise ValueError(
                     f"Malformed response for request {request_id}: stream ended before response headers"
                 )
+
+    @staticmethod
+    def _classify_response_metadata(
+        outer_status: int, expected_request_id: str, metadata_values: list[str]
+    ) -> dict[str, Any] | None:
+        if not metadata_values:
+            return None
+        if len(metadata_values) != 1:
+            raise ValueError("Response metadata header must occur once")
+        metadata = decode_response_metadata(metadata_values[0])
+        if metadata["requestId"] != expected_request_id:
+            raise ValueError("Response metadata requestId mismatch")
+        if metadata["statusCode"] != outer_status:
+            raise ValueError("Response metadata statusCode mismatch")
+        return metadata
 
     async def _collect_error_response_body(self, stream_id: int) -> bytes:
         chunks: list[bytes] = []

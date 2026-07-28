@@ -8,9 +8,11 @@ import type {
   RoutedDomainRegistration,
   VerserClientTlsOptions,
   VerserError,
+  VerserHeaderPair,
   VerserHostTlsOptions,
   VerserRegistrationRequest,
   VerserRouteLifecycleEvent,
+  VerserSerializedHeaderMap,
 } from '@signicode/verser-common';
 
 /**
@@ -75,7 +77,7 @@ export type VerserLocalGuestRequestListener = (
   request: Readable & {
     readonly method: string;
     readonly url: string;
-    readonly headers: Record<string, string>;
+    readonly headers: VerserSerializedHeaderMap;
   },
   response: VerserLocalGuestResponse,
 ) => void;
@@ -87,9 +89,18 @@ export type VerserLocalGuestRequestListener = (
  */
 export interface VerserLocalGuestResponse {
   statusCode: number;
-  setHeader(name: string, value: string | number | boolean): this;
-  getHeader(name: string): string | undefined;
-  writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): this;
+  statusMessage?: string;
+  setHeader(
+    name: string,
+    value: string | number | boolean | readonly (string | number | boolean)[],
+  ): this;
+  appendHeader(
+    name: string,
+    value: string | number | boolean | readonly (string | number | boolean)[],
+  ): this;
+  getHeader(name: string): string | string[] | undefined;
+  writeHead(statusCode: number, headers?: ResponseHeaders): this;
+  writeHead(statusCode: number, statusMessage?: string, headers?: ResponseHeaders): this;
   write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
   end(chunk?: string | Buffer, encoding?: BufferEncoding): this;
   flushHeaders(): void;
@@ -182,8 +193,15 @@ export interface VerserLocalBrokerResponse {
   readonly requestId: string;
   readonly statusCode: number;
   readonly headers: Record<string, string>;
+  readonly statusText?: string;
+  readonly headerPairs?: readonly VerserHeaderPair[];
   readonly body: Readable;
 }
+
+type ResponseHeaderValue = string | number | boolean | readonly (string | number | boolean)[];
+type ResponseHeaders =
+  | Record<string, ResponseHeaderValue>
+  | readonly (readonly [string, ResponseHeaderValue])[];
 
 /**
  * Handle returned for an attached in-process Guest.

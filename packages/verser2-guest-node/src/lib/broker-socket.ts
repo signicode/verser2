@@ -3,6 +3,7 @@ import { Duplex, PassThrough, Writable } from 'node:stream';
 import type { Readable } from 'node:stream';
 
 import { createVerserError } from '@signicode/verser-common';
+import type { VerserHeaderPair } from '@signicode/verser-common';
 import { ChunkedBodyDecoder } from './chunked-body-decoder';
 import { normalizeRequestHeaders, parseContentLength } from './header-utils';
 import type { BrokerRequestRouter, VerserBrokerOptions } from './types';
@@ -169,6 +170,8 @@ export class VerserBrokerSocket extends Duplex {
     })) as unknown as {
       statusCode: number;
       headers: Record<string, string>;
+      statusText?: string;
+      headerPairs?: readonly VerserHeaderPair[];
       body: {
         pipe(destination: NodeJS.WritableStream): void;
         on(event: 'error', handler: (error: Error) => void): void;
@@ -176,7 +179,12 @@ export class VerserBrokerSocket extends Duplex {
     };
     this.responseBody = response.body as unknown as Readable;
     this.push(
-      serializeHttpResponseHead({ statusCode: response.statusCode, headers: response.headers }),
+      serializeHttpResponseHead({
+        statusCode: response.statusCode,
+        headers: response.headers,
+        ...(response.statusText === undefined ? {} : { statusText: response.statusText }),
+        ...(response.headerPairs === undefined ? {} : { headerPairs: response.headerPairs }),
+      }),
     );
     response.body.pipe(this.createResponseSink());
     response.body.on('error', (error) => this.destroy(error));

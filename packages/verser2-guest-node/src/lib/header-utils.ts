@@ -1,4 +1,6 @@
-import type { OutgoingHttpHeaders } from 'node:http';
+import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http';
+
+import type { VerserHeaderPair } from '@signicode/verser-common';
 
 export function parseContentLength(headerText: string): number {
   const match = /content-length:\s*(\d+)/i.exec(headerText);
@@ -25,9 +27,34 @@ export function normalizeRequestHeaders(
   return normalizedHeaders;
 }
 
-export function toRawHeaderList(headers: Record<string, string>): Buffer[] {
-  return Object.entries(headers).flatMap(([name, value]) => [
-    Buffer.from(name),
-    Buffer.from(value),
+export function toHeaderPairs(
+  headers: Record<string, string>,
+  headerPairs: readonly VerserHeaderPair[] | undefined,
+): readonly VerserHeaderPair[] {
+  return headerPairs ?? Object.entries(headers);
+}
+
+export function toRawHeaderList(
+  headers: Record<string, string>,
+  headerPairs?: readonly VerserHeaderPair[],
+): Buffer[] {
+  return toHeaderPairs(headers, headerPairs).flatMap(([name, value]) => [
+    Buffer.from(name, 'latin1'),
+    Buffer.from(value, 'latin1'),
   ]);
+}
+
+export function toIncomingHeaders(
+  headers: Record<string, string>,
+  headerPairs?: readonly VerserHeaderPair[],
+): IncomingHttpHeaders {
+  const incoming = Object.create(null) as IncomingHttpHeaders;
+  for (const [name, value] of toHeaderPairs(headers, headerPairs)) {
+    const existing = incoming[name];
+    incoming[name] =
+      existing === undefined
+        ? value
+        : [...(Array.isArray(existing) ? existing : [existing]), value];
+  }
+  return incoming;
 }

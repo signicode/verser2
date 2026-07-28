@@ -1,3 +1,5 @@
+import { flattenVerserHeaderPairs } from './header-serialization';
+import { sanitizeHttp2ResponseHeaderPairs, validateVerserStatusText } from './headers';
 import type {
   RoutedDomainRegistration,
   RoutedRequestEnvelope,
@@ -5,7 +7,7 @@ import type {
   VerserGuestId,
   VerserPeerId,
 } from './types';
-import { requireNonEmpty, requireValidStatusCode } from './utils';
+import { requireFinalResponseStatusCode, requireNonEmpty } from './utils';
 
 /**
  * Validates and creates a {@link VerserGuestId}.
@@ -121,8 +123,9 @@ export function createRoutedRequestEnvelope(
 /**
  * Validates and creates a {@link RoutedResponseEnvelope}.
  *
- * Ensures `requestId` is non-empty and `statusCode` is a valid HTTP status code
- * (100–599). Headers are shallow-copied.
+ * Ensures `requestId` is non-empty and `statusCode` is final (200–599). When
+ * `headerPairs` are supplied they are sanitized and authoritatively projected to
+ * legacy `headers` with deterministic last-value-wins semantics.
  *
  * @param envelope - The response envelope to validate.
  * @returns The validated response envelope.
@@ -132,9 +135,18 @@ export function createRoutedRequestEnvelope(
 export function createRoutedResponseEnvelope(
   envelope: RoutedResponseEnvelope,
 ): RoutedResponseEnvelope {
+  const headerPairs =
+    envelope.headerPairs === undefined
+      ? undefined
+      : sanitizeHttp2ResponseHeaderPairs(envelope.headerPairs);
   return {
     requestId: requireNonEmpty(envelope.requestId, 'request id'),
-    statusCode: requireValidStatusCode(envelope.statusCode),
-    headers: { ...envelope.headers },
+    statusCode: requireFinalResponseStatusCode(envelope.statusCode),
+    headers:
+      headerPairs === undefined ? { ...envelope.headers } : flattenVerserHeaderPairs(headerPairs),
+    ...(envelope.statusText === undefined
+      ? {}
+      : { statusText: validateVerserStatusText(envelope.statusText) }),
+    ...(headerPairs === undefined ? {} : { headerPairs }),
   };
 }

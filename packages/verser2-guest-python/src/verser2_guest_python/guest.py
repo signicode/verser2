@@ -26,9 +26,14 @@ from .asgi import (
 )
 from .protocol import (
     VERSER_ENVELOPE_PREFIX_BYTES,
+    asgi_response_header_pairs,
     decode_envelope,
     encode_envelope,
-    sanitize_http2_response_headers,
+    flatten_response_header_pairs,
+    RemoteRequestMetadataError,
+    sanitize_http2_response_header_pairs,
+    validate_remote_request_metadata,
+    validate_final_response_status,
 )
 
 
@@ -196,7 +201,7 @@ class VerserGuest:
         -------
         DispatchResponse
             A frozen dataclass with ``request_id``, ``status_code``,
-            ``headers``, ``body``, and optionally ``error``.
+            ``headers``, ``header_pairs``, ``body``, and optionally ``error``.
 
         Raises
         ------
@@ -646,6 +651,10 @@ class VerserGuest:
             nonlocal response_started, response_ended
             event_type = event.get("type")
             if event_type == "http.response.start":
+                status_code = validate_final_response_status(event.get("status", 200))
+                header_pairs = sanitize_http2_response_header_pairs(
+                    asgi_response_header_pairs(event.get("headers", []))
+                )
                 response_started = True
                 await self._send_data(
                     stream_id,
@@ -653,15 +662,9 @@ class VerserGuest:
                         "response",
                         {
                             "requestId": str((metadata or {}).get("requestId") or ""),
-                            "statusCode": int(event.get("status") or 200),
-                            "headers": sanitize_http2_response_headers(
-                                {
-                                    name.decode(
-                                        "ascii", "ignore"
-                                    ).lower(): value.decode("latin-1")
-                                    for name, value in event.get("headers", [])
-                                }
-                            ),
+                            "statusCode": status_code,
+                            "headers": flatten_response_header_pairs(header_pairs),
+                            "headerPairs": header_pairs,
                         },
                     ),
                     False,
@@ -714,6 +717,21 @@ class VerserGuest:
                 await self._send_data(stream_id, b"", True)
                 response_ended = True
 
+        async def reject_invalid_request_metadata(error: RemoteRequestMetadataError) -> None:
+            await self._send_data(
+                stream_id,
+                encode_envelope(
+                    "error",
+                    {
+                        "requestId": "",
+                        "code": "protocol-error",
+                        "message": str(error),
+                        "context": {"guestId": self.guest_id},
+                    },
+                ),
+                True,
+            )
+
         def try_start_app() -> None:
             nonlocal app_task, buffer, metadata, pending_metadata_flow_controlled_length
             if metadata is not None or len(buffer) < VERSER_ENVELOPE_PREFIX_BYTES:
@@ -725,7 +743,7 @@ class VerserGuest:
             envelope_type, parsed_metadata, remainder = decode_envelope(buffer)
             if envelope_type != "request":
                 raise RuntimeError("Lease stream received a non-request envelope")
-            metadata = parsed_metadata
+            metadata = validate_remote_request_metadata(parsed_metadata)
             buffer = b""
             if remainder:
                 request_events.put_nowait(
@@ -776,7 +794,11 @@ class VerserGuest:
                         event.flow_controlled_length
                     )
                     buffer += event.data
-                    try_start_app()
+                    try:
+                        try_start_app()
+                    except RemoteRequestMetadataError as error:
+                        await reject_invalid_request_metadata(error)
+                        return
                 else:
                     # Guard: don't queue body data if app already finished
                     if app_task is None or not app_task.done():
@@ -796,7 +818,11 @@ class VerserGuest:
                             stream_id, int(event.flow_controlled_length)
                         )
             if isinstance(event, h2.events.StreamEnded):
-                try_start_app()
+                try:
+                    try_start_app()
+                except RemoteRequestMetadataError as error:
+                    await reject_invalid_request_metadata(error)
+                    return
                 # Guard: don't queue final event if app already done/cancelled
                 if app_task is None or not app_task.done():
                     request_events.put_nowait(

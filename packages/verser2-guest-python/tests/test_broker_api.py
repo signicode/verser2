@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import h2.events
+from verser2_guest_python.protocol import validate_local_headers
 
 
 def _build_broker_response(**kwargs):
@@ -24,10 +25,17 @@ def _build_broker_response(**kwargs):
     status = kwargs.get("status", 200)
     headers = kwargs.get("headers", {})
     request_id = kwargs.get("request_id", "req-broker-1")
+    header_pairs = kwargs.get("header_pairs")
+    status_text = kwargs.get("status_text")
 
     try:
         return response_type(
-            status=status, headers=headers, request_id=request_id, body=body
+            status=status,
+            headers=headers,
+            header_pairs=header_pairs,
+            status_text=status_text,
+            request_id=request_id,
+            body=body,
         )
     except TypeError as error:
         raise AssertionError(
@@ -167,6 +175,37 @@ class VerserBrokerResponseTest(unittest.TestCase):
             self._run(self._response(body=b'{"ok": true}').json()),
             {"ok": True},
         )
+
+    def test_response_preserves_public_metadata_fields(self) -> None:
+        response = _build_broker_response(
+            status=207,
+            status_text="Multi-Status",
+            headers={"set-cookie": "two=2", "x-empty": ""},
+            header_pairs=[
+                ("set-cookie", "one=1"),
+                ("set-cookie", "two=2"),
+                ("x-empty", ""),
+            ],
+            request_id="req-metadata",
+        )
+
+        self.assertEqual(response.status, 207)
+        self.assertEqual(response.status_text, "Multi-Status")
+        self.assertEqual(response.request_id, "req-metadata")
+        self.assertEqual(
+            response.header_pairs,
+            [("set-cookie", "one=1"), ("set-cookie", "two=2"), ("x-empty", "")],
+        )
+        self.assertEqual(response.headers, {"set-cookie": "two=2", "x-empty": ""})
+
+    def test_response_keeps_explicit_empty_header_pairs(self) -> None:
+        response = _build_broker_response(
+            headers={"x-legacy": "retained"},
+            header_pairs=[],
+        )
+
+        self.assertEqual(response.header_pairs, [])
+        self.assertEqual(response.headers, {"x-legacy": "retained"})
 
     def test_full_body_helpers_are_single_use(self) -> None:
         response = self._response(body=b"hello")
@@ -630,7 +669,7 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
             self.fail("expected x-verser-headers value for JSON request headers")
         self.assertIn("x-test", request_headers_meta)
         self.assertEqual(
-            json.loads(request_headers_meta).get("HoSt"), "public.example:9443"
+            json.loads(request_headers_meta).get("host"), "public.example:9443"
         )
         ipv6_headers = dict(headers_calls[1]["headers"])
         self.assertEqual(
@@ -648,6 +687,32 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
         message = str(context.exception).lower()
         self.assertIn("route", message)
         self.assertIn("unknown.local", message)
+
+    def test_request_rejects_invalid_local_headers_before_sending(self) -> None:
+        broker = self._broker_factory()
+        broker._routes = [{"targetId": "guest-a", "domain": "alpha.local"}]
+
+        async def fail_send_headers(*_args: Any, **_kwargs: Any) -> int:
+            self.fail("invalid local headers must not be sent")
+
+        with patch.object(type(broker), "_send_headers", new=AsyncMock(side_effect=fail_send_headers)):
+            for headers in (
+                {"x-emoji": "😀"},
+                {"bad name": "value"},
+                {"x-control": "line\nbreak"},
+                {"Connection": "close"},
+            ):
+                with self.subTest(headers=headers):
+                    with self.assertRaises(ValueError):
+                        self._run(broker.get("http://alpha.local/", headers=headers))
+
+        # Latin-1 obs-text remains valid local input.
+        self.assertEqual(validate_local_headers({"x-cafe": "café"}), {"x-cafe": "café"})
+
+    def test_request_validates_headers_before_route_lookup(self) -> None:
+        broker = self._broker_factory()
+        with self.assertRaises(ValueError):
+            self._run(broker.get("http://unknown.local/", headers={"x-emoji": "😀"}))
 
     def test_binary_request_body_chunks_are_not_utf8_coerced(self) -> None:
         broker = self._broker_factory()
@@ -876,6 +941,126 @@ class VerserBrokerRequestAndStreamingTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers, {"x-stream": "yes"})
         self.assertEqual(acknowledged, [(17, 3), (17, 5)])
+
+    def test_collect_response_classifies_final_h2_metadata_and_preserves_pairs(self) -> None:
+        broker = self._broker_factory()
+
+        async def collect(headers: list[tuple[str, str]], request_id: str = "req-meta") -> Any:
+            broker._events[17] = asyncio.Queue()
+            broker._events[17].put_nowait(
+                h2.events.ResponseReceived(stream_id=17, headers=headers)
+            )
+            return await broker._collect_response(17, request_id)
+
+        for status, status_text in ((204, None), (307, "Temporary Redirect"), (404, "Missing"), (500, "Failure")):
+            metadata: dict[str, Any] = {
+                "version": 1,
+                "requestId": "req-meta",
+                "statusCode": status,
+                "headers": [["set-cookie", "one=1"], ["set-cookie", "two=2"], ["x-empty", ""]],
+            }
+            if status_text is not None:
+                metadata["statusText"] = status_text
+            response = self._run(
+                collect(
+                    [
+                        (":status", str(status)),
+                        ("x-verser-response-metadata", json.dumps(metadata)),
+                        ("x-outer-only", "ignored"),
+                    ]
+                )
+            )
+            self.assertEqual(response.status, status)
+            self.assertEqual(response.status_text, status_text)
+            self.assertEqual(response.header_pairs, [tuple(pair) for pair in metadata["headers"]])
+            self.assertEqual(response.headers, {"set-cookie": "two=2", "x-empty": ""})
+
+        latin1_metadata = {
+            "version": 1,
+            "requestId": "req-meta",
+            "statusCode": 200,
+            "statusText": "R\u00e9ussi",
+            "headers": [["x-latin1", "caf\u00e9"]],
+        }
+        latin1_response = self._run(
+            collect(
+                [
+                    (":status", "200"),
+                    ("x-verser-response-metadata", json.dumps(latin1_metadata)),
+                ]
+            )
+        )
+        self.assertEqual(latin1_response.status_text, "R\u00e9ussi")
+        self.assertEqual(latin1_response.header_pairs, [("x-latin1", "caf\u00e9")])
+
+    def test_collect_response_legacy_and_protocol_failures(self) -> None:
+        broker = self._broker_factory()
+
+        async def collect(headers: list[tuple[str, str]], request_id: str = "req-meta") -> Any:
+            broker._events[17] = asyncio.Queue()
+            broker._events[17].put_nowait(
+                h2.events.ResponseReceived(stream_id=17, headers=headers)
+            )
+            return await broker._collect_response(17, request_id)
+
+        legacy = self._run(
+            collect([(':status', '307'), ('set-cookie', 'one=1'), ('set-cookie', 'two=2')])
+        )
+        self.assertEqual(legacy.header_pairs, [("set-cookie", "one=1"), ("set-cookie", "two=2")])
+        self.assertEqual(legacy.headers, {"set-cookie": "two=2"})
+
+        broker._events[17] = asyncio.Queue()
+        broker._events[17].put_nowait(
+            h2.events.ResponseReceived(stream_id=17, headers=[(":status", "502")])
+        )
+        broker._events[17].put_nowait(h2.events.StreamEnded(stream_id=17))
+        with self.assertRaisesRegex(RuntimeError, "status 502"):
+            self._run(broker._collect_response(17, "req-meta"))
+
+        valid = {"version": 1, "requestId": "req-meta", "statusCode": 500, "headers": []}
+        invalid_headers = [
+            [(":status", "500"), ("x-verser-response-metadata", "not-json")],
+            [(":status", "500"), ("x-verser-response-metadata", json.dumps(valid)), ("x-verser-response-metadata", json.dumps(valid))],
+            [(":status", "500"), ("x-verser-response-metadata", json.dumps({**valid, "requestId": "other"}))],
+            [(":status", "404"), ("x-verser-response-metadata", json.dumps(valid))],
+            [(":status", "500"), ("x-verser-response-metadata", json.dumps({**valid, "headers": [["bad name", "value"]]}))],
+            [(":status", "500"), ("x-verser-response-metadata", json.dumps({**valid, "statusText": "bad\ntext"}))],
+            [(":status", "500"), ("x-verser-response-metadata", json.dumps({**valid, "statusText": "😀"}))],
+            [(":status", "500"), ("x-verser-response-metadata", json.dumps({**valid, "headers": [["x-emoji", "😀"]]}))],
+            [(":status", "500"), ("x-verser-response-metadata", "x" * 4097)],
+        ]
+        for headers in invalid_headers:
+            with self.assertRaisesRegex(RuntimeError, "protocol-error"):
+                self._run(collect(headers))
+
+    def test_collect_response_rejects_unpaired_surrogates_and_resets_stream(self) -> None:
+        broker = self._broker_factory()
+        malformed_values = [
+            r'{"version":1,"requestId":"req-meta","statusCode":500,"statusText":"\ud800","headers":[]}',
+            r'{"version":1,"requestId":"req-meta","statusCode":500,"headers":[["x-test","\ud800"]]}',
+        ]
+
+        async def collect(value: str) -> None:
+            broker._events[17] = asyncio.Queue()
+            broker._events[17].put_nowait(
+                h2.events.ResponseReceived(
+                    stream_id=17,
+                    headers=[
+                        (":status", "500"),
+                        ("x-verser-response-metadata", value),
+                    ],
+                )
+            )
+            await broker._collect_response(17, "req-meta")
+
+        with patch.object(type(broker), "_reset_stream", new=AsyncMock()) as reset:
+            for value in malformed_values:
+                with self.assertRaisesRegex(RuntimeError, "protocol-error"):
+                    self._run(collect(value))
+
+        self.assertEqual(reset.await_count, len(malformed_values))
+        reset.assert_awaited_with(17)
+        self.assertNotIn(17, broker._events)
 
     def test_response_stream_reset_raises_actionable_error(self) -> None:
         broker = self._broker_factory()

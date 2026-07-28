@@ -666,6 +666,255 @@ test('Local Broker routes to a local Guest through Host state with HTTP semantic
   }
 });
 
+test('Local Guest responses preserve status text and sanitized repeated header pairs', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localGuest;
+  let localBroker;
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-response-metadata',
+      routedDomains: ['local-response-metadata.test'],
+      listener: (_request, response) => {
+        response.setHeader('x-replaced', 'old');
+        response.writeHead(209, 'Local Status', [
+          ['set-cookie', 'a=1'],
+          ['x-between', 'between'],
+          ['x-repeat', 'one'],
+          ['set-cookie', 'b=2'],
+          ['x-repeat', 'two'],
+          ['x-replaced', 'new'],
+          ['connection', 'x-drop'],
+          ['x-drop', 'drop'],
+        ]);
+        response.appendHeader('x-repeat', ['three', 'four']);
+        response.end('ok');
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-response-metadata-broker' });
+    const response = await localBroker.request({
+      targetId: 'local-response-metadata',
+      method: 'GET',
+      path: '/',
+    });
+    assert.equal(response.statusText, 'Local Status');
+    assert.deepEqual(response.headerPairs, [
+      ['set-cookie', 'a=1'],
+      ['x-between', 'between'],
+      ['x-repeat', 'one'],
+      ['set-cookie', 'b=2'],
+      ['x-repeat', 'two'],
+      ['x-replaced', 'new'],
+      ['x-repeat', 'three'],
+      ['x-repeat', 'four'],
+    ]);
+    assert.deepEqual(response.headers, {
+      'set-cookie': 'b=2',
+      'x-between': 'between',
+      'x-repeat': 'four',
+      'x-replaced': 'new',
+    });
+    assert.deepEqual(await readBody(response.body), Buffer.from('ok'));
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Guest rejects invalid final response metadata without emitting a partial response', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localGuest;
+  let localBroker;
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-invalid-response',
+      routedDomains: ['local-invalid-response.test'],
+      listener: (_request, response) => {
+        response.statusCode = 199;
+        response.end('must not be sent');
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-invalid-response-broker' });
+    await localBroker.waitForRoute('local-invalid-response.test');
+
+    await assert.rejects(
+      () => localBroker.request({ targetId: 'local-invalid-response', method: 'GET', path: '/' }),
+      (error) => error.code === 'protocol-error',
+    );
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Broker API boundaries reject invalid local request headers before routing and preserve Latin-1', async () => {
+  const disconnectedBroker = createBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'local-input',
+  });
+  await assert.rejects(
+    () =>
+      disconnectedBroker.request({
+        targetId: 'guest',
+        method: 'GET',
+        path: '/',
+        headers: { 'x-emoji': '😀' },
+      }),
+    TypeError,
+  );
+
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localGuest;
+  let localBroker;
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-header-guest',
+      routedDomains: ['local-header-guest.test'],
+      listener: (request, response) => {
+        assert.equal(request.headers['x-cafe'], 'café');
+        response.end();
+      },
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-header-broker' });
+    await localBroker.waitForRoute('local-header-guest.test');
+    await assert.rejects(
+      () =>
+        localBroker.request({
+          targetId: 'local-header-guest',
+          method: 'GET',
+          path: '/',
+          headers: { Connection: 'close' },
+        }),
+      TypeError,
+    );
+    const response = await localBroker.request({
+      targetId: 'local-header-guest',
+      method: 'GET',
+      path: '/',
+      headers: { 'x-cafe': 'café' },
+    });
+    response.body.resume();
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('HTTP/2 Broker receives local-handler-failure when a local Guest commits invalid local status input', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'h2-invalid-local-response-broker' });
+  let localGuest;
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'h2-invalid-local-response',
+      routedDomains: ['h2-invalid-local-response.test'],
+      listener: (_request, response) => {
+        response.statusMessage = 'not\nvalid';
+        response.end('must not be sent');
+      },
+    });
+    await broker.connect();
+    await broker.waitForRoute('h2-invalid-local-response.test');
+
+    await assert.rejects(
+      () => broker.request({ targetId: 'h2-invalid-local-response', method: 'GET', path: '/' }),
+      (error) => error.code === 'local-handler-failure',
+    );
+  } finally {
+    await broker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Guest routes asynchronous commit validation failures without process faults', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localGuest;
+  let localBroker;
+  const faults = [];
+  const onUncaught = (error) => faults.push(error);
+  const onUnhandled = (reason) => faults.push(reason);
+  process.on('uncaughtException', onUncaught);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-async-invalid-response',
+      routedDomains: ['local-async-invalid-response.test'],
+      listener: (_request, response) =>
+        setImmediate(() => {
+          response.statusCode = 199;
+          response.write('must not be sent');
+        }),
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-async-invalid-response-broker' });
+    await localBroker.waitForRoute('local-async-invalid-response.test');
+    let timeoutId;
+    try {
+      const timeout = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('request timed out')), 1000);
+      });
+      await assert.rejects(
+        () =>
+          Promise.race([
+            localBroker.request({
+              targetId: 'local-async-invalid-response',
+              method: 'GET',
+              path: '/',
+            }),
+            timeout,
+          ]),
+        (error) => error.code === 'protocol-error',
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+    assert.deepEqual(faults, []);
+  } finally {
+    process.off('uncaughtException', onUncaught);
+    process.off('unhandledRejection', onUnhandled);
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Local Guest writeHead retains headers when status text is explicitly undefined', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let localGuest;
+  let localBroker;
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'local-write-head-undefined',
+      routedDomains: ['local-write-head-undefined.test'],
+      listener: (_request, response) =>
+        response.writeHead(201, undefined, { 'x-test': 'yes' }).end(),
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'local-write-head-undefined-broker' });
+    const response = await localBroker.request({
+      targetId: 'local-write-head-undefined',
+      method: 'GET',
+      path: '/',
+    });
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.statusText, undefined);
+    assert.equal(response.headers['x-test'], 'yes');
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (localGuest !== undefined) await localGuest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Local Broker routes to an HTTP/2 Guest through Host target checks', async () => {
   const host = createHost({ port: 0 });
   await host.start();

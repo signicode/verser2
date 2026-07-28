@@ -1,5 +1,7 @@
 import { Readable } from 'node:stream';
 
+import type { VerserHeaderPair } from '@signicode/verser-common';
+
 import type { VerserDispatchController } from './dispatch-controller';
 
 export function toBrokerRequestBody(
@@ -55,8 +57,14 @@ export function isAsyncIterableBody(value: unknown): value is AsyncIterable<unkn
 export function serializeHttpResponseHead(response: {
   readonly statusCode: number;
   readonly headers: Record<string, string>;
+  readonly statusText?: string;
+  readonly headerPairs?: readonly VerserHeaderPair[];
 }): Buffer {
-  const headers = { ...response.headers };
-  const headerLines = Object.entries(headers).map(([key, value]) => `${key}: ${value}`);
-  return Buffer.from(`HTTP/1.1 ${response.statusCode} OK\r\n${headerLines.join('\r\n')}\r\n\r\n`);
+  const headerPairs = response.headerPairs;
+  const rawPairs: readonly (readonly [string, string])[] =
+    headerPairs === undefined ? Object.entries(response.headers) : headerPairs;
+  const headerLines = rawPairs.map(([key, value]) => `${key}: ${value}`);
+  const reasonPhrase = response.statusText ?? '';
+  const allLines = [`HTTP/1.1 ${response.statusCode} ${reasonPhrase}`, ...headerLines];
+  return Buffer.from(`${allLines.join('\r\n')}\r\n\r\n`, 'latin1');
 }

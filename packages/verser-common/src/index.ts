@@ -31,6 +31,11 @@ export {
   VERSER_ENVELOPE_PREFIX_BYTES,
   VERSER_ENVELOPE_TYPES,
   VERSER_ENVELOPE_VERSION,
+  VERSER_RESPONSE_METADATA_HEADER,
+  VERSER_RESPONSE_METADATA_MAX_BYTES,
+  VERSER_RESPONSE_METADATA_MAX_HEADER_PAIRS,
+  VERSER_RESPONSE_METADATA_MAX_STATUS_TEXT_BYTES,
+  VERSER_RESPONSE_METADATA_VERSION,
 } from './lib/constants';
 
 export {
@@ -76,6 +81,7 @@ export type {
   VerserErrorContext,
   VerserErrorEnvelopeMetadata,
   VerserHeaderValue,
+  VerserHeaderPair,
   VerserHeaderInput,
   VerserHeaders,
   VerserCommonBroker,
@@ -85,6 +91,9 @@ export type {
   VerserRequestEnvelopeMetadata,
   VerserRequestId,
   VerserResponseEnvelopeMetadata,
+  VerserResponseClassification,
+  VerserResponseMetadata,
+  VerserSerializedHeaderMap,
   VerserStreamReadContext,
   VerserEnvelopeTypeName,
   VerserFederatedRoutesControlFrame,
@@ -153,7 +162,7 @@ export {
   toVerserError,
 } from './lib/errors';
 
-export { getErrorMessage } from './lib/utils';
+export { getErrorMessage, requireFinalResponseStatusCode } from './lib/utils';
 
 export {
   createVerserEnvelopeParser,
@@ -180,15 +189,25 @@ export {
 
 export { encodeJsonLine, readNdjsonLines } from './lib/ndjson';
 
-export { decodeHeaderMap, flattenVerserHeaders } from './lib/header-serialization';
+export {
+  decodeHeaderMap,
+  decodeVerserResponseMetadata,
+  encodeVerserResponseMetadata,
+  classifyVerserResponseMetadata,
+  flattenVerserHeaderPairs,
+  flattenVerserHeaders,
+} from './lib/header-serialization';
 
 export {
   flattenHeaderValue,
   isValidHeaderName,
   isValidHeaderValue,
   normalizeHeaders,
+  normalizeHeaderPairs,
   normalizeRequestHeaders,
+  validateLocalHeaders,
   validateRuntimeNeutralHeaders,
+  validateVerserStatusText,
 } from './lib/headers';
 
 export {
@@ -196,7 +215,11 @@ export {
   parseLeaseAcquireTimeoutMs,
 } from './lib/protocol-headers';
 
-export { sanitizeHttp2ResponseHeaders, validateVerserHeaders } from './lib/headers';
+export {
+  sanitizeHttp2ResponseHeaderPairs,
+  sanitizeHttp2ResponseHeaders,
+  validateVerserHeaders,
+} from './lib/headers';
 
 export {
   toHttp2RequestHeaders,

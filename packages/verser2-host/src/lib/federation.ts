@@ -25,6 +25,7 @@ import {
   type VerserRouteLifecycleEvent,
   createFederatedRoutesControlFrame,
   createFederationVwsNegotiationFailure,
+  createRoutedResponseEnvelope,
   createVerserError,
   createVerserHostFederationHandshake,
   createVerserHostId,
@@ -35,7 +36,6 @@ import {
   readLeaseRequestMetadataFromStream,
   readNdjsonLines,
   readVwsLine,
-  sanitizeHttp2ResponseHeaders,
   validateVerserHeaders,
 } from '@signicode/verser-common';
 
@@ -719,11 +719,13 @@ export async function handleFederatedIncomingRequestStream(
       encodeVerserEnvelope({
         type: 'response',
         metadata: {
-          requestId: response.requestId,
-          statusCode: response.statusCode,
-          headers: flattenVerserHeaders(
-            validateVerserHeaders(sanitizeHttp2ResponseHeaders(response.headers)),
-          ),
+          ...createRoutedResponseEnvelope({
+            requestId: response.requestId,
+            statusCode: response.statusCode,
+            headers: response.headers,
+            ...(response.statusText === undefined ? {} : { statusText: response.statusText }),
+            ...(response.headerPairs === undefined ? {} : { headerPairs: response.headerPairs }),
+          }),
         },
       }),
     );

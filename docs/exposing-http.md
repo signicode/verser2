@@ -44,6 +44,11 @@ response objects. The following are outside the supported surface:
 - Trailers and informational (1xx) responses
 - Full `IncomingMessage` / `ServerResponse` socket internals
 
+Response header values and status text use HTTP ByteString validation: Latin-1
+such as `café` is accepted, while emoji, control characters, and invalid field
+names fail at the local handler boundary (`TypeError` for JavaScript handlers;
+an uncaught failure is reported as `local-handler-failure`).
+
 ### VWS/1 WebSockets (Node)
 
 Node WebSockets use explicit VWS/1 framed messages over the existing TLS HTTP/2
@@ -190,6 +195,11 @@ explicitly.
 **FastAPI compatibility:** FastAPI and Starlette apps work because the Guest
 calls the standard ASGI 3 interface. FastAPI is not a runtime dependency of the
 package.
+
+ASGI response header events must contain valid byte header names and ByteString
+values. Latin-1 bytes are accepted; invalid names or control-byte values raise
+`ValueError` locally (or become `local-handler-failure` when uncaught by the
+application dispatch).
 
 ```py
 from fastapi import FastAPI

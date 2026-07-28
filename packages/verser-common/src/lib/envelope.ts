@@ -7,6 +7,7 @@ import {
   VERSER_ENVELOPE_VERSION,
 } from './constants';
 import { createVerserError } from './errors';
+import { validateVerserHeaders } from './headers';
 import { readExactly } from './stream-readers';
 import type {
   LeaseRequestMetadataReadOptions,
@@ -189,18 +190,21 @@ export async function readLeaseResponseMetadataFromStream(
   });
 
   if (parsed.type === 'response') {
-    return parsed.metadata as VerserResponseEnvelopeMetadata;
+    const metadata = parsed.metadata as VerserResponseEnvelopeMetadata;
+    assertResponseEnvelopeRequestId(metadata, options);
+    return metadata;
   }
 
   if (parsed.type === 'error') {
     const errorMetadata = parsed.metadata as VerserErrorEnvelopeMetadata;
+    assertResponseEnvelopeRequestId(errorMetadata, options);
     throw createVerserError(
       errorMetadata.code === 'local-handler-failure' ? 'local-handler-failure' : 'protocol-error',
       errorMetadata.message,
       {
+        ...(errorMetadata.context ?? {}),
         targetId: options.targetId,
         requestId: options.requestId,
-        ...(errorMetadata.context ?? {}),
       },
     );
   }
@@ -209,6 +213,24 @@ export async function readLeaseResponseMetadataFromStream(
     targetId: options.targetId,
     requestId: options.requestId,
   });
+}
+
+/**
+ * Verifies that a response envelope belongs to the in-flight routed request.
+ *
+ * @internal
+ */
+function assertResponseEnvelopeRequestId(
+  metadata: Pick<VerserResponseEnvelopeMetadata, 'requestId'>,
+  options: Pick<LeaseResponseMetadataReadOptions, 'requestId' | 'targetId'>,
+): void {
+  if (metadata.requestId !== options.requestId) {
+    throw createVerserError('protocol-error', 'Response envelope requestId mismatch', {
+      requestId: options.requestId,
+      targetId: options.targetId,
+      responseRequestId: metadata.requestId,
+    });
+  }
 }
 
 /**
@@ -232,7 +254,8 @@ export async function readLeaseRequestMetadataFromStream(
   });
 
   if (parsed.type === 'request') {
-    return parsed.metadata as VerserRequestEnvelopeMetadata;
+    const metadata = parsed.metadata as VerserRequestEnvelopeMetadata;
+    return { ...metadata, headers: validateVerserHeaders(metadata.headers) };
   }
 
   throw createVerserError('protocol-error', 'Lease stream received a non-request envelope', {

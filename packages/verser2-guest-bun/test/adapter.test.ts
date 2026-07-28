@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { Readable } from 'node:stream';
 import { PassThrough } from 'node:stream';
-import { NativeVerserWebSocket, VerserWebSocket } from '@signicode/verser2-guest-node';
+import {
+  MinimalServerResponse,
+  NativeVerserWebSocket,
+  VerserWebSocket,
+} from '@signicode/verser2-guest-node';
 import { createVerserBroker, createVerserBunGuest } from '../src/index';
 import {
   createBunWebSocketFacade,
@@ -55,6 +59,18 @@ const baseRequest = {
 };
 
 describe('createVerserBunGuest API', () => {
+  test('inherits rejected-Promise local Broker header validation and native Fetch ByteString boundaries', async () => {
+    const broker = createVerserBroker({
+      hostUrl: 'https://localhost:1',
+      brokerId: 'bun-local-headers',
+    });
+    await expect(
+      broker.request({ targetId: 'guest', method: 'GET', path: '/', headers: { 'x-emoji': '😀' } }),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(() => new Headers({ 'x-emoji': '😀' })).toThrow();
+    expect(() => new Response('ok', { headers: { 'x-emoji': '😀' } })).toThrow();
+  });
+
   test('attaches a fetch-style handler and returns the guest', () => {
     const guest = createVerserBunGuest({
       hostUrl: 'https://localhost:1',
@@ -223,6 +239,104 @@ describe('createVerserBunGuest routes API', () => {
 });
 
 describe('Bun adapter response body consumers', () => {
+  test('forwards native Fetch header failures through a MinimalServerResponse error channel', async () => {
+    const response = new MinimalServerResponse();
+    const receivedError = new Promise<Error>((resolve) => response.once('error', resolve));
+    createNodeStyleHandler('metadata.test', {
+      fetch: () => new Response('ok', { headers: { 'x-emoji': '😀' } }),
+    })({ method: 'GET', url: '/', headers: {}, on() {} }, response);
+
+    await expect(receivedError).resolves.toBeInstanceOf(TypeError);
+    expect(response.headersStarted).toBe(false);
+    expect(response.finished).toBe(false);
+  });
+
+  test('writes Bun metadata into a real MinimalServerResponse without numeric headers', async () => {
+    const dispatch = async (response: Response, requestId: string) => {
+      const nodeResponse = new MinimalServerResponse();
+      const finished = new Promise<void>((resolve) => nodeResponse.once('finish', resolve));
+      createNodeStyleHandler('metadata.test', { fetch: () => response })(
+        { method: 'GET', url: '/', headers: {}, on() {} },
+        nodeResponse,
+      );
+      await finished;
+      return nodeResponse.toDispatchResponse(requestId);
+    };
+
+    const custom = await dispatch(
+      new Response('ok', {
+        status: 218,
+        statusText: 'Bun Status',
+        headers: [
+          ['set-cookie', 'a=1'],
+          ['set-cookie', 'b=2'],
+          ['x-repeat', 'one'],
+          ['x-repeat', 'two'],
+        ],
+      }),
+      'bun-custom',
+    );
+    expect(custom.statusText).toBe('Bun Status');
+    expect(custom.headerPairs).toEqual([
+      ['x-repeat', 'one, two'],
+      ['set-cookie', 'a=1'],
+      ['set-cookie', 'b=2'],
+    ]);
+    expect(custom.headers).toEqual({ 'set-cookie': 'b=2', 'x-repeat': 'one, two' });
+    expect(Object.keys(custom.headers)).not.toContain('0');
+
+    const empty = await dispatch(new Response(null, { status: 204 }), 'bun-empty');
+    expect(empty.statusText).toBe('');
+
+    const omittedResponse = new MinimalServerResponse();
+    omittedResponse.end();
+    expect(omittedResponse.toDispatchResponse('bun-omitted').statusText).toBeUndefined();
+  });
+
+  test('propagates status text and repeated response header pairs to the Node surface', async () => {
+    const calls: Array<unknown[]> = [];
+    let ended!: () => void;
+    const done = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    const handler = createNodeStyleHandler('metadata.test', {
+      fetch: () =>
+        new Response('ok', {
+          status: 218,
+          statusText: 'Bun Status',
+          headers: [
+            ['x-repeat', 'one'],
+            ['x-repeat', 'two'],
+            ['set-cookie', 'a=1'],
+            ['set-cookie', 'b=2'],
+          ],
+        }),
+    });
+    handler({ method: 'GET', url: '/', headers: {}, on() {} }, {
+      statusCode: 0,
+      writeHead(...args: unknown[]) {
+        calls.push(args);
+      },
+      write() {
+        return true;
+      },
+      end() {
+        ended();
+      },
+    } as unknown as NodeStyleResponse);
+    await done;
+    expect(calls).toEqual([
+      [
+        218,
+        'Bun Status',
+        [
+          ['x-repeat', 'one, two'],
+          ['set-cookie', 'a=1'],
+          ['set-cookie', 'b=2'],
+        ],
+      ],
+    ]);
+  });
   test('reuses static route Responses by cloning each dispatch body', async () => {
     const staticResponse = new Response('reusable-static-body');
     const handler = { routes: { '/static': staticResponse } };
@@ -349,7 +463,7 @@ describe('Bun adapter BodyInit response bodies', () => {
     const responseChunks: Buffer[] = [];
     const writeHeadCalls: Array<{
       status: number;
-      headers?: Record<string, string | number | boolean>;
+      headers?: unknown;
     }> = [];
     let endChunk: string | Buffer | undefined;
     let done!: () => void;
@@ -359,8 +473,10 @@ describe('Bun adapter BodyInit response bodies', () => {
 
     const responseWriter = {
       statusCode: 0,
-      writeHead(status: number, headers: Record<string, string | number | boolean>) {
-        writeHeadCalls.push({ status, headers });
+      writeHead(status: number, statusTextOrHeaders: unknown, headers?: unknown) {
+        const responseHeaders =
+          typeof statusTextOrHeaders === 'string' ? headers : statusTextOrHeaders;
+        writeHeadCalls.push({ status, headers: responseHeaders });
         return undefined;
       },
       write(chunk: string | Buffer) {
@@ -404,7 +520,7 @@ describe('Bun adapter BodyInit response bodies', () => {
       expect(writeHeadCalls).toEqual([
         {
           status: 219,
-          headers: { 'content-type': 'text/plain' },
+          headers: [['content-type', 'text/plain']],
         },
       ]);
       expect(
@@ -455,7 +571,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
       const responseChunks: Buffer[] = [];
       const writeHeadCalls: Array<{
         status: number;
-        headers: Record<string, string | number | boolean>;
+        headers: unknown;
       }> = [];
       let streamDone!: () => void;
       const streamDonePromise = new Promise<void>((resolve) => {
@@ -464,8 +580,10 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
 
       const responseWriter = {
         statusCode: 0,
-        writeHead(status: number, headers: Record<string, string | number | boolean>) {
-          writeHeadCalls.push({ status, headers });
+        writeHead(status: number, statusTextOrHeaders: unknown, headers?: unknown) {
+          const responseHeaders =
+            typeof statusTextOrHeaders === 'string' ? headers : statusTextOrHeaders;
+          writeHeadCalls.push({ status, headers: responseHeaders });
           return undefined;
         },
         write(chunk: string | Buffer) {
@@ -492,7 +610,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
         }),
         {
           status: 219,
-          headers: { 'content-type': 'text/plain' },
+          headers: [['content-type', 'text/plain']],
         },
       );
 
@@ -517,7 +635,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
       expect(writeHeadCalls).toHaveLength(1);
       expect(writeHeadCalls[0]).toEqual({
         status: 219,
-        headers: { 'content-type': 'text/plain' },
+        headers: [['content-type', 'text/plain']],
       });
       expect(responseWriter.statusCode).toBe(219);
       expect(textCalled).toBe(false);
@@ -1092,6 +1210,65 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     expect(await response.text()).toBe('ok');
     expect(captured?.routeDomain).toBe('route.test');
     expect((captured?.headers as Record<string, string>).host).toBe('route.test:8443');
+  });
+
+  test('Bun Broker fetch preserves routed response status text and header pairs', async () => {
+    const broker = createVerserBroker({
+      hostUrl: 'https://localhost:1',
+      brokerId: 'bun-fetch-response-metadata-test',
+    });
+    (broker as unknown as { getRoutes: () => unknown }).getRoutes = () => [
+      { targetId: 'target', domain: 'metadata.test' },
+    ];
+    (broker as unknown as { request: () => Promise<unknown> }).request = async () => ({
+      statusCode: 418,
+      statusText: 'Custom Teapot',
+      headers: { 'x-legacy': 'wrong' },
+      headerPairs: [
+        ['set-cookie', 'first=1'],
+        ['set-cookie', 'second=2'],
+        ['x-repeat', 'one'],
+        ['x-repeat', 'two,three'],
+        ['x-empty', ''],
+      ],
+      body: Readable.from([Buffer.from('body')]),
+    });
+
+    const response = await broker.createFetch()('http://metadata.test/teapot');
+    expect(response.status).toBe(418);
+    expect(response.statusText).toBe('Custom Teapot');
+    expect(response.headers.get('x-repeat')).toBe('one, two,three');
+    expect(response.headers.get('x-empty')).toBe('');
+    const setCookies = (
+      response.headers as Headers & { getSetCookie?: () => string[] }
+    ).getSetCookie?.();
+    if (setCookies !== undefined) {
+      expect(setCookies).toEqual(['first=1', 'second=2']);
+    } else {
+      expect(response.headers.get('set-cookie')).toBe('first=1, second=2');
+    }
+    expect(await response.text()).toBe('body');
+  });
+
+  test('accepts Latin-1 response metadata at the Fetch adapter boundary', async () => {
+    const broker = createVerserBroker({
+      hostUrl: 'https://localhost:1',
+      brokerId: 'bun-fetch-latin1-metadata-test',
+    });
+    (broker as unknown as { getRoutes: () => unknown }).getRoutes = () => [
+      { targetId: 'target', domain: 'latin1.test' },
+    ];
+    (broker as unknown as { request: () => Promise<unknown> }).request = async () => ({
+      statusCode: 200,
+      statusText: 'Café',
+      headers: {},
+      headerPairs: [['x-cafe', 'café']],
+      body: Readable.from([Buffer.from('ok')]),
+    });
+
+    const response = await broker.createFetch()('http://latin1.test/');
+    expect(response.statusText).toBe('Café');
+    expect(response.headers.get('x-cafe')).toBe('café');
   });
 
   test('response writer cancels its Web source when the Node sink errors', async () => {

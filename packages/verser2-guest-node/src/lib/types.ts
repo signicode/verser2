@@ -328,9 +328,37 @@ export type NodeRequestListener = (
   },
   response: {
     statusCode: number;
-    setHeader: (name: string, value: string | number | boolean) => unknown;
-    getHeader: (name: string) => string | undefined;
-    writeHead: (statusCode: number, headers?: Record<string, string | number | boolean>) => unknown;
+    statusMessage?: string;
+    setHeader: (
+      name: string,
+      value: string | number | boolean | readonly (string | number | boolean)[],
+    ) => unknown;
+    appendHeader: (
+      name: string,
+      value: string | number | boolean | readonly (string | number | boolean)[],
+    ) => unknown;
+    getHeader: (name: string) => string | string[] | undefined;
+    writeHead: {
+      (
+        statusCode: number,
+        headers?:
+          | Record<string, string | number | boolean | readonly (string | number | boolean)[]>
+          | readonly (readonly [
+              string,
+              string | number | boolean | readonly (string | number | boolean)[],
+            ])[],
+      ): unknown;
+      (
+        statusCode: number,
+        statusMessage?: string,
+        headers?:
+          | Record<string, string | number | boolean | readonly (string | number | boolean)[]>
+          | readonly (readonly [
+              string,
+              string | number | boolean | readonly (string | number | boolean)[],
+            ])[],
+      ): unknown;
+    };
     write: (chunk: string | Buffer, encoding?: BufferEncoding) => boolean;
     end: (chunk?: string | Buffer, encoding?: BufferEncoding) => unknown;
     flushHeaders: () => void;

@@ -1,13 +1,14 @@
 import { EventEmitter } from 'node:events';
+import { validateHeaderName, validateHeaderValue } from 'node:http';
 import * as http2 from 'node:http2';
 import { PassThrough, Readable } from 'node:stream';
 
 import {
+  type VerserHeaderPair,
   createRoutedResponseEnvelope,
   createVerserError,
   encodeVerserEnvelope,
-  sanitizeHttp2ResponseHeaders,
-  validateVerserHeaders,
+  requireFinalResponseStatusCode,
 } from '@signicode/verser-common';
 
 import type { VerserNodeGuestDispatchRequest, VerserNodeGuestDispatchResponse } from './types';
@@ -82,6 +83,9 @@ export class MinimalServerResponse extends EventEmitter {
   /** HTTP response status code. Defaults to `200`. */
   public statusCode = 200;
 
+  /** Optional HTTP response reason phrase. An empty string is preserved. */
+  public statusMessage?: string;
+
   /**
    * Whether `end()` has been called on this response.
    *
@@ -89,7 +93,10 @@ export class MinimalServerResponse extends EventEmitter {
    */
   public finished = false;
 
-  private readonly headers = new Map<string, string>();
+  private readonly headers = new Map<string, string | string[]>();
+
+  /** Exact response-header emission order, including interleaved duplicate names. */
+  private readonly headerPairs: VerserHeaderPair[] = [];
 
   private readonly chunks: Buffer[] = [];
 
@@ -102,6 +109,8 @@ export class MinimalServerResponse extends EventEmitter {
   private bufferedResponseBytes = 0;
 
   private responseStarted = false;
+
+  private commitFailed = false;
 
   /**
    * @param requestId - The request ID for envelope metadata.
@@ -156,8 +165,15 @@ export class MinimalServerResponse extends EventEmitter {
    * @param value - Header value.
    * @returns `this` for chaining.
    */
-  public setHeader(name: string, value: string | number | boolean): this {
-    this.headers.set(name.toLowerCase(), String(value));
+  public setHeader(name: string, value: ResponseHeaderValue): this {
+    const [normalizedName, normalizedValue] = normalizeResponseHeader(name, value);
+    this.headers.set(normalizedName, normalizedValue);
+    this.removeHeaderPairs(normalizedName);
+    this.headerPairs.push(
+      ...(Array.isArray(normalizedValue) ? normalizedValue : [normalizedValue]).map(
+        (item): VerserHeaderPair => [normalizedName, item],
+      ),
+    );
     return this;
   }
 
@@ -167,8 +183,24 @@ export class MinimalServerResponse extends EventEmitter {
    * @param name - Header name.
    * @returns The header value or `undefined`.
    */
-  public getHeader(name: string): string | undefined {
+  public getHeader(name: string): string | string[] | undefined {
     return this.headers.get(name.toLowerCase());
+  }
+
+  /** Appends a value without replacing existing values for the header. */
+  public appendHeader(name: string, value: ResponseHeaderValue): this {
+    const [normalizedName, values] = normalizeResponseHeaderValues(name, value);
+    const existing = this.getHeader(normalizedName);
+    this.headers.set(
+      normalizedName,
+      existing === undefined
+        ? values.length === 1
+          ? values[0]
+          : values
+        : [...(Array.isArray(existing) ? existing : [existing]), ...values],
+    );
+    this.headerPairs.push(...values.map((item): VerserHeaderPair => [normalizedName, item]));
+    return this;
   }
 
   /**
@@ -178,14 +210,45 @@ export class MinimalServerResponse extends EventEmitter {
    * @param headers - Optional headers to set.
    * @returns `this` for chaining.
    */
+  public writeHead(statusCode: number, headers?: ResponseHeaders): this;
+  public writeHead(statusCode: number, statusMessage: undefined, headers: ResponseHeaders): this;
+  public writeHead(statusCode: number, statusMessage?: string, headers?: ResponseHeaders): this;
   public writeHead(
     statusCode: number,
-    headers: Record<string, string | number | boolean> = {},
+    statusMessageOrHeaders?: string | ResponseHeaders,
+    headers?: ResponseHeaders,
   ): this {
-    this.statusCode = statusCode;
-    for (const [name, value] of Object.entries(headers)) {
-      this.setHeader(name, value);
+    const responseHeaders =
+      typeof statusMessageOrHeaders === 'string'
+        ? (headers ?? {})
+        : (headers ?? statusMessageOrHeaders ?? {});
+    requireFinalResponseStatusCode(statusCode);
+    if (typeof statusMessageOrHeaders === 'string')
+      validateHeaderValue('statusMessage', statusMessageOrHeaders);
+    const nextHeaders = new Map(this.headers);
+    const nextPairs = [...this.headerPairs];
+    if (Array.isArray(responseHeaders)) {
+      const replaced = new Set<string>();
+      for (const [name, value] of responseHeaders) {
+        const [normalizedName, normalizedValue] = normalizeResponseHeader(name, value);
+        if (replaced.has(normalizedName)) {
+          appendResponseHeader(nextHeaders, nextPairs, normalizedName, normalizedValue);
+        } else {
+          setResponseHeader(nextHeaders, nextPairs, normalizedName, normalizedValue);
+          replaced.add(normalizedName);
+        }
+      }
+    } else {
+      for (const [name, value] of Object.entries(responseHeaders)) {
+        const [normalizedName, normalizedValue] = normalizeResponseHeader(name, value);
+        setResponseHeader(nextHeaders, nextPairs, normalizedName, normalizedValue);
+      }
     }
+    this.statusCode = statusCode;
+    if (typeof statusMessageOrHeaders === 'string') this.statusMessage = statusMessageOrHeaders;
+    this.headers.clear();
+    for (const [name, value] of nextHeaders) this.headers.set(name, value);
+    this.headerPairs.splice(0, this.headerPairs.length, ...nextPairs);
     return this;
   }
 
@@ -205,6 +268,7 @@ export class MinimalServerResponse extends EventEmitter {
    * @returns `true` if the data was accepted, `false` if backpressure applies.
    */
   public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
+    if (!this.commitResponse()) return false;
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
     if (this.output === undefined) {
       this.bufferedResponseBytes += buffer.length;
@@ -240,7 +304,7 @@ export class MinimalServerResponse extends EventEmitter {
    * committed on the first `write()` or `end()` call.
    */
   public flushHeaders(): void {
-    this.startStreamingResponse();
+    this.commitResponse();
   }
 
   /**
@@ -254,10 +318,12 @@ export class MinimalServerResponse extends EventEmitter {
    * @returns `this` for chaining.
    */
   public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
+    if (this.commitFailed) return this;
     if (chunk !== undefined) {
       this.write(chunk, encoding);
-    } else if (this.output !== undefined) {
-      this.startStreamingResponse();
+      if (this.commitFailed) return this;
+    } else if (!this.commitResponse()) {
+      return this;
     }
     this.finished = true;
     this.output?.end();
@@ -275,13 +341,8 @@ export class MinimalServerResponse extends EventEmitter {
    * @returns A fully buffered dispatch response.
    */
   public toDispatchResponse(requestId: string): VerserNodeGuestDispatchResponse {
-    const rawHeaders = Object.fromEntries(this.headers);
     return {
-      ...createRoutedResponseEnvelope({
-        requestId,
-        statusCode: this.statusCode,
-        headers: sanitizeHttp2ResponseHeaders(rawHeaders),
-      }),
+      ...this.createCanonicalResponse(requestId),
       body: Buffer.concat(this.chunks),
     };
   }
@@ -291,18 +352,122 @@ export class MinimalServerResponse extends EventEmitter {
     if (output === undefined || this.responseStarted) {
       return;
     }
+    const response = this.createCanonicalResponse(this.requestId ?? '');
     this.responseStarted = true;
     output.write(
       encodeVerserEnvelope({
         type: 'response',
-        metadata: {
-          requestId: this.requestId ?? '',
-          statusCode: this.statusCode,
-          headers: validateVerserHeaders(
-            sanitizeHttp2ResponseHeaders(Object.fromEntries(this.headers)),
-          ),
-        },
+        metadata: response,
       }),
     );
+  }
+
+  private commitResponse(): boolean {
+    if (this.commitFailed) return false;
+    try {
+      if (this.output === undefined) {
+        // For buffered responses with a known request ID (direct Node Guest
+        // dispatch), canonicalize eagerly to surface validation errors early.
+        // For standalone adapter use (no request ID), defer validation to
+        // toDispatchResponse(realRequestId) to avoid protocol errors from
+        // an empty placeholder request ID.
+        if (this.requestId !== undefined) {
+          this.createCanonicalResponse(this.requestId);
+        }
+      } else {
+        this.startStreamingResponse();
+      }
+      return true;
+    } catch (error) {
+      this.commitFailed = true;
+      this.emit('error', error);
+      return false;
+    }
+  }
+
+  private createCanonicalResponse(
+    requestId: string,
+  ): Omit<VerserNodeGuestDispatchResponse, 'body'> {
+    if (this.statusMessage !== undefined) validateHeaderValue('statusMessage', this.statusMessage);
+    return createRoutedResponseEnvelope({
+      requestId,
+      statusCode: this.statusCode,
+      headers: {},
+      ...(this.statusMessage === undefined ? {} : { statusText: this.statusMessage }),
+      headerPairs: this.toHeaderPairs(),
+    });
+  }
+
+  private toHeaderPairs(): VerserHeaderPair[] {
+    return [...this.headerPairs];
+  }
+
+  private removeHeaderPairs(name: string): void {
+    for (let index = this.headerPairs.length - 1; index >= 0; index -= 1) {
+      if (this.headerPairs[index][0] === name) {
+        this.headerPairs.splice(index, 1);
+      }
+    }
+  }
+}
+
+type ResponseHeaderValue = string | number | boolean | readonly (string | number | boolean)[];
+type ResponseHeaders =
+  | Record<string, ResponseHeaderValue>
+  | readonly (readonly [string, ResponseHeaderValue])[];
+
+function normalizeResponseHeader(
+  name: string,
+  value: ResponseHeaderValue,
+): [string, string | string[]] {
+  const [normalizedName, values] = normalizeResponseHeaderValues(name, value);
+  return [normalizedName, Array.isArray(value) ? values : values[0]];
+}
+
+function normalizeResponseHeaderValues(
+  name: string,
+  value: ResponseHeaderValue,
+): [string, string[]] {
+  validateHeaderName(name);
+  const values = Array.isArray(value) ? value.map(String) : [String(value)];
+  for (const item of values) validateHeaderValue(name, item);
+  return [name.toLowerCase(), values];
+}
+
+function setResponseHeader(
+  headers: Map<string, string | string[]>,
+  pairs: VerserHeaderPair[],
+  name: string,
+  value: string | string[],
+): void {
+  headers.set(name, value);
+  removeResponseHeaderPairs(pairs, name);
+  pairs.push(
+    ...(Array.isArray(value) ? value : [value]).map((item): VerserHeaderPair => [name, item]),
+  );
+}
+
+function appendResponseHeader(
+  headers: Map<string, string | string[]>,
+  pairs: VerserHeaderPair[],
+  name: string,
+  value: string | string[],
+): void {
+  const values = Array.isArray(value) ? value : [value];
+  const existing = headers.get(name);
+  headers.set(
+    name,
+    existing === undefined
+      ? values.length === 1
+        ? values[0]
+        : values
+      : [...(Array.isArray(existing) ? existing : [existing]), ...values],
+  );
+  pairs.push(...values.map((item): VerserHeaderPair => [name, item]));
+}
+
+function removeResponseHeaderPairs(pairs: VerserHeaderPair[], name: string): void {
+  for (let index = pairs.length - 1; index >= 0; index -= 1) {
+    if (pairs[index][0] === name) pairs.splice(index, 1);
   }
 }

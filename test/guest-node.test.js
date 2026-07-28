@@ -6,6 +6,7 @@ const test = require('node:test');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
 const { createVerserNodeGuest } = require('../packages/verser2-guest-node/dist/index.js');
+const { encodeVerserEnvelope } = require('../packages/verser-common/dist/index.js');
 const { trusted } = require('./support/tls-fixtures.cjs');
 
 function once(emitter, eventName) {
@@ -167,8 +168,237 @@ test('Node Guest dispatches a routed request to an attached request listener', a
     requestId: 'req-node-1',
     statusCode: 201,
     headers: { 'x-guest': 'node' },
+    headerPairs: [['x-guest', 'node']],
     body: Buffer.from('POST POST /hello?name=verser abc payload'),
   });
+});
+
+test('Node Guest preserves response status text and ordered repeated headers on direct dispatch', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-node-response-metadata',
+  });
+  guest.attach((_request, response) => {
+    response.writeHead(218, 'Custom Status', {
+      'set-cookie': ['first=1', 'second=2'],
+      'x-repeat': ['one', 'two'],
+      connection: 'x-removed',
+      'x-removed': 'no',
+      upgrade: 'websocket',
+      'x-verser-response-metadata': 'spoofed',
+    });
+    assert.deepEqual(response.getHeader('set-cookie'), ['first=1', 'second=2']);
+    response.appendHeader('x-repeat', 'three');
+    response.end('ok');
+  });
+
+  const result = await guest.dispatchRoutedRequest({
+    requestId: 'req-node-response-metadata',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-response-metadata',
+    method: 'GET',
+    path: '/metadata',
+    headers: {},
+    body: [],
+  });
+
+  assert.equal(result.statusText, 'Custom Status');
+  assert.deepEqual(result.headerPairs, [
+    ['set-cookie', 'first=1'],
+    ['set-cookie', 'second=2'],
+    ['x-repeat', 'one'],
+    ['x-repeat', 'two'],
+    ['x-repeat', 'three'],
+  ]);
+  assert.deepEqual(result.headers, { 'set-cookie': 'second=2', 'x-repeat': 'three' });
+});
+
+test('Node Guest preserves interleaved tuple response header order and replacement semantics', async () => {
+  const guest = createGuest({ hostUrl: 'https://localhost:1', guestId: 'guest-node-tuple-order' });
+  guest.attach((_request, response) => {
+    response.setHeader('x-replaced', 'old');
+    response.writeHead(200, [
+      ['set-cookie', 'a=1'],
+      ['x-between', 'value'],
+      ['set-cookie', 'b=2'],
+      ['x-replaced', 'new'],
+    ]);
+    response.appendHeader('set-cookie', 'c=3');
+    assert.deepEqual(response.getHeader('set-cookie'), ['a=1', 'b=2', 'c=3']);
+    assert.equal(response.getHeader('x-replaced'), 'new');
+    response.end();
+  });
+
+  const result = await guest.dispatchRoutedRequest({
+    requestId: 'req-node-tuple-order',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-tuple-order',
+    method: 'GET',
+    path: '/',
+    headers: {},
+    body: [],
+  });
+
+  assert.deepEqual(result.headerPairs, [
+    ['set-cookie', 'a=1'],
+    ['x-between', 'value'],
+    ['set-cookie', 'b=2'],
+    ['x-replaced', 'new'],
+    ['set-cookie', 'c=3'],
+  ]);
+  assert.deepEqual(result.headers, {
+    'set-cookie': 'c=3',
+    'x-between': 'value',
+    'x-replaced': 'new',
+  });
+});
+
+test('Node Guest response shim validates mutations promptly and preserves state on rejected writeHead input', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-node-response-validation',
+  });
+  guest.attach((_request, response) => {
+    response.setHeader('x-kept', 'before');
+    assert.throws(() => response.setHeader('bad\nname', 'value'), {
+      code: 'ERR_INVALID_HTTP_TOKEN',
+    });
+    assert.throws(() => response.appendHeader('x-invalid', 'bad\nvalue'), {
+      code: 'ERR_INVALID_CHAR',
+    });
+    assert.throws(() => response.setHeader('x-emoji', '😀'), { code: 'ERR_INVALID_CHAR' });
+    assert.throws(() => response.appendHeader('x-emoji', '😀'), { code: 'ERR_INVALID_CHAR' });
+    assert.throws(() => response.writeHead(200, { 'x-emoji': '😀' }), {
+      code: 'ERR_INVALID_CHAR',
+    });
+    assert.throws(() => response.writeHead(199, 'Invalid', { 'x-new': 'value' }), {
+      code: 'protocol-error',
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.statusMessage, undefined);
+    assert.equal(response.getHeader('x-kept'), 'before');
+    assert.equal(response.getHeader('x-new'), undefined);
+    response.end('ok');
+  });
+
+  const result = await guest.dispatchRoutedRequest({
+    requestId: 'req-node-response-validation',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-response-validation',
+    method: 'GET',
+    path: '/',
+    headers: {},
+    body: [],
+  });
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.headers, { 'x-kept': 'before' });
+  assert.deepEqual(result.body, Buffer.from('ok'));
+});
+
+test('Node Guest rejects malformed lease request headers before invoking its listener', async () => {
+  const host = await createLeaseTrackingHost();
+  let guest;
+  let invoked = 0;
+  const events = [];
+  try {
+    guest = createGuest({ hostUrl: host.url, guestId: 'guest-invalid-lease-request' });
+    guest.onLifecycle((event) => events.push(event));
+    guest.attach(() => {
+      invoked += 1;
+    });
+    await guest.connect();
+    await waitForLeaseCount(host.leases, 1);
+    host.leases[0].stream.end(
+      encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId: 'invalid-request',
+          sourceId: 'host',
+          targetId: 'guest-invalid-lease-request',
+          method: 'GET',
+          path: '/',
+          headers: { 'x-emoji': '😀' },
+        },
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(invoked, 0);
+    assert.equal(
+      events.some((event) => event.error?.code === 'protocol-error'),
+      true,
+    );
+  } finally {
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close();
+  }
+});
+
+test('Node Guest rejects direct invalid response metadata before sending a lease response envelope', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  let guest;
+  let localBroker;
+  try {
+    guest = createGuest({ hostUrl, guestId: 'guest-invalid-lease-response' });
+    guest.attach((_request, response) => {
+      response.statusCode = 199;
+      response.end('must not be sent');
+    }, 'invalid-lease-response.local.test');
+    localBroker = await host.attachLocalBroker({ brokerId: 'invalid-lease-response-broker' });
+    await guest.connect();
+    await localBroker.waitForRoute('invalid-lease-response.local.test');
+
+    await assert.rejects(
+      () =>
+        localBroker.request({
+          targetId: 'guest-invalid-lease-response',
+          method: 'GET',
+          path: '/',
+        }),
+      (error) => error.code === 'protocol-error',
+    );
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Node Guest keeps omitted and explicit empty response status text distinct', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-node-empty-status-text',
+  });
+  guest.attach((_request, response) => {
+    response.writeHead(204);
+    response.end();
+  });
+  const omitted = await guest.dispatchRoutedRequest({
+    requestId: 'req-node-status-omitted',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-empty-status-text',
+    method: 'GET',
+    path: '/',
+    headers: {},
+    body: [],
+  });
+  assert.equal(omitted.statusText, undefined);
+
+  guest.attach((_request, response) => {
+    response.writeHead(204, '');
+    response.end();
+  });
+  const empty = await guest.dispatchRoutedRequest({
+    requestId: 'req-node-status-empty',
+    sourceId: 'broker-1',
+    targetId: 'guest-node-empty-status-text',
+    method: 'GET',
+    path: '/',
+    headers: {},
+    body: [],
+  });
+  assert.equal(empty.statusText, '');
 });
 
 test('Node Guest uses the guest id as the automatic attach domain', async () => {
@@ -233,7 +463,7 @@ test('Node Guest flushHeaders works through streaming lease path with early head
 
     guest = createGuest({ hostUrl, guestId: 'guest-stream-flush' });
     guest.attach((request, response) => {
-      response.writeHead(208, { 'x-stream-flush': 'yes' });
+      response.writeHead(208, 'Lease Status', { 'x-stream-flush': ['yes', 'again'] });
       response.flushHeaders();
       headersResolve();
       request.on('end', () => {
@@ -262,7 +492,12 @@ test('Node Guest flushHeaders works through streaming lease path with early head
     // Response promise should resolve with headers BEFORE the request body is ended
     const response = await responsePromise;
     assert.equal(response.statusCode, 208);
-    assert.equal(response.headers['x-stream-flush'], 'yes');
+    assert.equal(response.headers['x-stream-flush'], 'again');
+    assert.equal(response.statusText, 'Lease Status');
+    assert.deepEqual(response.headerPairs, [
+      ['x-stream-flush', 'yes'],
+      ['x-stream-flush', 'again'],
+    ]);
 
     // Now end the request body — the handler will receive 'end' and call response.end()
     body.end(Buffer.from('trigger'));
@@ -282,6 +517,116 @@ function readBody(stream) {
     stream.on('error', reject);
   });
 }
+
+async function settlesWithoutProcessFault(operation) {
+  const faults = [];
+  const onUncaught = (error) => faults.push(error);
+  const onUnhandled = (reason) => faults.push(reason);
+  process.on('uncaughtException', onUncaught);
+  process.on('unhandledRejection', onUnhandled);
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error('Timed out waiting for routed request to settle')),
+      1000,
+    );
+  });
+  try {
+    return await Promise.race([operation(), timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+    await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+    process.off('uncaughtException', onUncaught);
+    process.off('unhandledRejection', onUnhandled);
+    assert.deepEqual(faults, []);
+  }
+}
+
+test('Node Guest direct dispatch turns asynchronous commit validation failures into protocol errors', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-async-direct-error',
+  });
+  guest.attach((_request, response) => {
+    setImmediate(() => {
+      response.statusCode = 199;
+      response.end('must not be sent');
+    });
+  });
+
+  await assert.rejects(
+    () =>
+      settlesWithoutProcessFault(() =>
+        guest.dispatchRoutedRequest({
+          requestId: 'async-direct-error',
+          sourceId: 'broker',
+          targetId: 'guest-async-direct-error',
+          method: 'GET',
+          path: '/',
+          headers: {},
+          body: [],
+        }),
+      ),
+    (error) => error.code === 'protocol-error',
+  );
+});
+
+test('Node Guest writeHead retains headers when status text is explicitly undefined', async () => {
+  const guest = createGuest({
+    hostUrl: 'https://localhost:1',
+    guestId: 'guest-write-head-undefined',
+  });
+  guest.attach((_request, response) =>
+    response.writeHead(201, undefined, { 'x-test': 'yes' }).end(),
+  );
+  const response = await guest.dispatchRoutedRequest({
+    requestId: 'write-head-undefined',
+    sourceId: 'broker',
+    targetId: 'guest-write-head-undefined',
+    method: 'GET',
+    path: '/',
+    headers: {},
+    body: [],
+  });
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.statusText, undefined);
+  assert.equal(response.headers['x-test'], 'yes');
+});
+
+test('Node Guest lease routing reports asynchronous local status validation failures as local-handler-failure', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  let guest;
+  let broker;
+  try {
+    guest = createGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId: 'guest-async-lease-error',
+    });
+    guest.attach(
+      (_request, response) =>
+        setImmediate(() => {
+          response.statusMessage = 'not\nvalid';
+          response.flushHeaders();
+        }),
+      'async-lease-error.test',
+    );
+    broker = await host.attachLocalBroker({ brokerId: 'async-lease-error-broker' });
+    await guest.connect();
+    await broker.waitForRoute('async-lease-error.test');
+    await assert.rejects(
+      () =>
+        settlesWithoutProcessFault(() =>
+          broker.request({ targetId: 'guest-async-lease-error', method: 'GET', path: '/' }),
+        ),
+      (error) => error.code === 'local-handler-failure',
+    );
+  } finally {
+    if (broker !== undefined) await broker.close('test-complete');
+    if (guest !== undefined) await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
 
 test('Node Guest rejects invalid setup and missing handlers with contextual errors', async () => {
   assert.throws(() => createGuest({ hostUrl: 'https://localhost:1', guestId: '' }), /guest id/i);

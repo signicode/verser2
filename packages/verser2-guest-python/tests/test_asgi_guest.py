@@ -345,6 +345,258 @@ class AsgiDispatchTest(unittest.TestCase):
 
 
 class ProtocolEnvelopeTest(unittest.TestCase):
+    def test_direct_dispatch_accepts_list_and_tuple_response_header_pairs(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [[b"x-list", b"value"], (b"x-tuple", b"value")],
+                }
+            )
+
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1", guest_id="list-pairs", app=app
+        )
+        response = asyncio.run(
+            guest.dispatch_routed_request(
+                {"requestId": "list-pairs", "method": "GET", "path": "/"}, b""
+            )
+        )
+
+        self.assertEqual(
+            response.header_pairs, [("x-list", "value"), ("x-tuple", "value")]
+        )
+
+    def test_direct_dispatch_rejects_malformed_response_header_pairs(self) -> None:
+        for headers in (
+            [[b"x-one"]],
+            [[b"x-one", b"value", b"extra"]],
+            [[b"x-one", "value"]],
+            [["x-one", b"value"]],
+        ):
+            with self.subTest(headers=headers):
+                async def app(scope, receive, send):
+                    await receive()
+                    await send(
+                        {"type": "http.response.start", "status": 200, "headers": headers}
+                    )
+
+                guest = create_verser_guest(
+                    host_url="https://127.0.0.1:1", guest_id="malformed-pairs", app=app
+                )
+                response = asyncio.run(
+                    guest.dispatch_routed_request(
+                        {"requestId": "malformed-pairs", "method": "GET", "path": "/"},
+                        b"",
+                    )
+                )
+                self.assertEqual(response.error["code"], "local-handler-failure")
+
+    def test_direct_dispatch_rejects_invalid_response_headers_before_start(self) -> None:
+        for name, value in (
+            (b"bad name", b"value"),
+            (b"x-\xff", b"value"),
+            (b"x-control", b"line\rbreak"),
+            (b"x-control", b"line\nbreak"),
+            (b"x-control", b"nul\x00value"),
+            (b"x-control", b"del\x7fvalue"),
+        ):
+            with self.subTest(name=name, value=value):
+                async def app(scope, receive, send):
+                    await receive()
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 200,
+                            "headers": [(name, value)],
+                        }
+                    )
+
+                guest = create_verser_guest(
+                    host_url="https://127.0.0.1:1", guest_id="invalid-header", app=app
+                )
+                response = asyncio.run(
+                    guest.dispatch_routed_request(
+                        {"requestId": "invalid-header", "method": "GET", "path": "/"},
+                        b"",
+                    )
+                )
+                self.assertEqual(response.error["code"], "local-handler-failure")
+
+    def test_direct_dispatch_validates_final_response_status_boundaries(self) -> None:
+        for status, valid in ((199, False), (200, True), (599, True), (600, False)):
+            with self.subTest(status=status):
+                async def app(scope, receive, send):
+                    await receive()
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": status,
+                            "headers": [(b"x-latin1", bytes([0xE9]))],
+                        }
+                    )
+
+                guest = create_verser_guest(
+                    host_url="https://127.0.0.1:1", guest_id="status-boundary", app=app
+                )
+                response = asyncio.run(
+                    guest.dispatch_routed_request(
+                        {"requestId": "status-boundary", "method": "GET", "path": "/"},
+                        b"",
+                    )
+                )
+                if valid:
+                    self.assertEqual(response.status_code, status)
+                    self.assertEqual(response.header_pairs, [("x-latin1", "é")])
+                else:
+                    self.assertEqual(response.error["code"], "local-handler-failure")
+
+    def test_lease_invalid_response_start_sends_pre_start_error_envelope(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"bad name", b"value")],
+                }
+            )
+
+        request = encode_envelope(
+            "request", {"requestId": "invalid-lease-start", "method": "GET", "path": "/"}
+        )
+
+        async def run() -> tuple[str, dict[str, Any], bool]:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="invalid-lease-start", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1, data=request, flow_controlled_length=len(request)
+                )
+            )
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await task
+            envelope_type, metadata, _ = decode_envelope(conn.sent_data[0][1])
+            return envelope_type, metadata, conn.sent_data[0][2]
+
+        envelope_type, metadata, ended = asyncio.run(run())
+        self.assertEqual(envelope_type, "error")
+        self.assertEqual(metadata["code"], "local-handler-failure")
+        self.assertTrue(ended)
+
+    def test_response_header_pairs_preserve_repetitions_order_and_empty_values(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 207,
+                    "headers": [
+                        (b"set-cookie", b"first=a"),
+                        (b"x-repeat", b"one"),
+                        (b"set-cookie", b"second=b"),
+                        (b"x-repeat", b"two"),
+                        (b"x-empty", b""),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1", guest_id="response-pairs", app=app
+        )
+        response = asyncio.run(
+            guest.dispatch_routed_request(
+                {"requestId": "response-pairs", "method": "GET", "path": "/"}, b""
+            )
+        )
+
+        self.assertEqual(
+            response.header_pairs,
+            [
+                ("set-cookie", "first=a"),
+                ("x-repeat", "one"),
+                ("set-cookie", "second=b"),
+                ("x-repeat", "two"),
+                ("x-empty", ""),
+            ],
+        )
+        self.assertEqual(
+            response.headers,
+            {"set-cookie": "second=b", "x-repeat": "two", "x-empty": ""},
+        )
+        self.assertFalse(hasattr(response, "status_text"))
+
+    def test_lease_response_envelope_uses_sanitized_pairs_and_legacy_projection(self) -> None:
+        async def app(scope, receive, send):
+            await receive()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"connection", b"x-remove"),
+                        (b"x-remove", b"no"),
+                        (b"transfer-encoding", b"chunked"),
+                        (b"x-verser-response-metadata", b"spoofed"),
+                        (b"set-cookie", b"first=a"),
+                        (b"x-repeat", b"one"),
+                        (b"set-cookie", b"second=b"),
+                        (b"x-repeat", b"two"),
+                        (b"x-empty", b""),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        request = encode_envelope(
+            "request",
+            {"requestId": "lease-response-pairs", "method": "GET", "path": "/"},
+        )
+
+        async def run() -> dict[str, Any]:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="lease-response-pairs", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(
+                    stream_id=1, data=request, flow_controlled_length=len(request)
+                )
+            )
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await task
+            envelope_type, metadata, _ = decode_envelope(conn.sent_data[0][1])
+            self.assertEqual(envelope_type, "response")
+            return metadata
+
+        metadata = asyncio.run(run())
+        self.assertEqual(
+            metadata["headerPairs"],
+            [
+                ["set-cookie", "first=a"],
+                ["x-repeat", "one"],
+                ["set-cookie", "second=b"],
+                ["x-repeat", "two"],
+                ["x-empty", ""],
+            ],
+        )
+        self.assertEqual(
+            metadata["headers"],
+            {"set-cookie": "second=b", "x-repeat": "two", "x-empty": ""},
+        )
+        self.assertNotIn("statusText", metadata)
+
     def test_encode_response_envelope_matches_verser_prefix(self) -> None:
         envelope = encode_envelope(
             "response",
@@ -363,6 +615,30 @@ class ProtocolEnvelopeTest(unittest.TestCase):
         self.assertEqual(metadata["requestId"], "req-python-envelope")
         self.assertEqual(metadata["statusCode"], 204)
         self.assertEqual(metadata["headers"], {"x-python": "yes"})
+
+    def test_encode_response_envelope_preserves_latin1_and_rejects_non_latin1_values(self) -> None:
+        latin1_envelope = encode_envelope(
+            "response",
+            {
+                "requestId": "req-latin1-envelope",
+                "statusCode": 200,
+                "statusText": "R\u00e9ussi",
+                "headers": {"x-latin1": "caf\u00e9"},
+                "headerPairs": [("x-latin1", "caf\u00e9")],
+            },
+        )
+        _, latin1_metadata, _ = decode_envelope(latin1_envelope)
+        self.assertEqual(latin1_metadata["statusText"], "R\u00e9ussi")
+        self.assertEqual(latin1_metadata["headerPairs"], [["x-latin1", "caf\u00e9"]])
+
+        for metadata in (
+            {"statusText": "😀", "headers": {}},
+            {"headers": {"x-emoji": "😀"}},
+            {"headers": {}, "headerPairs": [("x-emoji", "😀")]},
+        ):
+            with self.subTest(metadata=metadata):
+                with self.assertRaisesRegex(ValueError, "Invalid response"):
+                    encode_envelope("response", metadata)
 
     def test_decode_envelope_preserves_body_remainder(self) -> None:
         envelope = encode_envelope(
@@ -444,6 +720,79 @@ class ProtocolEnvelopeTest(unittest.TestCase):
 
 
 class LeaseTaskTest(unittest.TestCase):
+    def test_lease_request_preserves_latin1_header_octets_in_http_scope(self) -> None:
+        received_headers: list[tuple[bytes, bytes]] = []
+
+        async def app(scope, receive, send):
+            received_headers.extend(scope["headers"])
+            await receive()
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        request = encode_envelope(
+            "request",
+            {
+                "requestId": "latin1-request-headers",
+                "method": "GET",
+                "path": "/",
+                "headers": {"x-cafe": "café"},
+            },
+        )
+
+        async def run() -> None:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="latin1-request-headers", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(stream_id=1, data=request, flow_controlled_length=len(request))
+            )
+            await guest._events[1].put(h2.events.StreamEnded(stream_id=1))
+            await task
+
+        asyncio.run(run())
+        self.assertIn((b"x-cafe", b"caf\xe9"), received_headers)
+
+    def test_malformed_lease_request_headers_do_not_invoke_asgi_app(self) -> None:
+        invoked = False
+
+        async def app(scope, receive, send):
+            nonlocal invoked
+            invoked = True
+
+        request = encode_envelope(
+            "request",
+            {
+                "requestId": "invalid-request-headers",
+                "method": "GET",
+                "path": "/",
+                "headers": {"x-emoji": "😀"},
+            },
+        )
+
+        async def run() -> dict[str, Any]:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="invalid-request-headers", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            guest._events[1] = asyncio.Queue()
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(1))
+            await guest._events[1].put(
+                h2.events.DataReceived(stream_id=1, data=request, flow_controlled_length=len(request))
+            )
+            await task
+            envelope_type, metadata, _ = decode_envelope(conn.sent_data[0][1])
+            self.assertEqual(envelope_type, "error")
+            return metadata
+
+        metadata = asyncio.run(run())
+        self.assertFalse(invoked)
+        self.assertEqual(metadata["code"], "protocol-error")
+
     def test_read_loop_does_not_ack_request_body_data_on_frame_receipt(self) -> None:
         async def run() -> list[tuple[int, int]]:
             event = h2.events.DataReceived(

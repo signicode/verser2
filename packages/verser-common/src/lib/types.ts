@@ -49,6 +49,31 @@ export type VerserGuestId = string;
 export type VerserRequestId = string;
 
 /**
+ * An ordered, repeated-safe HTTP header field. Header names are normalized to lowercase.
+ *
+ * @public
+ */
+export type VerserHeaderPair = readonly [name: string, value: string];
+
+/** A JSON request-header map preserving repeated string values. @public */
+export type VerserSerializedHeaderMap = Readonly<Record<string, string | readonly string[]>>;
+
+/** Version 1 metadata carried by the reserved response metadata HTTP/2 header. @public */
+export interface VerserResponseMetadata {
+  readonly version: 1;
+  readonly requestId: VerserRequestId;
+  readonly statusCode: number;
+  /** Optional application reason phrase; omitted and empty remain distinct. */
+  readonly statusText?: string;
+  readonly headers: readonly VerserHeaderPair[];
+}
+
+/** Result of classifying a final Host-to-Broker response. @public */
+export type VerserResponseClassification =
+  | { readonly type: 'application-response'; readonly metadata?: VerserResponseMetadata }
+  | { readonly type: 'transport-error' };
+
+/**
  * A route record associating a Guest with a domain.
  *
  * Route matching uses **exact** URL hostname equality — no wildcard or suffix matching
@@ -191,6 +216,10 @@ export interface RoutedResponseEnvelope {
   readonly statusCode: number;
   /** Response headers as a flat string map. */
   readonly headers: Record<string, string>;
+  /** Optional application reason phrase. */
+  readonly statusText?: string;
+  /** Exact ordered response headers; authoritative when supplied. */
+  readonly headerPairs?: readonly VerserHeaderPair[];
 }
 
 /**
@@ -284,6 +313,10 @@ export interface VerserResponseEnvelopeMetadata {
   readonly statusCode: number;
   /** Response headers. */
   readonly headers: VerserHeaders;
+  /** Optional application reason phrase. */
+  readonly statusText?: string;
+  /** Exact ordered response headers; authoritative when supplied. */
+  readonly headerPairs?: readonly VerserHeaderPair[];
 }
 
 /**
@@ -425,6 +458,10 @@ export interface VerserCommonBrokerResponse<TBody> {
   readonly statusCode: number;
   /** Response headers. */
   readonly headers: VerserHeaders;
+  /** Optional application reason phrase. */
+  readonly statusText?: string;
+  /** Exact ordered response headers; authoritative when supplied. */
+  readonly headerPairs?: readonly VerserHeaderPair[];
   /** The response body. */
   readonly body: TBody;
 }

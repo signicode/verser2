@@ -14,6 +14,7 @@ import { requireNonEmpty } from './utils';
  * @param request - The raw Broker request.
  * @returns A normalized Broker request ready for dispatch.
  * @throws {VerserError} If `targetId`, `method`, or required fields are empty.
+ * @throws {TypeError} If headers contain invalid local HTTP values.
  * @throws {Error} If the body type is not supported.
  * @public
  */
