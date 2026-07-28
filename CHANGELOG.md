@@ -10,7 +10,7 @@
 - Records unsupported generic upgrades, Python Host, browser, Rust, Go, Java,
   and HTTP/3 runtimes.
 
-## Unreleased - Explicit route-domain selection
+## v0.7.0 - Explicit route-domain selection
 
 - Broker request surfaces may provide `routeDomain` (Node/Bun and local APIs) or
   `route_domain` (Python) when a Guest advertises more than one domain.
