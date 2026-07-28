@@ -107,6 +107,15 @@ is supported; emoji, control characters, and invalid field names are rejected
 locally (`TypeError` in JavaScript and `ValueError` in Python). Existing UTF-8
 encoded metadata byte limits still apply.
 
+**Migration — invalid local input now rejected eagerly.** Previously, some
+invalid header names or values passed through and surfaced later as
+`protocol-error`. Now Node/Bun and local Broker APIs reject them at the call
+site with `TypeError` (Node/Bun) or `ValueError` (Python), and unhandled Guest
+response validation becomes `local-handler-failure`. Valid Latin-1 values are
+unaffected; malformed remote metadata still yields `protocol-error`. The
+compatibility impact is small — update error-handling code rather than retrying
+invalid input.
+
 Node Broker request paths follow internal `307` and `308` redirects by default
 when the response `Location` hostname exactly matches an advertised verser2
 route. Redirect targets are resolved through the Broker route table, not DNS, and
