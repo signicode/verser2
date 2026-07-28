@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { isValidSemver } = require('./package-version-policy.js');
+const { isValidSemver, toPythonVersion } = require('./package-version-policy.js');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -158,8 +158,10 @@ function updatePackageLock(internalNames, version) {
 // Update pyproject.toml version line
 // --------------------------------------------------------------------------
 
-function updatePyprojectToml(version) {
-  const pyprojectPath = path.join(ROOT, 'packages', 'verser2-guest-python', 'pyproject.toml');
+function updatePyprojectToml(
+  version,
+  pyprojectPath = path.join(ROOT, 'packages', 'verser2-guest-python', 'pyproject.toml'),
+) {
   if (!fs.existsSync(pyprojectPath)) return false;
 
   let content = fs.readFileSync(pyprojectPath, 'utf8');
@@ -173,8 +175,10 @@ function updatePyprojectToml(version) {
   return true;
 }
 
-function updatePythonUvLock(version) {
-  const lockPath = path.join(ROOT, 'packages', 'verser2-guest-python', 'uv.lock');
+function updatePythonUvLock(
+  version,
+  lockPath = path.join(ROOT, 'packages', 'verser2-guest-python', 'uv.lock'),
+) {
   if (!fs.existsSync(lockPath)) return false;
 
   let content = fs.readFileSync(lockPath, 'utf8');
@@ -219,11 +223,13 @@ function main() {
   }
 
   // 2. Update pyproject.toml
-  if (updatePyprojectToml(version)) {
+  const pythonVersion = toPythonVersion(version);
+
+  if (updatePyprojectToml(pythonVersion)) {
     changedFiles.push(path.join(ROOT, 'packages', 'verser2-guest-python', 'pyproject.toml'));
   }
 
-  if (updatePythonUvLock(version)) {
+  if (updatePythonUvLock(pythonVersion)) {
     changedFiles.push(path.join(ROOT, 'packages', 'verser2-guest-python', 'uv.lock'));
   }
 
@@ -272,4 +278,5 @@ module.exports = {
   updatePackageLock,
   updatePyprojectToml,
   updatePythonUvLock,
+  toPythonVersion,
 };

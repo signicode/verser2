@@ -256,7 +256,7 @@ wheels = [
 
 [[package]]
 name = "verser2-guest-python"
-version = "0.7.1-next.0"
+version = "0.7.1.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
