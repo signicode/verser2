@@ -79,7 +79,10 @@ test.before(async () => {
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'warmup-broker' });
   const guest = createGuest({ hostUrl, guestId: 'warmup-guest' });
-  guest.attach((_request, response) => response.end('warmup'), 'warmup.local.test');
+  guest.attach((_request, response) => {
+    response.writeHead(200, { 'x-warmup': 'warmup' });
+    response.end('warmup');
+  }, 'warmup.local.test');
   try {
     await broker.connect();
     await guest.connect();
@@ -219,6 +222,111 @@ test('Broker createFetch helper defaults fetch routing through the Broker dispat
     assert.equal(response.status, 202);
     assert.equal(response.headers.get('x-fetch-helper'), 'verser');
     assert.equal(await response.text(), 'helper-routed');
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher preserves application status text and repeated response headers', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-metadata.local.test',
+    (_request, response) => {
+      response.writeHead(404, 'Guest Missing', [
+        ['set-cookie', 'one=1'],
+        ['set-cookie', 'two=2'],
+        ['x-empty', ''],
+        ['x-comma', 'one,two'],
+      ]);
+      response.end('missing');
+    },
+    { brokerId: 'broker-dispatcher-metadata', guestId: 'guest-dispatcher-metadata' },
+  );
+  try {
+    const response = await route.broker.createFetch()(
+      'http://dispatcher-metadata.local.test/missing',
+    );
+    assert.equal(response.status, 404);
+    assert.equal(response.statusText, 'Guest Missing');
+    assert.deepEqual(response.headers.getSetCookie(), ['one=1', 'two=2']);
+    assert.equal(response.headers.get('x-empty'), '');
+    assert.equal(response.headers.get('x-comma'), 'one,two');
+    assert.equal(await response.text(), 'missing');
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher callbacks preserve Latin-1 raw pairs and prototype-safe headers', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-callback-metadata.local.test',
+    (_request, response) => {
+      response.writeHead(418, 'Café Status', [
+        ['x-latin', 'café'],
+        ['set-cookie', 'one=1'],
+        ['x-between', 'value'],
+        ['set-cookie', 'two=2'],
+        ['__proto__', 'safe'],
+      ]);
+      response.end('callbacks');
+    },
+    {
+      brokerId: 'broker-dispatcher-callback-metadata',
+      guestId: 'guest-dispatcher-callback-metadata',
+    },
+  );
+  try {
+    const dispatcher = route.broker.createDispatcher();
+    const modern = await new Promise((resolve, reject) => {
+      dispatcher.dispatch(
+        { origin: 'http://dispatcher-callback-metadata.local.test', path: '/', method: 'GET' },
+        {
+          onRequestStart: () => {},
+          onResponseStart: (_controller, status, headers, statusText) =>
+            resolve({ status, headers, statusText }),
+          onResponseData: () => {},
+          onResponseEnd: () => {},
+          onError: reject,
+        },
+      );
+    });
+    assert.equal(modern.status, 418);
+    assert.equal(modern.statusText, 'Café Status');
+    assert.equal(modern.headers['x-latin'], 'café');
+    assert.deepEqual(modern.headers['set-cookie'], ['one=1', 'two=2']);
+    assert.equal(Object.getPrototypeOf(modern.headers), null);
+    assert.equal(modern.headers.__proto__, 'safe');
+
+    const legacy = await new Promise((resolve, reject) => {
+      dispatcher.dispatch(
+        { origin: 'http://dispatcher-callback-metadata.local.test', path: '/', method: 'GET' },
+        {
+          onConnect: () => {},
+          onHeaders: (status, rawHeaders, _resume, statusText) => {
+            resolve({ status, rawHeaders, statusText });
+            return true;
+          },
+          onData: () => true,
+          onComplete: () => {},
+          onError: reject,
+        },
+      );
+    });
+    assert.equal(legacy.statusText, 'Café Status');
+    assert.deepEqual(
+      legacy.rawHeaders.map((header) => header.toString('latin1')),
+      [
+        'x-latin',
+        'café',
+        'set-cookie',
+        'one=1',
+        'x-between',
+        'value',
+        'set-cookie',
+        'two=2',
+        '__proto__',
+        'safe',
+      ],
+    );
   } finally {
     await closeRoute(route);
   }

@@ -65,12 +65,16 @@ asyncio.run(main())
 
 function assertPythonBrokerTlsRejected(result) {
   assert.notEqual(result.code, 0, result.stdout);
-  assert.match(result.stderr, /tls|handshake|certificate|alert|socket|Broker connection closed/i);
+  assert.match(
+    result.stderr,
+    /tls|handshake|certificate|alert|socket|connection lost|Broker connection closed/i,
+  );
 }
 
 function runPythonBrokerRequest(options) {
   const script = `
 import asyncio
+import json
 import os
 from verser2_guest_python import create_verser_broker
 
@@ -87,9 +91,13 @@ async def main():
         text="python-upstream-body",
         headers={"x-python-broker": "yes"},
     )
-    print(f"status={response.status}", flush=True)
-    print(f"x-upstream-python={response.headers.get('x-upstream-python')}", flush=True)
-    print(await response.text(), flush=True)
+    print("response=" + json.dumps({
+        "status": response.status,
+        "statusText": response.status_text,
+        "headers": response.headers,
+        "headerPairs": response.header_pairs,
+        "body": await response.text(),
+    }, separators=(",", ":"), sort_keys=True), flush=True)
     await broker.close()
 
 asyncio.run(main())
@@ -268,7 +276,13 @@ test(
         routedDomains: ['manager-python.verser.test'],
         listener: async (request, response) => {
           const body = await text(request);
-          response.writeHead(203, { 'x-upstream-python': request.headers['x-python-broker'] });
+          response.writeHead(203, 'Python Upstream', [
+            ['x-upstream-python', request.headers['x-python-broker']],
+            ['set-cookie', 'one=1'],
+            ['set-cookie', 'two=2'],
+            ['x-empty', ''],
+            ['x-comma', 'one,two'],
+          ]);
           response.end(`${request.method}:${request.url}:${body}`);
         },
       });
@@ -290,9 +304,27 @@ test(
       });
 
       assert.equal(result.code, 0, result.stderr);
-      assert.match(result.stdout, /status=203/);
-      assert.match(result.stdout, /x-upstream-python=yes/);
-      assert.match(result.stdout, /POST:\/from-python\?via=upstream:python-upstream-body/);
+      const responseLine = result.stdout
+        .split(/\r?\n/)
+        .find((line) => line.startsWith('response='));
+      assert.ok(responseLine, result.stdout);
+      const response = JSON.parse(responseLine.slice('response='.length));
+      assert.equal(response.status, 203);
+      assert.equal(response.statusText, 'Python Upstream');
+      assert.deepEqual(response.headerPairs, [
+        ['x-upstream-python', 'yes'],
+        ['set-cookie', 'one=1'],
+        ['set-cookie', 'two=2'],
+        ['x-empty', ''],
+        ['x-comma', 'one,two'],
+      ]);
+      assert.deepEqual(response.headers, {
+        'x-upstream-python': 'yes',
+        'set-cookie': 'two=2',
+        'x-empty': '',
+        'x-comma': 'one,two',
+      });
+      assert.equal(response.body, 'POST:/from-python?via=upstream:python-upstream-body');
     } finally {
       await runner.close('test-complete');
       await manager.close('test-complete');

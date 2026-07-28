@@ -62,6 +62,21 @@ export function requireValidStatusCode(value: number): number {
 }
 
 /**
+ * Validates a final application response status code (integer, 200–599).
+ *
+ * @public
+ */
+export function requireFinalResponseStatusCode(value: number): number {
+  if (!Number.isInteger(value) || value < 200 || value > 599) {
+    throw createVerserError('protocol-error', 'Response status code must be final (200-599)', {
+      statusCode: value,
+    });
+  }
+
+  return value;
+}
+
+/**
  * Checks whether a string is a valid lowercase HTTP header name token.
  *
  * Less permissive than {@link isValidHeaderName} — requires lowercase only.

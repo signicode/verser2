@@ -4,13 +4,17 @@ import { PassThrough } from 'node:stream';
 import {
   type FederatedRouteRegistration,
   VERSER_LIFECYCLE_EVENTS,
+  VERSER_RESPONSE_METADATA_HEADER,
   type VerserErrorEnvelopeMetadata,
   type VerserPeerId,
   type VerserResponseEnvelopeMetadata,
+  type VerserSerializedHeaderMap,
   createPeerId,
+  createRoutedResponseEnvelope,
   createVerserError,
   decodeHeaderMap,
   encodeVerserEnvelope,
+  encodeVerserResponseMetadata,
   flattenVerserHeaders,
   parseLeaseAcquireTimeoutMs,
   readLeaseResponseMetadataFromStream,
@@ -36,6 +40,40 @@ import type {
 } from './types';
 import { toVerserError } from './utils';
 
+/** Writes a successful routed application response to a remote Broker stream. */
+function respondToRemoteBroker(
+  stream: http2.ServerHttp2Stream,
+  requestId: string,
+  response: Pick<
+    VerserResponseEnvelopeMetadata,
+    'statusCode' | 'headers' | 'statusText' | 'headerPairs'
+  >,
+): void {
+  const sanitizedLegacyHeaders = flattenVerserHeaders(
+    validateVerserHeaders(sanitizeHttp2ResponseHeaders(response.headers)),
+  );
+  const canonicalResponse = createRoutedResponseEnvelope({
+    requestId,
+    statusCode: response.statusCode,
+    headers: sanitizedLegacyHeaders,
+    ...(response.statusText === undefined ? {} : { statusText: response.statusText }),
+    headerPairs: response.headerPairs ?? Object.entries(sanitizedLegacyHeaders),
+  });
+  stream.respond({
+    ':status': canonicalResponse.statusCode,
+    ...canonicalResponse.headers,
+    [VERSER_RESPONSE_METADATA_HEADER]: encodeVerserResponseMetadata({
+      version: 1,
+      requestId,
+      statusCode: canonicalResponse.statusCode,
+      ...(canonicalResponse.statusText === undefined
+        ? {}
+        : { statusText: canonicalResponse.statusText }),
+      headers: canonicalResponse.headerPairs ?? [],
+    }),
+  });
+}
+
 function normalizeRequestedDomain(value: string): string {
   const authority = value.trim();
   try {
@@ -60,15 +98,16 @@ function normalizeAuthority(value: string): string {
   }
 }
 
-function headerValue(headers: Record<string, string>, name: string): string | undefined {
+function headerValue(headers: VerserSerializedHeaderMap, name: string): string | undefined {
   const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
-  return entry?.[1];
+  const value = entry?.[1];
+  return value === undefined ? undefined : typeof value === 'string' ? value : value[0];
 }
 
 function resolveRouteDomain(
   targetId: string,
   explicitDomain: string | undefined,
-  requestedHeaders: Record<string, string>,
+  requestedHeaders: VerserSerializedHeaderMap,
   callbacks: BrokerRoutingCallbacks,
 ): string | undefined {
   const requested =
@@ -105,9 +144,9 @@ function resolveRouteDomain(
 }
 
 function rewriteGuestHeaders(
-  requestedHeaders: Record<string, string>,
+  requestedHeaders: VerserSerializedHeaderMap,
   routeDomain: string | undefined,
-): Record<string, string> {
+): Record<string, string | readonly string[]> {
   if (routeDomain === undefined) {
     return requestedHeaders;
   }
@@ -196,15 +235,30 @@ async function readFederatedResponseMetadata(
   });
 
   if (parsed.type === 'response') {
-    return parsed.metadata as VerserResponseEnvelopeMetadata;
+    const metadata = parsed.metadata as VerserResponseEnvelopeMetadata;
+    if (metadata.requestId !== options.requestId) {
+      throw createVerserError('protocol-error', 'Response envelope requestId mismatch', {
+        requestId: options.requestId,
+        targetId: options.targetId,
+        responseRequestId: metadata.requestId,
+      });
+    }
+    return metadata;
   }
 
   if (parsed.type === 'error') {
     const errorMetadata = parsed.metadata as VerserErrorEnvelopeMetadata;
+    if (errorMetadata.requestId !== options.requestId) {
+      throw createVerserError('protocol-error', 'Response envelope requestId mismatch', {
+        requestId: options.requestId,
+        targetId: options.targetId,
+        responseRequestId: errorMetadata.requestId,
+      });
+    }
     throw createVerserError(toVerserErrorCode(errorMetadata.code), errorMetadata.message, {
+      ...(errorMetadata.context ?? {}),
       targetId: options.targetId,
       requestId: options.requestId,
-      ...(errorMetadata.context ?? {}),
     });
   }
 
@@ -280,10 +334,7 @@ async function routeH2BrokerRequestOverFederationStream(
 
   try {
     const responseMetadata = await responsePromise;
-    stream.respond({
-      ':status': responseMetadata.statusCode,
-      ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
-    });
+    respondToRemoteBroker(stream, requestId, responseMetadata);
     requestStream.once('error', () => {
       if (!stream.closed) {
         stream.close(http2.constants.NGHTTP2_CANCEL);
@@ -366,10 +417,7 @@ async function routeBrokerRequestOverLease(
   stream.pipe(lease.stream);
 
   const responseMetadata = await responsePromise;
-  stream.respond({
-    ':status': responseMetadata.statusCode,
-    ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(responseMetadata.headers)),
-  });
+  respondToRemoteBroker(stream, requestId, responseMetadata);
 
   // After response headers are sent, pipe the response body.
   // Guest-side errors during response use NGHTTP2_INTERNAL_ERROR to
@@ -453,10 +501,7 @@ async function routeH2BrokerRequestToLocalGuest(
       },
       callbacks,
     );
-    stream.respond({
-      ':status': response.statusCode,
-      ...validateVerserHeaders(sanitizeHttp2ResponseHeaders(response.headers)),
-    });
+    respondToRemoteBroker(stream, requestId, response);
     response.body.once('error', () => {
       if (!stream.closed) {
         stream.close(http2.constants.NGHTTP2_CANCEL);
@@ -864,12 +909,22 @@ async function routeLocalRequestToH2Guest(
   request.body.pipe(lease.stream);
   try {
     const metadata = await responsePromise;
-    return {
-      requestId: request.requestId,
+    const legacyHeaders = flattenVerserHeaders(
+      validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
+    );
+    const envelope = createRoutedResponseEnvelope({
+      requestId: metadata.requestId,
       statusCode: metadata.statusCode,
-      headers: flattenVerserHeaders(
-        validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
-      ),
+      headers: legacyHeaders,
+      ...(metadata.statusText === undefined ? {} : { statusText: metadata.statusText }),
+      headerPairs: metadata.headerPairs ?? Object.entries(legacyHeaders),
+    });
+    return {
+      requestId: envelope.requestId,
+      statusCode: envelope.statusCode,
+      headers: envelope.headers,
+      ...(envelope.statusText === undefined ? {} : { statusText: envelope.statusText }),
+      ...(envelope.headerPairs === undefined ? {} : { headerPairs: envelope.headerPairs }),
       body: lease.stream,
     };
   } finally {
@@ -1044,6 +1099,16 @@ async function routeLocalRequestOverFederationStream(
   request.body.pipe(requestStream);
   try {
     const metadata = await responsePromise;
+    const legacyHeaders = flattenVerserHeaders(
+      validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
+    );
+    const envelope = createRoutedResponseEnvelope({
+      requestId: metadata.requestId,
+      statusCode: metadata.statusCode,
+      headers: legacyHeaders,
+      ...(metadata.statusText === undefined ? {} : { statusText: metadata.statusText }),
+      headerPairs: metadata.headerPairs ?? Object.entries(legacyHeaders),
+    });
     responseBodyActive = true;
     const cleanup = (): void => {
       settled = true;
@@ -1112,11 +1177,11 @@ async function routeLocalRequestOverFederationStream(
     requestStream.once('close', responseClose);
 
     return {
-      requestId: request.requestId,
-      statusCode: metadata.statusCode,
-      headers: flattenVerserHeaders(
-        validateVerserHeaders(sanitizeHttp2ResponseHeaders(metadata.headers)),
-      ),
+      requestId: envelope.requestId,
+      statusCode: envelope.statusCode,
+      headers: envelope.headers,
+      ...(envelope.statusText === undefined ? {} : { statusText: envelope.statusText }),
+      ...(envelope.headerPairs === undefined ? {} : { headerPairs: envelope.headerPairs }),
       body,
     };
   } finally {

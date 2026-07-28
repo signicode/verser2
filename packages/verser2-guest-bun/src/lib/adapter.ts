@@ -1,4 +1,4 @@
-import { createVerserError } from '@signicode/verser-common';
+import { type VerserHeaderPair, createVerserError } from '@signicode/verser-common';
 import { DISPATCH_BUN_NOT_A_RESPONSE_MESSAGE } from './constants';
 import { resolveRoute } from './routes';
 import type {
@@ -24,7 +24,8 @@ export interface NodeStyleRequest {
 
 export interface NodeStyleResponse {
   statusCode: number;
-  writeHead(statusCode: number, headers?: Record<string, string | number | boolean>): unknown;
+  writeHead(statusCode: number, headers?: ResponseHeaders): unknown;
+  writeHead(statusCode: number, statusMessage?: string, headers?: ResponseHeaders): unknown;
   write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
   end(chunk?: string | Buffer, encoding?: BufferEncoding): unknown;
   on?(event: string, handler: (...args: readonly unknown[]) => void): unknown;
@@ -35,12 +36,18 @@ const getErrorMessage = (error: unknown): string => {
   return error instanceof Error ? error.message : String(error);
 };
 
-const toHeadersRecord = (headers: Headers): Record<string, string> => {
-  const result: Record<string, string> = {};
-  for (const [name, value] of headers.entries()) {
-    result[name.toLowerCase()] = value;
-  }
-  return result;
+const toHeaderPairs = (headers: Headers): VerserHeaderPair[] => {
+  const pairs = [...headers.entries()].map(
+    ([name, value]): VerserHeaderPair => [name.toLowerCase(), value],
+  );
+  const getSetCookie = (headers as Headers & { getSetCookie?: () => string[] }).getSetCookie;
+  if (getSetCookie === undefined) return pairs;
+  const setCookies = getSetCookie.call(headers);
+  if (setCookies.length === 0) return pairs;
+  return [
+    ...pairs.filter(([name]) => name !== 'set-cookie'),
+    ...setCookies.map((value): VerserHeaderPair => ['set-cookie', value]),
+  ];
 };
 
 interface VerserBunDispatchRequest {
@@ -54,7 +61,7 @@ interface VerserBunDispatchRequest {
 interface VerserBunDispatchResponse {
   readonly status: number;
   readonly statusText: string;
-  readonly headers: Record<string, string>;
+  readonly headerPairs: readonly VerserHeaderPair[];
   readonly body: ReadableStream<Uint8Array> | null;
   readonly text: () => Promise<string>;
   readonly json: () => Promise<unknown>;
@@ -203,7 +210,7 @@ const toVerserBunResponse = async (response: Response): Promise<VerserBunDispatc
   const dispatchResponse: VerserBunDispatchResponse = {
     status: response.status,
     statusText: response.statusText,
-    headers: toHeadersRecord(response.headers),
+    headerPairs: toHeaderPairs(response.headers),
     body: null,
     text: async () => {
       const bodyValue = await getTextBody();
@@ -675,7 +682,7 @@ export const createNodeStyleHandler = (
         const webResponse = await dispatchVerserBunRequestInternal(handler, bunRequest);
 
         response.statusCode = webResponse.status;
-        response.writeHead(webResponse.status, webResponse.headers);
+        response.writeHead(webResponse.status, webResponse.statusText, webResponse.headerPairs);
         await writeResponseBody(webResponse.body, response);
       } catch (error: unknown) {
         response.writeHead(500, { 'content-type': 'text/plain' });
@@ -684,3 +691,7 @@ export const createNodeStyleHandler = (
     })();
   };
 };
+
+type ResponseHeaders =
+  | Record<string, string | number | boolean>
+  | readonly (readonly [string, string | number | boolean])[];

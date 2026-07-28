@@ -1,4 +1,3 @@
-import * as http from 'node:http';
 import { Readable } from 'node:stream';
 
 import { resolveRouteForUrl } from '@signicode/verser-common';
@@ -9,7 +8,7 @@ import {
 import { Dispatcher } from 'undici';
 
 import { VerserDispatchController } from './dispatch-controller';
-import { toRawHeaderList } from './header-utils';
+import { toIncomingHeaders, toRawHeaderList } from './header-utils';
 import type { BrokerRequestRouter } from './types';
 import { toBrokerRequestBody } from './utils';
 
@@ -85,7 +84,7 @@ export class VerserBrokerDispatcher extends Dispatcher {
     }
 
     controller.attachResponseBody(response.body);
-    controller.rawHeaders = toRawHeaderList(response.headers);
+    controller.rawHeaders = toRawHeaderList(response.headers, response.headerPairs);
     response.body.pause();
     if (!controller.invoke(() => handler.onResponseStarted?.())) {
       response.body.destroy(controller.reason ?? undefined);
@@ -97,16 +96,16 @@ export class VerserBrokerDispatcher extends Dispatcher {
           handler.onResponseStart(
             controller,
             response.statusCode,
-            response.headers,
-            http.STATUS_CODES[response.statusCode] ?? '',
+            toIncomingHeaders(response.headers, response.headerPairs),
+            response.statusText,
           );
           return;
         }
         const shouldContinue = handler.onHeaders?.(
           response.statusCode,
-          toRawHeaderList(response.headers),
+          toRawHeaderList(response.headers, response.headerPairs),
           () => controller.resume(),
-          http.STATUS_CODES[response.statusCode] ?? '',
+          response.statusText ?? '',
         );
         if (shouldContinue === false) {
           controller.pause();

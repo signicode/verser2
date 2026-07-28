@@ -5,7 +5,9 @@ import * as nodeStream from 'node:stream';
 import { buffer } from 'node:stream/consumers';
 
 import {
+  classifyVerserResponseMetadata,
   createVerserError,
+  flattenVerserHeaderPairs,
   normalizeClientTlsOptions,
   readNdjsonLines,
   resolveRouteForUrl,
@@ -258,18 +260,50 @@ export class Http2VerserBroker implements VerserBroker {
 
       const stream = session.request(requestHeaders);
       let statusCode = 200;
-      let responseHeaders: Record<string, string> = {};
       stream.on('response', (headers) => {
         statusCode = Number(headers[':status'] ?? 200);
-        responseHeaders = stripHttp2PseudoHeaders(headers);
-        if (statusCode < 400) {
-          resolve({ requestId, statusCode, headers: responseHeaders, body: stream });
-          return;
+        try {
+          const rawMetadata = headers['x-verser-response-metadata'];
+          const metadataValues =
+            rawMetadata === undefined
+              ? undefined
+              : Array.isArray(rawMetadata)
+                ? rawMetadata.map(String)
+                : [String(rawMetadata)];
+          const classification = classifyVerserResponseMetadata(
+            statusCode,
+            requestId,
+            metadataValues,
+          );
+          if (classification.type === 'application-response') {
+            const legacyHeaders = Object.fromEntries(
+              Object.entries(stripHttp2PseudoHeaders(headers)).filter(
+                ([name]) => name !== 'x-verser-response-metadata',
+              ),
+            );
+            const metadata = classification.metadata;
+            resolve({
+              requestId,
+              statusCode: metadata?.statusCode ?? statusCode,
+              headers:
+                metadata === undefined ? legacyHeaders : flattenVerserHeaderPairs(metadata.headers),
+              ...(metadata?.statusText === undefined ? {} : { statusText: metadata.statusText }),
+              ...(metadata === undefined ? {} : { headerPairs: metadata.headers }),
+              body: stream,
+            });
+            return;
+          }
+          buffer(stream).then((body) => {
+            try {
+              reject(verserErrorFromResponseBody(body, request.targetId));
+            } catch (error) {
+              reject(error);
+            }
+          }, reject);
+        } catch (error) {
+          stream.close(http2.constants.NGHTTP2_PROTOCOL_ERROR);
+          reject(error);
         }
-        buffer(stream).then(
-          (body) => reject(verserErrorFromResponseBody(body, request.targetId)),
-          reject,
-        );
       });
       stream.on('error', reject);
       stream.on('end', () => {

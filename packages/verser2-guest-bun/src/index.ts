@@ -243,10 +243,15 @@ export function createVerserBroker(options: VerserBrokerOptions): VerserBunBroke
         },
       });
 
+      const responseHeaders = new Headers();
+      for (const [name, value] of response.headerPairs ?? Object.entries(response.headers)) {
+        responseHeaders.append(name, value);
+      }
+
       return new Response(readableBody, {
         status: response.statusCode,
-        statusText: '',
-        headers: response.headers,
+        statusText: response.statusText ?? '',
+        headers: responseHeaders,
       }) as unknown as ReturnType<VerserBunFetch>;
     }) as VerserBunFetch;
 

@@ -209,6 +209,94 @@ test('shared stream helpers read exact bytes and unshift envelope body remainder
   assert.deepEqual(stream.read(body.length), body);
 });
 
+test('lease response metadata rejects a mismatched response request ID with trusted context', async () => {
+  const stream = new PassThrough();
+  stream.end(
+    common.encodeVerserEnvelope({
+      type: 'response',
+      metadata: { requestId: 'untrusted-response-id', statusCode: 200, headers: {} },
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      common.readLeaseResponseMetadataFromStream(stream, {
+        requestId: 'trusted-request-id',
+        targetId: 'trusted-target-id',
+      }),
+    (error) => {
+      assert.equal(error.code, 'protocol-error');
+      assert.equal(error.context.requestId, 'trusted-request-id');
+      assert.equal(error.context.targetId, 'trusted-target-id');
+      assert.equal(error.context.responseRequestId, 'untrusted-response-id');
+      return true;
+    },
+  );
+});
+
+test('lease response metadata rejects a mismatched error request ID with trusted context', async () => {
+  const stream = new PassThrough();
+  stream.end(
+    common.encodeVerserEnvelope({
+      type: 'error',
+      metadata: {
+        requestId: 'untrusted-error-id',
+        code: 'local-handler-failure',
+        message: 'untrusted error',
+      },
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      common.readLeaseResponseMetadataFromStream(stream, {
+        requestId: 'trusted-request-id',
+        targetId: 'trusted-target-id',
+      }),
+    (error) => {
+      assert.equal(error.code, 'protocol-error');
+      assert.equal(error.context.requestId, 'trusted-request-id');
+      assert.equal(error.context.targetId, 'trusted-target-id');
+      assert.equal(error.context.responseRequestId, 'untrusted-error-id');
+      return true;
+    },
+  );
+});
+
+test('lease response metadata retains trusted context for matching error envelopes', async () => {
+  const stream = new PassThrough();
+  stream.end(
+    common.encodeVerserEnvelope({
+      type: 'error',
+      metadata: {
+        requestId: 'trusted-request-id',
+        code: 'local-handler-failure',
+        message: 'handler failed',
+        context: {
+          requestId: 'spoofed-request-id',
+          targetId: 'spoofed-target-id',
+          diagnostic: 'preserved',
+        },
+      },
+    }),
+  );
+
+  await assert.rejects(
+    () =>
+      common.readLeaseResponseMetadataFromStream(stream, {
+        requestId: 'trusted-request-id',
+        targetId: 'trusted-target-id',
+      }),
+    (error) => {
+      assert.equal(error.code, 'local-handler-failure');
+      assert.equal(error.context.requestId, 'trusted-request-id');
+      assert.equal(error.context.targetId, 'trusted-target-id');
+      assert.equal(error.context.diagnostic, 'preserved');
+      return true;
+    },
+  );
+});
+
 test('shared stream helpers read request metadata without consuming body bytes', async () => {
   const stream = new PassThrough();
   const envelope = common.encodeVerserEnvelope({

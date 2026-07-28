@@ -219,6 +219,127 @@ test('Broker request rejects when a Readable upload body errors', async () => {
   }
 });
 
+test('Node Broker enforces remote H2 response metadata classification', async () => {
+  const server = http2.createSecureServer({ cert: trusted.certificate, key: trusted.key });
+  server.on('stream', (stream, headers) => {
+    if (headers[':path'] === '/verser/register') {
+      stream.respond({ ':status': 200, 'content-type': 'application/x-ndjson' });
+      stream.end(`${JSON.stringify({ routes: [] })}\n`);
+      return;
+    }
+    const requestId = String(headers['x-verser-request-id']);
+    const path = String(headers['x-verser-path']);
+    const metadata = common.encodeVerserResponseMetadata({
+      version: 1,
+      requestId,
+      statusCode: 500,
+      headers: [],
+    });
+    if (path === '/legacy-ok') stream.respond({ ':status': 204 });
+    else if (path === '/legacy-error') stream.respond({ ':status': 502 });
+    else if (path === '/malformed')
+      stream.respond({ ':status': 500, 'x-verser-response-metadata': '{' });
+    else if (path === '/duplicate') {
+      stream.respond({ ':status': 500, 'x-verser-response-metadata': [metadata, metadata] });
+    } else if (path === '/oversized') {
+      stream.respond({ ':status': 500, 'x-verser-response-metadata': 'x'.repeat(4097) });
+    } else if (path === '/request-id') {
+      stream.respond({
+        ':status': 500,
+        'x-verser-response-metadata': common.encodeVerserResponseMetadata({
+          version: 1,
+          requestId: 'wrong',
+          statusCode: 500,
+          headers: [],
+        }),
+      });
+    } else if (path === '/status') {
+      stream.respond({
+        ':status': 500,
+        'x-verser-response-metadata': common.encodeVerserResponseMetadata({
+          version: 1,
+          requestId,
+          statusCode: 404,
+          headers: [],
+        }),
+      });
+    }
+    stream.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const broker = createBroker({
+    hostUrl: `https://127.0.0.1:${server.address().port}`,
+    brokerId: 'broker-metadata-classifier',
+  });
+  try {
+    await broker.connect();
+    const legacy = await broker.request({ targetId: 'target', method: 'GET', path: '/legacy-ok' });
+    assert.equal(legacy.statusCode, 204);
+    await readBody(legacy.body);
+    await assert.rejects(() =>
+      broker.request({ targetId: 'target', method: 'GET', path: '/legacy-error' }),
+    );
+    for (const path of ['/malformed', '/duplicate', '/oversized', '/request-id', '/status']) {
+      await assert.rejects(
+        () => broker.request({ targetId: 'target', method: 'GET', path }),
+        (error) => error.code === 'protocol-error',
+      );
+    }
+  } finally {
+    await broker.close('test-complete');
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('Broker resolves final application statuses from Host response metadata', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-application-statuses' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-application-statuses' });
+  const statuses = new Map([
+    ['/empty', [204, 'No Content']],
+    ['/redirect', [307, 'Temporary Redirect']],
+    ['/missing', [404, 'Not Found']],
+    ['/failure', [500, 'Application Failure']],
+  ]);
+
+  guest.attach((request, response) => {
+    const [status, statusText] = statuses.get(request.url) ?? [200, 'OK'];
+    response.writeHead(status, statusText, [
+      ['set-cookie', 'one=1'],
+      ['set-cookie', 'two=2'],
+      ...(status === 307 ? [['location', '/relative']] : []),
+    ]);
+    response.end();
+  }, 'application-statuses.local.test');
+
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('application-statuses.local.test');
+    for (const [path, [status, statusText]] of statuses) {
+      const response = await broker.request({
+        targetId: 'guest-application-statuses',
+        method: 'GET',
+        path,
+      });
+      assert.equal(response.statusCode, status);
+      assert.equal(response.statusText, statusText);
+      assert.deepEqual(response.headerPairs.slice(0, 2), [
+        ['set-cookie', 'one=1'],
+        ['set-cookie', 'two=2'],
+      ]);
+      assert.equal(response.headers['x-verser-response-metadata'], undefined);
+      await readBody(response.body);
+    }
+  } finally {
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
 test('Broker follows 307 internal redirects to advertised routes and replays request bodies', async () => {
   const host = createHost({ port: 0 });
   await host.start();
@@ -829,7 +950,13 @@ test('Broker request routes over a raw leased HTTP/2 stream without a Guest cont
           metadata: {
             requestId: metadata.requestId,
             statusCode: 206,
-            headers: { 'x-lease': 'raw' },
+            statusText: 'Partial Raw',
+            headers: { 'x-lease': 'legacy' },
+            headerPairs: [
+              ['x-lease', 'raw'],
+              ['set-cookie', 'one=1'],
+              ['set-cookie', 'two=2'],
+            ],
           },
         }),
       );
@@ -846,10 +973,175 @@ test('Broker request routes over a raw leased HTTP/2 stream without a Guest cont
 
     assert.equal(response.statusCode, 206);
     assert.equal(response.headers['x-lease'], 'raw');
+    assert.equal(response.statusText, 'Partial Raw');
+    assert.deepEqual(response.headerPairs, [
+      ['x-lease', 'raw'],
+      ['set-cookie', 'one=1'],
+      ['set-cookie', 'two=2'],
+    ]);
+    assert.equal(response.headers['set-cookie'], 'two=2');
     assert.deepEqual(await readBody(response.body), Buffer.from([9, 8, 7, 0]));
     assert.deepEqual(requestBodies, [Buffer.from([0, 255, 1])]);
   } finally {
     await broker.close('test-complete');
+    rawGuest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host remote H2 response uses pair-authoritative headers and metadata', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const rawGuest = await connectRawClient(host.address.port);
+  const rawBroker = await connectRawClient(host.address.port);
+  try {
+    await requestJson(rawGuest, {
+      peerId: 'guest-raw-h2-canonical',
+      role: 'guest',
+      routedDomains: ['raw-h2-canonical.test'],
+    });
+    await openRawLease(
+      rawGuest,
+      'guest-raw-h2-canonical',
+      'raw-h2-canonical-lease',
+      (metadata, _body, lease) => {
+        lease.end(
+          common.encodeVerserEnvelope({
+            type: 'response',
+            metadata: {
+              requestId: metadata.requestId,
+              statusCode: 218,
+              headers: { 'x-conflict': 'legacy' },
+              headerPairs: [
+                ['x-conflict', 'pair'],
+                ['set-cookie', 'one=1'],
+                ['set-cookie', 'two=2'],
+              ],
+            },
+          }),
+        );
+      },
+    );
+    const responseHeaders = await new Promise((resolve, reject) => {
+      const stream = rawBroker.request({
+        ':method': 'POST',
+        ':path': '/verser/request',
+        'x-verser-request-id': 'raw-h2-canonical-request',
+        'x-verser-source-id': 'raw-h2-canonical-broker',
+        'x-verser-target-id': 'guest-raw-h2-canonical',
+        'x-verser-route-domain': 'raw-h2-canonical.test',
+        'x-verser-method': 'GET',
+        'x-verser-path': '/canonical',
+        'x-verser-headers': '{}',
+      });
+      stream.once('response', (headers) => resolve(headers));
+      stream.once('error', reject);
+      stream.resume();
+      stream.end();
+    });
+    assert.equal(responseHeaders[':status'], 218);
+    assert.equal(responseHeaders['x-conflict'], 'pair');
+    assert.deepEqual(responseHeaders['set-cookie'], ['two=2']);
+    const metadataHeaders = Array.isArray(responseHeaders['x-verser-response-metadata'])
+      ? responseHeaders['x-verser-response-metadata']
+      : [responseHeaders['x-verser-response-metadata']];
+    assert.equal(metadataHeaders.length, 1);
+    assert.deepEqual(common.decodeVerserResponseMetadata(metadataHeaders[0]).headers, [
+      ['x-conflict', 'pair'],
+      ['set-cookie', 'one=1'],
+      ['set-cookie', 'two=2'],
+    ]);
+  } finally {
+    rawBroker.close();
+    rawGuest.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Local H2 response relay sanitizes authoritative raw header pairs and rejects unsafe status text', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const rawGuest = await connectRawClient(host.address.port);
+  let localBroker;
+  try {
+    await requestJson(rawGuest, {
+      peerId: 'guest-local-raw-metadata',
+      role: 'guest',
+      routedDomains: ['local-raw-metadata.test'],
+    });
+    localBroker = await host.attachLocalBroker({ brokerId: 'broker-local-raw-metadata' });
+    await localBroker.waitForRoute('local-raw-metadata.test');
+    await openRawLease(
+      rawGuest,
+      'guest-local-raw-metadata',
+      'local-raw-metadata-1',
+      (metadata, _body, lease) => {
+        lease.end(
+          common.encodeVerserEnvelope({
+            type: 'response',
+            metadata: {
+              requestId: metadata.requestId,
+              statusCode: 218,
+              statusText: 'Raw Status',
+              headers: { 'x-contradictory': 'legacy' },
+              headerPairs: [
+                ['x-repeat', 'one'],
+                ['x-repeat', 'two'],
+                ['set-cookie', 'a=1'],
+                ['set-cookie', 'b=2'],
+                ['connection', 'x-drop'],
+                ['x-drop', 'drop'],
+                ['upgrade', 'websocket'],
+              ],
+            },
+          }),
+        );
+      },
+    );
+    const response = await localBroker.request({
+      targetId: 'guest-local-raw-metadata',
+      method: 'GET',
+      path: '/',
+    });
+    assert.equal(response.statusText, 'Raw Status');
+    assert.deepEqual(response.headerPairs, [
+      ['x-repeat', 'one'],
+      ['x-repeat', 'two'],
+      ['set-cookie', 'a=1'],
+      ['set-cookie', 'b=2'],
+    ]);
+    assert.deepEqual(response.headers, { 'x-repeat': 'two', 'set-cookie': 'b=2' });
+
+    await openRawLease(
+      rawGuest,
+      'guest-local-raw-metadata',
+      'local-raw-metadata-2',
+      (metadata, _body, lease) => {
+        lease.end(
+          common.encodeVerserEnvelope({
+            type: 'response',
+            metadata: {
+              requestId: metadata.requestId,
+              statusCode: 218,
+              statusText: 'unsafe\ntext',
+              headers: {},
+              headerPairs: [],
+            },
+          }),
+        );
+      },
+    );
+    await assert.rejects(
+      () =>
+        localBroker.request({
+          targetId: 'guest-local-raw-metadata',
+          method: 'GET',
+          path: '/unsafe',
+        }),
+      (error) => error.code === 'protocol-error',
+    );
+  } finally {
+    if (localBroker !== undefined) await localBroker.close('test-complete');
     rawGuest.close();
     await host.close('test-complete');
   }

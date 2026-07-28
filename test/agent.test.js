@@ -30,7 +30,9 @@ function requestWithAgent(url, options, body) {
         clearTimeout(timeout);
         resolve({
           statusCode: response.statusCode,
+          statusMessage: response.statusMessage,
           headers: response.headers,
+          rawHeaders: response.rawHeaders,
           body: Buffer.concat(chunks),
         });
         // Destroy request and response to trigger socket and stream cleanup
@@ -112,9 +114,16 @@ test.before(async () => {
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
   const broker = createBroker({ hostUrl, brokerId: 'warmup-broker' });
   const guest = createGuest({ hostUrl, guestId: 'warmup-guest' });
+  // Attach a small handler to exercise one complete routed Agent request,
+  // warming Agent/socket/HTTP-parser/metadata initialization before tests.
+  guest.attach((_req, res) => res.end('warmup-ok'), 'warmup-agent.local.test');
   try {
     await broker.connect();
     await guest.connect();
+    await withTimeout(broker.waitForRoute('warmup-agent.local.test'), 'warmup route');
+    const agent = broker.createAgent();
+    await requestWithAgent('http://warmup-agent.local.test/warmup', { agent });
+    agent.destroy();
   } finally {
     await broker.close('warmup');
     await guest.close('warmup');
@@ -170,6 +179,53 @@ test(
     }
   },
 );
+
+test('Broker Agent preserves status text and repeated response headers', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-metadata' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-metadata' });
+  let agent;
+  guest.attach((_request, response) => {
+    response.writeHead(500, 'Guest Failure', [
+      ['set-cookie', 'one=1'],
+      ['x-between', 'value'],
+      ['set-cookie', 'two=2'],
+      ['x-empty', ''],
+      ['x-comma', 'one,two'],
+    ]);
+    response.end('failure');
+  }, 'agent-metadata.local.test');
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('agent-metadata.local.test');
+    agent = broker.createAgent();
+    const response = await requestWithAgent('http://agent-metadata.local.test/failure', { agent });
+    assert.equal(response.statusCode, 500);
+    assert.equal(response.statusMessage, 'Guest Failure');
+    assert.deepEqual(response.headers['set-cookie'], ['one=1', 'two=2']);
+    assert.deepEqual(response.rawHeaders, [
+      'set-cookie',
+      'one=1',
+      'x-between',
+      'value',
+      'set-cookie',
+      'two=2',
+      'x-empty',
+      '',
+      'x-comma',
+      'one,two',
+    ]);
+    assert.deepEqual(response.body, Buffer.from('failure'));
+  } finally {
+    agent?.destroy();
+    await broker.close('test-complete');
+    await guest.close('test-complete');
+    await host.close('test-complete');
+  }
+});
 
 test(
   'Broker Agent follows internal redirects for advertised route targets',
@@ -656,6 +712,129 @@ test('Broker Agent streams large request bodies through leased routing', async (
     await withTimeout(broker.close('test-complete'), 'broker-agent-large-body-1 close');
     await withTimeout(guest.close('test-complete'), 'guest-agent-large-body-1 close');
     await withTimeout(host.close('test-complete'), 'host-agent-large-body-1 close');
+  }
+});
+
+test('Broker Agent handles omitted, empty, and Latin-1 status text from Node Guest', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-statustext' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-statustext' });
+  let agent;
+  guest.attach((request, response) => {
+    if (request.url === '/omitted') {
+      // No statusMessage argument → undefined
+      response.writeHead(200);
+      response.end('omitted-body');
+    } else if (request.url === '/empty') {
+      // Explicit empty string statusMessage
+      response.writeHead(200, '');
+      response.end('empty-body');
+    } else {
+      // Latin-1-safe statusMessage and header value
+      response.writeHead(200, 'Café Status', { 'x-cafe': 'café' });
+      response.end('cafe-body');
+    }
+  }, 'statustext-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-statustext connect');
+    await withTimeout(guest.connect(), 'guest-agent-statustext connect');
+    await withTimeout(
+      broker.waitForRoute('statustext-agent.local.test'),
+      'statustext-agent.local.test route',
+    );
+
+    agent = broker.createAgent();
+
+    // Case 1 — omitted statusText
+    {
+      const response = await requestWithAgent('http://statustext-agent.local.test/omitted', {
+        agent,
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(
+        response.statusMessage,
+        '',
+        'omitted statusText must arrive as empty, not a synthetic reason phrase',
+      );
+      assert.deepEqual(response.body, Buffer.from('omitted-body'));
+    }
+
+    // Case 2 — explicitly empty statusText
+    {
+      const response = await requestWithAgent('http://statustext-agent.local.test/empty', {
+        agent,
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(
+        response.statusMessage,
+        '',
+        'explicit empty statusText must arrive as empty, not a synthetic reason phrase',
+      );
+      assert.deepEqual(response.body, Buffer.from('empty-body'));
+    }
+
+    // Case 3 — nonempty Latin-1 statusText and header value
+    {
+      const response = await requestWithAgent('http://statustext-agent.local.test/cafe', {
+        agent,
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(
+        response.statusMessage,
+        'Café Status',
+        'Latin-1 statusText must round-trip exactly',
+      );
+      assert.equal(
+        response.headers['x-cafe'],
+        'café',
+        'Latin-1 header value must round-trip exactly',
+      );
+      assert.deepEqual(response.body, Buffer.from('cafe-body'));
+    }
+  } finally {
+    agent?.destroy();
+    await withTimeout(broker.close('test-complete'), 'broker-agent-statustext close');
+    await withTimeout(guest.close('test-complete'), 'guest-agent-statustext close');
+    await withTimeout(host.close('test-complete'), 'host-agent-statustext close');
+  }
+});
+
+test('Broker rejects non-Latin-1 Node Guest response metadata with a protocol error', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'broker-agent-invalid-response-metadata' });
+  const guest = createGuest({ hostUrl, guestId: 'guest-agent-invalid-response-metadata' });
+  guest.attach((_request, response) => {
+    response.writeHead(200, 'emoji 😀', { 'x-emoji': 'emoji 😀' });
+    response.end('must-not-reach-an-http-adapter');
+  }, 'invalid-response-metadata-agent.local.test');
+
+  try {
+    await withTimeout(broker.connect(), 'broker-agent-invalid-response-metadata connect');
+    await withTimeout(guest.connect(), 'guest-agent-invalid-response-metadata connect');
+    await withTimeout(
+      broker.waitForRoute('invalid-response-metadata-agent.local.test'),
+      'invalid-response-metadata-agent.local.test route',
+    );
+    await assert.rejects(
+      broker.request({
+        targetId: 'guest-agent-invalid-response-metadata',
+        method: 'GET',
+        path: '/',
+      }),
+      (error) => error.code === 'protocol-error',
+    );
+  } finally {
+    await withTimeout(
+      broker.close('test-complete'),
+      'broker-agent-invalid-response-metadata close',
+    );
+    await withTimeout(guest.close('test-complete'), 'guest-agent-invalid-response-metadata close');
+    await withTimeout(host.close('test-complete'), 'host-agent-invalid-response-metadata close');
   }
 });
 

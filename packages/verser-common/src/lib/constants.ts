@@ -61,6 +61,21 @@ export const VERSER_ENVELOPE_PREFIX_BYTES = 6;
  */
 export const DEFAULT_MAX_ENVELOPE_METADATA_BYTES = 64 * 1024;
 
+/** The response metadata header reserved for Verser HTTP/2 transport. @public */
+export const VERSER_RESPONSE_METADATA_HEADER = 'x-verser-response-metadata';
+
+/** Current JSON response metadata format version. @public */
+export const VERSER_RESPONSE_METADATA_VERSION = 1;
+
+/** Maximum UTF-8 byte length of one encoded response metadata value. @public */
+export const VERSER_RESPONSE_METADATA_MAX_BYTES = 4096;
+
+/** Maximum number of response header pairs in response metadata. @public */
+export const VERSER_RESPONSE_METADATA_MAX_HEADER_PAIRS = 64;
+
+/** Maximum UTF-8 byte length of an optional response status text. @public */
+export const VERSER_RESPONSE_METADATA_MAX_STATUS_TEXT_BYTES = 1024;
+
 /**
  * Numeric type codes used in the binary envelope prefix to distinguish envelope types.
  *

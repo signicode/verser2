@@ -149,6 +149,8 @@ async def main():
     await broker.wait_for_route("python-guest-a.local.test")
 
     response = await broker.get("http://python-guest-a.local.test/health")
+    print(response.status, response.status_text)
+    print(response.header_pairs)  # ordered, repeated fields preserved
     print(await response.text())
 
 
@@ -156,9 +158,13 @@ asyncio.run(main())
 ```
 
 The Broker supports `request`, `get`, `post`, `put`, `patch`, and `delete`
-helpers. `VerserBrokerResponse` exposes `status`, `headers`, `request_id`,
-`read()`, `text()`, `json()`, and `aiter_bytes(chunk_size=8192)`. Response
-bodies are one-shot.
+helpers. `VerserBrokerResponse` exposes `status`, `status_text`, `headers`,
+`header_pairs`, `request_id`, `read()`, `text()`, `json()`, and
+`aiter_bytes(chunk_size=8192)`. `headers` is a last-value-wins compatibility
+map; use ordered `header_pairs` when repeated fields such as `set-cookie` must
+be preserved. `status_text` is `None` when the response does not supply one.
+Python ASGI Guests do not originate a reason phrase, but Python Brokers expose
+one received from a compatible remote response. Response bodies are one-shot.
 
 ### TLS for Python Broker
 

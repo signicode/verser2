@@ -26,9 +26,12 @@ from .asgi import (
 )
 from .protocol import (
     VERSER_ENVELOPE_PREFIX_BYTES,
+    asgi_response_header_pairs,
     decode_envelope,
     encode_envelope,
-    sanitize_http2_response_headers,
+    flatten_response_header_pairs,
+    sanitize_http2_response_header_pairs,
+    validate_final_response_status,
 )
 
 
@@ -196,7 +199,7 @@ class VerserGuest:
         -------
         DispatchResponse
             A frozen dataclass with ``request_id``, ``status_code``,
-            ``headers``, ``body``, and optionally ``error``.
+            ``headers``, ``header_pairs``, ``body``, and optionally ``error``.
 
         Raises
         ------
@@ -646,6 +649,10 @@ class VerserGuest:
             nonlocal response_started, response_ended
             event_type = event.get("type")
             if event_type == "http.response.start":
+                status_code = validate_final_response_status(event.get("status", 200))
+                header_pairs = sanitize_http2_response_header_pairs(
+                    asgi_response_header_pairs(event.get("headers", []))
+                )
                 response_started = True
                 await self._send_data(
                     stream_id,
@@ -653,15 +660,9 @@ class VerserGuest:
                         "response",
                         {
                             "requestId": str((metadata or {}).get("requestId") or ""),
-                            "statusCode": int(event.get("status") or 200),
-                            "headers": sanitize_http2_response_headers(
-                                {
-                                    name.decode(
-                                        "ascii", "ignore"
-                                    ).lower(): value.decode("latin-1")
-                                    for name, value in event.get("headers", [])
-                                }
-                            ),
+                            "statusCode": status_code,
+                            "headers": flatten_response_header_pairs(header_pairs),
+                            "headerPairs": header_pairs,
                         },
                     ),
                     False,

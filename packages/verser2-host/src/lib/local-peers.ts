@@ -1,17 +1,19 @@
 import { EventEmitter } from 'node:events';
 import * as http from 'node:http';
+import { validateHeaderName, validateHeaderValue } from 'node:http';
 import * as http2 from 'node:http2';
 import { PassThrough, Readable } from 'node:stream';
 
 import {
   type RoutedDomainRegistration,
   VerserError,
+  type VerserHeaderPair,
   type VerserPeerId,
+  type VerserSerializedHeaderMap,
   createRoutedResponseEnvelope,
   createVerserError,
-  flattenVerserHeaders,
-  sanitizeHttp2ResponseHeaders,
-  validateVerserHeaders,
+  requireFinalResponseStatusCode,
+  validateVerserStatusText,
 } from '@signicode/verser-common';
 import type {
   VerserLocalBrokerRequest,
@@ -44,7 +46,7 @@ export interface LocalDispatchRequest {
   readonly routeDomain?: string;
   readonly method: string;
   readonly path: string;
-  readonly headers: Record<string, string>;
+  readonly headers: VerserSerializedHeaderMap;
   readonly body: Readable;
   readonly leaseAcquireTimeoutMs: number;
   readonly signal?: AbortSignal;
@@ -53,7 +55,7 @@ export interface LocalDispatchRequest {
 type LocalRequest = Readable & {
   readonly method: string;
   readonly url: string;
-  readonly headers: Record<string, string>;
+  readonly headers: VerserSerializedHeaderMap;
 };
 
 class LocalIncomingMessage extends PassThrough implements LocalRequest {
@@ -62,7 +64,7 @@ class LocalIncomingMessage extends PassThrough implements LocalRequest {
 
   public readonly url: string;
 
-  public readonly headers: Record<string, string>;
+  public readonly headers: VerserSerializedHeaderMap;
 
   public constructor(request: LocalDispatchRequest) {
     super();
@@ -109,13 +111,22 @@ class LocalIncomingMessage extends PassThrough implements LocalRequest {
 class LocalServerResponse extends EventEmitter {
   public statusCode = 200;
 
-  private readonly headers = new Map<string, string>();
+  public statusMessage?: string;
+
+  private readonly headers = new Map<string, string | string[]>();
+
+  /** Exact response-header emission order, including interleaved duplicate names. */
+  private readonly headerPairs: VerserHeaderPair[] = [];
 
   private readonly bodyStream = new PassThrough();
 
   private started = false;
 
-  public constructor() {
+  private commitFailed = false;
+
+  private canonicalResponse?: Omit<VerserLocalBrokerResponse, 'body'>;
+
+  public constructor(private readonly requestId: string) {
     super({ captureRejections: true });
   }
 
@@ -123,41 +134,99 @@ class LocalServerResponse extends EventEmitter {
     return this.started;
   }
 
-  public setHeader(name: string, value: string | number | boolean): this {
-    this.headers.set(name.toLowerCase(), String(value));
+  public setHeader(name: string, value: ResponseHeaderValue): this {
+    const [normalizedName, normalizedValue] = normalizeResponseHeader(name, value);
+    this.headers.set(normalizedName, normalizedValue);
+    this.removeHeaderPairs(normalizedName);
+    this.headerPairs.push(
+      ...(Array.isArray(normalizedValue) ? normalizedValue : [normalizedValue]).map(
+        (item): VerserHeaderPair => [normalizedName, item],
+      ),
+    );
+    this.canonicalResponse = undefined;
     return this;
   }
 
-  public getHeader(name: string): string | undefined {
+  public getHeader(name: string): string | string[] | undefined {
     return this.headers.get(name.toLowerCase());
   }
 
+  public appendHeader(name: string, value: ResponseHeaderValue): this {
+    const [normalizedName, values] = normalizeResponseHeaderValues(name, value);
+    const existing = this.getHeader(normalizedName);
+    this.headers.set(
+      normalizedName,
+      existing === undefined
+        ? values.length === 1
+          ? values[0]
+          : values
+        : [...(Array.isArray(existing) ? existing : [existing]), ...values],
+    );
+    this.headerPairs.push(...values.map((item): VerserHeaderPair => [normalizedName, item]));
+    this.canonicalResponse = undefined;
+    return this;
+  }
+
+  public writeHead(statusCode: number, headers?: ResponseHeaders): this;
+  public writeHead(statusCode: number, statusMessage: undefined, headers: ResponseHeaders): this;
+  public writeHead(statusCode: number, statusMessage?: string, headers?: ResponseHeaders): this;
   public writeHead(
     statusCode: number,
-    headers: Record<string, string | number | boolean> = {},
+    statusMessageOrHeaders?: string | ResponseHeaders,
+    headers?: ResponseHeaders,
   ): this {
-    this.statusCode = statusCode;
-    for (const [name, value] of Object.entries(headers)) {
-      this.setHeader(name, value);
+    const responseHeaders =
+      typeof statusMessageOrHeaders === 'string'
+        ? (headers ?? {})
+        : (headers ?? statusMessageOrHeaders ?? {});
+    requireFinalResponseStatusCode(statusCode);
+    if (typeof statusMessageOrHeaders === 'string')
+      validateVerserStatusText(statusMessageOrHeaders);
+    const nextHeaders = new Map(this.headers);
+    const nextPairs = [...this.headerPairs];
+    if (Array.isArray(responseHeaders)) {
+      const replaced = new Set<string>();
+      for (const [name, value] of responseHeaders) {
+        const [normalizedName, normalizedValue] = normalizeResponseHeader(name, value);
+        if (replaced.has(normalizedName)) {
+          appendResponseHeader(nextHeaders, nextPairs, normalizedName, normalizedValue);
+        } else {
+          setResponseHeader(nextHeaders, nextPairs, normalizedName, normalizedValue);
+          replaced.add(normalizedName);
+        }
+      }
+    } else {
+      for (const [name, value] of Object.entries(responseHeaders)) {
+        const [normalizedName, normalizedValue] = normalizeResponseHeader(name, value);
+        setResponseHeader(nextHeaders, nextPairs, normalizedName, normalizedValue);
+      }
     }
+    this.statusCode = statusCode;
+    if (typeof statusMessageOrHeaders === 'string') this.statusMessage = statusMessageOrHeaders;
+    this.headers.clear();
+    for (const [name, value] of nextHeaders) this.headers.set(name, value);
+    this.headerPairs.splice(0, this.headerPairs.length, ...nextPairs);
+    this.canonicalResponse = undefined;
     return this;
   }
 
   public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
-    this.start();
+    if (!this.commitResponse()) return false;
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
     return this.bodyStream.write(buffer);
   }
 
   public flushHeaders(): void {
-    this.start();
+    this.commitResponse();
   }
 
   public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
+    if (this.commitFailed) return this;
     if (chunk !== undefined) {
       this.write(chunk, encoding);
-    } else {
-      this.start();
+      if (this.commitFailed) return this;
+    } else if (!this.commitResponse()) {
+      return this;
     }
     this.bodyStream.end();
     this.emit('finish');
@@ -165,16 +234,13 @@ class LocalServerResponse extends EventEmitter {
   }
 
   public toBrokerResponse(requestId: string): VerserLocalBrokerResponse {
-    const sanitizedHeaders = sanitizeHttp2ResponseHeaders(Object.fromEntries(this.headers));
-    const envelope = createRoutedResponseEnvelope({
-      requestId,
-      statusCode: this.statusCode,
-      headers: flattenVerserHeaders(validateVerserHeaders(sanitizedHeaders)),
-    });
+    const envelope = this.canonicalResponse ?? this.createCanonicalResponse(requestId);
     return {
       requestId: envelope.requestId,
       statusCode: envelope.statusCode,
       headers: envelope.headers,
+      ...(envelope.statusText === undefined ? {} : { statusText: envelope.statusText }),
+      ...(envelope.headerPairs === undefined ? {} : { headerPairs: envelope.headerPairs }),
       body: this.bodyStream,
     };
   }
@@ -188,10 +254,52 @@ class LocalServerResponse extends EventEmitter {
     if (this.started) {
       return;
     }
+    this.createCanonicalResponse(this.requestId);
     this.started = true;
     this.emit('response');
   }
+
+  private commitResponse(): boolean {
+    if (this.commitFailed) return false;
+    try {
+      this.start();
+      return true;
+    } catch (error) {
+      this.commitFailed = true;
+      this.emit('error', error);
+      return false;
+    }
+  }
+
+  private createCanonicalResponse(requestId: string): Omit<VerserLocalBrokerResponse, 'body'> {
+    const envelope = createRoutedResponseEnvelope({
+      requestId,
+      statusCode: this.statusCode,
+      headers: {},
+      ...(this.statusMessage === undefined ? {} : { statusText: this.statusMessage }),
+      headerPairs: this.toHeaderPairs(),
+    });
+    this.canonicalResponse = envelope;
+    return envelope;
+  }
+
+  private toHeaderPairs(): VerserHeaderPair[] {
+    return [...this.headerPairs];
+  }
+
+  private removeHeaderPairs(name: string): void {
+    for (let index = this.headerPairs.length - 1; index >= 0; index -= 1) {
+      if (this.headerPairs[index][0] === name) {
+        this.headerPairs.splice(index, 1);
+      }
+    }
+  }
 }
+
+type ResponseHeaderValue = string | number | boolean | readonly (string | number | boolean)[];
+type ResponseHeaders =
+  | Record<string, ResponseHeaderValue>
+  | readonly (readonly [string, ResponseHeaderValue])[];
 
 export function createLocalBrokerState(routes: RoutedDomainRegistration[]): LocalBrokerState {
   const routeChangeEmitter = new EventEmitter({ captureRejections: true });
@@ -347,7 +455,7 @@ export function dispatchLocalGuestRequest(
   listener: VerserLocalGuestRequestListener,
 ): Promise<VerserLocalBrokerResponse> {
   const localRequest = new LocalIncomingMessage(request);
-  const localResponse = new LocalServerResponse();
+  const localResponse = new LocalServerResponse(request.requestId);
   return new Promise((resolve, reject) => {
     let settled = false;
     const rejectBeforeResponse = (error: Error): void => {
@@ -475,6 +583,9 @@ function isHttp2CancelError(error: unknown): boolean {
 }
 
 function createLocalHandlerError(request: LocalDispatchRequest, error: unknown): Error {
+  if (error instanceof VerserError && error.code === 'protocol-error') {
+    return error;
+  }
   return createVerserError('local-handler-failure', getErrorMessage(error), {
     targetId: request.targetId,
     requestId: request.requestId,
@@ -484,4 +595,60 @@ function createLocalHandlerError(request: LocalDispatchRequest, error: unknown):
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeResponseHeader(
+  name: string,
+  value: ResponseHeaderValue,
+): [string, string | string[]] {
+  const [normalizedName, values] = normalizeResponseHeaderValues(name, value);
+  return [normalizedName, Array.isArray(value) ? values : values[0]];
+}
+
+function normalizeResponseHeaderValues(
+  name: string,
+  value: ResponseHeaderValue,
+): [string, string[]] {
+  validateHeaderName(name);
+  const values = Array.isArray(value) ? value.map(String) : [String(value)];
+  for (const item of values) validateHeaderValue(name, item);
+  return [name.toLowerCase(), values];
+}
+
+function setResponseHeader(
+  headers: Map<string, string | string[]>,
+  pairs: VerserHeaderPair[],
+  name: string,
+  value: string | string[],
+): void {
+  headers.set(name, value);
+  removeResponseHeaderPairs(pairs, name);
+  pairs.push(
+    ...(Array.isArray(value) ? value : [value]).map((item): VerserHeaderPair => [name, item]),
+  );
+}
+
+function appendResponseHeader(
+  headers: Map<string, string | string[]>,
+  pairs: VerserHeaderPair[],
+  name: string,
+  value: string | string[],
+): void {
+  const values = Array.isArray(value) ? value : [value];
+  const existing = headers.get(name);
+  headers.set(
+    name,
+    existing === undefined
+      ? values.length === 1
+        ? values[0]
+        : values
+      : [...(Array.isArray(existing) ? existing : [existing]), ...values],
+  );
+  pairs.push(...values.map((item): VerserHeaderPair => [name, item]));
+}
+
+function removeResponseHeaderPairs(pairs: VerserHeaderPair[], name: string): void {
+  for (let index = pairs.length - 1; index >= 0; index -= 1) {
+    if (pairs[index][0] === name) pairs.splice(index, 1);
+  }
 }

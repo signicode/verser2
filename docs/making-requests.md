@@ -96,6 +96,17 @@ const uploadResponse = await broker.request({
 uploadResponse.body.pipe(destination);
 ```
 
+Direct Broker responses expose `statusCode`, optional `statusText`, `headers`,
+and `headerPairs`. `headers` is a last-value-wins compatibility map;
+`headerPairs` is the exact ordered representation for repeated fields such as
+`set-cookie`. Use `headerPairs` when duplicate-field fidelity matters.
+
+Response status text and header values must be valid HTTP values representable
+as Latin-1/ByteString (each code unit is at most `0xFF`). For example, `café`
+is supported, while emoji are rejected with `protocol-error` rather than being
+corrupted by Node HTTP/1, Fetch, or Bun response adapters. Existing UTF-8
+encoded metadata byte limits still apply.
+
 Node Broker request paths follow internal `307` and `308` redirects by default
 when the response `Location` hostname exactly matches an advertised verser2
 route. Redirect targets are resolved through the Broker route table, not DNS, and
@@ -144,6 +155,11 @@ http.get('http://client-a.local.test/health', { agent }, (response) => {
 
 Non-advertised hostnames are rejected — there is no DNS fallback.
 
+The Agent exposes received status text as `IncomingMessage.statusMessage` and
+keeps repeated response lines in `IncomingMessage.rawHeaders`. HTTP/1 cannot
+distinguish an omitted reason phrase from an explicitly empty one, so both are
+observed as an empty status message.
+
 ## Dispatcher (Undici)
 
 `createDispatcher()` returns an Undici `Dispatcher` for use with `fetch`:
@@ -159,6 +175,12 @@ console.log(await response.text());
 
 The Dispatcher rejects upgrade requests. It supports buffer, string, stream, and
 iterable body forms.
+
+Dispatcher-backed Node Fetch and Bun Fetch preserve supplied response status
+text. Their `Headers` APIs may coalesce repeated ordinary fields; where the
+runtime provides `headers.getSetCookie()`, use it for separate cookie values.
+Use direct `broker.request().headerPairs` when ordered repeated headers must be
+retained exactly.
 
 It does not provide arbitrary WebSocket upgrade forwarding. Use the explicit
 Node Broker `webSocket()` API for VWS/1 instead.
@@ -188,8 +210,10 @@ response = await broker.get("http://python-guest-a.local.test/health")
 response = await broker.post("http://python-guest-a.local.test/data", body=b'{"key": "value"}')
 ```
 
-Response objects expose `status`, `headers`, `request_id`, and body reading
-helpers:
+Response objects expose `status`, `status_text`, `headers`, `header_pairs`,
+`request_id`, and body reading helpers. `headers` is a last-value-wins
+compatibility map; `header_pairs` preserves ordered repeated fields such as
+`set-cookie`. `status_text` is `None` when unavailable:
 
 ```py
 # Read the full body
@@ -197,12 +221,20 @@ body = await response.read()
 text = await response.text()
 data = await response.json()
 
+# Application metadata
+print(response.status, response.status_text)
+for name, value in response.header_pairs:
+    print(name, value)
+
 # Iterate in chunks
 async for chunk in response.aiter_bytes(8192):
     process(chunk)
 ```
 
 Response bodies are one-shot — they can be read once.
+
+Python ASGI Guests do not originate a reason phrase. A Python Broker can still
+expose `status_text` received from a compatible remote response.
 
 ## Multiplexed requests
 

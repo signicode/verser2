@@ -59,7 +59,13 @@ import asyncio
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote, unquote, urlsplit
 
-from .protocol import normalize_headers, sanitize_http2_response_headers
+from .protocol import (
+    asgi_response_header_pairs,
+    flatten_response_header_pairs,
+    normalize_headers,
+    sanitize_http2_response_header_pairs,
+    validate_final_response_status,
+)
 
 
 ASGIApp = Callable[
@@ -331,8 +337,11 @@ class DispatchResponse:
         HTTP status code set by the app (``None`` if an error occurred before
         ``http.response.start``).
     headers : dict[str, str] or None
-        Response headers (``None`` if an error occurred before
-        ``http.response.start``).
+        Legacy last-value-wins response header projection (``None`` if an error
+        occurred before ``http.response.start``).
+    header_pairs : list[tuple[str, str]] or None
+        Authoritative ordered response header pairs, including repeated fields
+        (``None`` if an error occurred before ``http.response.start``).
     body : bytes
         Concatenated response body chunks.
     error : dict or None
@@ -343,6 +352,7 @@ class DispatchResponse:
     request_id: str
     status_code: int | None = None
     headers: dict[str, str] | None = None
+    header_pairs: list[tuple[str, str]] | None = None
     body: bytes = b""
     error: dict[str, Any] | None = None
 
@@ -538,7 +548,7 @@ async def dispatch_asgi_request(
     request_id = str(metadata.get("requestId") or "")
     started = False
     status_code = 200
-    response_headers: dict[str, str] = {}
+    response_header_pairs: list[tuple[str, str]] = []
     response_chunks: list[bytes] = []
     response_bytes = 0
     body_chunks = body if isinstance(body, list) else [body]
@@ -557,15 +567,16 @@ async def dispatch_asgi_request(
         }
 
     async def send(event: dict[str, Any]) -> None:
-        nonlocal response_bytes, response_headers, started, status_code
+        nonlocal response_bytes, response_header_pairs, started, status_code
         event_type = event.get("type")
         if event_type == "http.response.start":
+            validated_status_code = validate_final_response_status(event.get("status", 200))
+            validated_header_pairs = sanitize_http2_response_header_pairs(
+                asgi_response_header_pairs(event.get("headers", []))
+            )
+            status_code = validated_status_code
+            response_header_pairs = validated_header_pairs
             started = True
-            status_code = int(event.get("status") or 200)
-            response_headers = {
-                name.decode("ascii", "ignore").lower(): value.decode("latin-1")
-                for name, value in event.get("headers", [])
-            }
             return
         if event_type == "http.response.body":
             chunk = bytes(event.get("body") or b"")
@@ -598,6 +609,7 @@ async def dispatch_asgi_request(
     return DispatchResponse(
         request_id=request_id,
         status_code=status_code,
-        headers=sanitize_http2_response_headers(response_headers),
+        headers=flatten_response_header_pairs(response_header_pairs),
+        header_pairs=response_header_pairs,
         body=b"".join(response_chunks),
     )

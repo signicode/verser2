@@ -488,10 +488,349 @@ test('shared header helpers flatten and decode routed metadata', () => {
     b: 'two,three',
   });
 
-  assert.deepEqual(common.decodeHeaderMap('{"x-a":"1","x-b":2}'), {
+  assert.deepEqual(common.decodeHeaderMap('{"x-a":"1","x-b":["2","3"]}'), {
     'x-a': '1',
-    'x-b': '2',
+    'x-b': ['2', '3'],
   });
+});
+
+test('shared request header map decoder is strict while preserving scalar compatibility', () => {
+  assert.deepEqual(common.decodeHeaderMap('{"x-one":"1","x-many":["a","b"]}'), {
+    'x-one': '1',
+    'x-many': ['a', 'b'],
+  });
+  for (const value of [
+    '[]',
+    'null',
+    '{"x":1}',
+    '{"x":true}',
+    '{"x":{}}',
+    '{"x":["safe",2]}',
+    '{"bad name":"x"}',
+    '{"x":"bad\\nvalue"}',
+  ]) {
+    assert.throws(
+      () => common.decodeHeaderMap(value),
+      (error) => error.code === 'protocol-error',
+    );
+  }
+});
+
+test('shared request header map decoder safely retains __proto__ own properties', () => {
+  for (const [value, expected] of [
+    ['{"__proto__":"scalar"}', 'scalar'],
+    ['{"__proto__":["one","two"]}', ['one', 'two']],
+  ]) {
+    const decoded = common.decodeHeaderMap(value);
+    assert.equal(Object.getPrototypeOf(decoded), Object.prototype);
+    assert.equal(Object.hasOwn(decoded, '__proto__'), true);
+    assert.deepEqual(decoded.__proto__, expected);
+  }
+  assert.throws(
+    () => common.decodeHeaderMap('{"x-empty":[]}'),
+    (error) => error.code === 'protocol-error',
+  );
+});
+
+test('shared response metadata codec preserves exact header pairs and legacy projections', () => {
+  const metadata = {
+    version: 1,
+    requestId: 'req-metadata-1',
+    statusCode: 207,
+    statusText: '',
+    headers: [
+      ['set-cookie', 'one=1'],
+      ['x-quoted', '"one, two"\\value'],
+      ['set-cookie', 'two=2'],
+      ['x-empty', ''],
+    ],
+  };
+  const encoded = common.encodeVerserResponseMetadata(metadata);
+  const decoded = common.decodeVerserResponseMetadata(encoded);
+
+  assert.deepEqual(decoded, metadata);
+  assert.deepEqual(common.flattenVerserHeaderPairs(decoded.headers), {
+    'set-cookie': 'two=2',
+    'x-quoted': '"one, two"\\value',
+    'x-empty': '',
+  });
+  assert.equal(
+    Object.hasOwn(
+      common.decodeVerserResponseMetadata(
+        common.encodeVerserResponseMetadata({
+          version: 1,
+          requestId: 'req-metadata-omitted-text',
+          statusCode: 204,
+          headers: [],
+        }),
+      ),
+      'statusText',
+    ),
+    false,
+  );
+});
+
+test('shared response metadata codec enforces exact UTF-8 limits and status text safety', () => {
+  const base = { version: 1, requestId: 'r', statusCode: 200, headers: [] };
+  const encodedAtLimit = common.encodeVerserResponseMetadata({
+    ...base,
+    statusText: 'é'.repeat(512),
+  });
+  assert.ok(Buffer.byteLength(encodedAtLimit, 'utf8') <= common.VERSER_RESPONSE_METADATA_MAX_BYTES);
+  assert.equal(
+    Buffer.byteLength('é'.repeat(512), 'utf8'),
+    common.VERSER_RESPONSE_METADATA_MAX_STATUS_TEXT_BYTES,
+  );
+
+  assert.throws(
+    () => common.encodeVerserResponseMetadata({ ...base, statusText: 'a'.repeat(1025) }),
+    /status text/i,
+  );
+  assert.throws(
+    () => common.encodeVerserResponseMetadata({ ...base, statusText: 'é'.repeat(513) }),
+    /status text/i,
+  );
+  for (const invalidText of ['bad\rtext', 'bad\ntext', 'bad\0text']) {
+    assert.throws(
+      () => common.encodeVerserResponseMetadata({ ...base, statusText: invalidText }),
+      /status text/i,
+    );
+  }
+
+  const atPairLimit = common.encodeVerserResponseMetadata({
+    ...base,
+    headers: Array.from(
+      { length: common.VERSER_RESPONSE_METADATA_MAX_HEADER_PAIRS },
+      (_, index) => [`x-${index}`, ''],
+    ),
+  });
+  assert.equal(common.decodeVerserResponseMetadata(atPairLimit).headers.length, 64);
+  assert.throws(
+    () =>
+      common.encodeVerserResponseMetadata({
+        ...base,
+        headers: Array.from({ length: 65 }, (_, index) => [`x-${index}`, '']),
+      }),
+    /header pairs/i,
+  );
+
+  const emptyHeaderValue = { ...base, headers: [['x', '']] };
+  const emptyHeaderJson = JSON.stringify(emptyHeaderValue);
+  const exactValue = JSON.stringify({
+    ...base,
+    headers: [['x', 'a'.repeat(4096 - Buffer.byteLength(emptyHeaderJson))]],
+  });
+  assert.equal(Buffer.byteLength(exactValue), common.VERSER_RESPONSE_METADATA_MAX_BYTES);
+  assert.equal(
+    common.decodeVerserResponseMetadata(exactValue).headers[0][1].length,
+    4096 - Buffer.byteLength(emptyHeaderJson),
+  );
+  const overValue = JSON.stringify({
+    ...base,
+    headers: [['x', 'a'.repeat(4097 - Buffer.byteLength(emptyHeaderJson))]],
+  });
+  assert.equal(Buffer.byteLength(overValue), common.VERSER_RESPONSE_METADATA_MAX_BYTES + 1);
+  assert.throws(() => common.decodeVerserResponseMetadata(overValue), /metadata.*bytes/i);
+  assert.throws(
+    () =>
+      common.encodeVerserResponseMetadata({
+        ...base,
+        headers: [['x', 'a'.repeat(4097 - Buffer.byteLength(emptyHeaderJson))]],
+      }),
+    /metadata.*bytes/i,
+  );
+});
+
+test('shared response metadata codec rejects malformed, unsafe, and incompatible values', () => {
+  const valid = { version: 1, requestId: 'req-valid', statusCode: 200, headers: [['x-a', 'one']] };
+  for (const metadata of [
+    { ...valid, statusText: 'bad\ud800' },
+    { ...valid, statusText: 'emoji 😀' },
+    { ...valid, headers: [['x-a', 'bad\ud800']] },
+    { ...valid, headers: [['x-a', 'emoji 😀']] },
+  ]) {
+    assert.throws(
+      () => common.encodeVerserResponseMetadata(metadata),
+      (error) => error.code === 'protocol-error',
+    );
+  }
+  const invalidValues = [
+    'not-json',
+    '[]',
+    JSON.stringify({ ...valid, version: 2 }),
+    JSON.stringify({ ...valid, requestId: '' }),
+    JSON.stringify({ ...valid, statusCode: 199 }),
+    JSON.stringify({ ...valid, statusCode: 600 }),
+    JSON.stringify({ ...valid, headers: [['x-a']] }),
+    JSON.stringify({ ...valid, headers: [[1, 'one']] }),
+    JSON.stringify({ ...valid, headers: [['x-a', false]] }),
+    JSON.stringify({ ...valid, headers: [['bad name', 'one']] }),
+    JSON.stringify({ ...valid, headers: [['x-a', 'bad\nvalue']] }),
+    JSON.stringify({ ...valid, headers: [['x-a', 'bad\u007fvalue']] }),
+    JSON.stringify({ ...valid, requestId: 'bad\ud800' }),
+    JSON.stringify({ ...valid, statusText: 'bad\udc00' }),
+    JSON.stringify({ ...valid, statusText: 'emoji 😀' }),
+    JSON.stringify({ ...valid, headers: [['x-a', 'bad\ud800']] }),
+    JSON.stringify({ ...valid, headers: [['x-a', 'emoji 😀']] }),
+    JSON.stringify({ ...valid, extra: true }),
+    JSON.stringify({ version: 1, requestId: 'req-valid', statusCode: 200 }),
+  ];
+
+  for (const value of invalidValues) {
+    assert.throws(
+      () => common.decodeVerserResponseMetadata(value),
+      (error) => error.code === 'protocol-error',
+    );
+  }
+});
+
+test('shared response metadata sanitizes encoding and rejects locked decoding fields', () => {
+  const base = { version: 1, requestId: 'req-locked', statusCode: 200 };
+  const encoded = common.encodeVerserResponseMetadata({
+    ...base,
+    headers: [
+      ['connection', 'x-private'],
+      ['x-private', 'drop'],
+      ['x-verser-response-metadata', 'drop'],
+      ['x-keep', 'keep'],
+    ],
+  });
+  assert.deepEqual(common.decodeVerserResponseMetadata(encoded).headers, [['x-keep', 'keep']]);
+  for (const headers of [
+    [['connection', 'close']],
+    [['transfer-encoding', 'chunked']],
+    [['x-verser-response-metadata', 'spoof']],
+    [
+      ['connection', 'x-private'],
+      ['x-private', 'spoof'],
+    ],
+  ]) {
+    assert.throws(
+      () => common.decodeVerserResponseMetadata(JSON.stringify({ ...base, headers })),
+      (error) => error.code === 'protocol-error',
+    );
+  }
+});
+
+test('shared response classifier distinguishes metadata application responses from transport errors', () => {
+  const valid = common.encodeVerserResponseMetadata({
+    version: 1,
+    requestId: 'req-classify',
+    statusCode: 500,
+    headers: [],
+  });
+  assert.deepEqual(common.classifyVerserResponseMetadata(204, 'req-classify', []), {
+    type: 'application-response',
+  });
+  assert.deepEqual(common.classifyVerserResponseMetadata(502, 'req-classify', undefined), {
+    type: 'transport-error',
+  });
+  assert.equal(
+    common.classifyVerserResponseMetadata(500, 'req-classify', [valid]).metadata.statusCode,
+    500,
+  );
+  for (const values of [
+    [valid, valid],
+    ['not-json'],
+    [
+      common.encodeVerserResponseMetadata({
+        version: 1,
+        requestId: 'wrong',
+        statusCode: 500,
+        headers: [],
+      }),
+    ],
+    [
+      common.encodeVerserResponseMetadata({
+        version: 1,
+        requestId: 'req-classify',
+        statusCode: 501,
+        headers: [],
+      }),
+    ],
+  ]) {
+    assert.throws(
+      () => common.classifyVerserResponseMetadata(500, 'req-classify', values),
+      (error) => error.code === 'protocol-error',
+    );
+  }
+});
+
+test('shared routed response pairs override legacy maps and enforce final status/status text', () => {
+  const response = common.createRoutedResponseEnvelope({
+    requestId: 'req-pairs',
+    statusCode: 200,
+    statusText: '',
+    headers: { contradictory: 'ignored' },
+    headerPairs: [
+      ['X-Value', 'first'],
+      ['x-value', 'last'],
+      ['connection', 'x-private'],
+      ['x-private', 'drop'],
+    ],
+  });
+  assert.deepEqual(response.headerPairs, [
+    ['x-value', 'first'],
+    ['x-value', 'last'],
+  ]);
+  assert.deepEqual(response.headers, { 'x-value': 'last' });
+  for (const statusCode of [199, 600]) {
+    assert.throws(
+      () => common.createRoutedResponseEnvelope({ requestId: 'r', statusCode, headers: {} }),
+      /final/i,
+    );
+  }
+  assert.equal(
+    common.createRoutedResponseEnvelope({ requestId: 'r', statusCode: 599, headers: {} })
+      .statusCode,
+    599,
+  );
+  for (const statusText of [
+    'bad\rtext',
+    'bad\ntext',
+    'bad\0text',
+    'bad\u007ftext',
+    'a'.repeat(1025),
+    'emoji 😀',
+  ]) {
+    assert.throws(
+      () =>
+        common.createRoutedResponseEnvelope({
+          requestId: 'r',
+          statusCode: 200,
+          statusText,
+          headers: {},
+        }),
+      /status text/i,
+    );
+  }
+  assert.throws(
+    () =>
+      common.createRoutedResponseEnvelope({
+        requestId: 'r',
+        statusCode: 200,
+        headers: {},
+        headerPairs: [['x-emoji', 'emoji 😀']],
+      }),
+    (error) => error.code === 'protocol-error',
+  );
+});
+
+test('shared pair-aware response sanitizer removes locked and connection-nominated fields', () => {
+  const sanitized = common.sanitizeHttp2ResponseHeaderPairs([
+    ['Set-Cookie', 'a=1'],
+    ['connection', 'x-private, X-Remove'],
+    ['x-private', 'private'],
+    ['X-Remove', 'remove'],
+    ['x-verser-response-metadata', 'spoof'],
+    ['transfer-encoding', 'chunked'],
+    ['set-cookie', 'b=2'],
+  ]);
+
+  assert.deepEqual(sanitized, [
+    ['set-cookie', 'a=1'],
+    ['set-cookie', 'b=2'],
+  ]);
 });
 
 test('shared broad headers normalize array joins and validates names/values', () => {
@@ -717,6 +1056,16 @@ test('shared sanitizeHttp2ResponseHeaders handles array values', () => {
 
   assert.equal(sanitized['x-multi'], 'a,b');
   assert.equal(sanitized.connection, undefined);
+});
+
+test('shared legacy response sanitizer preserves surviving map casing and removes reserved metadata', () => {
+  assert.deepEqual(
+    common.sanitizeHttp2ResponseHeaders({
+      'X-Case': 'preserved',
+      'X-Verser-Response-Metadata': 'spoof',
+    }),
+    { 'X-Case': 'preserved' },
+  );
 });
 
 test('shared certificate helpers expose and verify a pinned certificate', () => {

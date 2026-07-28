@@ -7,6 +7,7 @@ import {
   VERSER_GUEST_REVOCATION_PATH,
   VERSER_LIFECYCLE_EVENTS,
   VWS_MAX_FRAME_BYTES,
+  VerserError,
   createGuestId,
   createGuestRevocationRequest,
   createGuestRevocationResponse,
@@ -181,7 +182,7 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
 
     const localRequest = new MinimalIncomingMessage(request);
     const localResponse = new MinimalServerResponse(
-      undefined,
+      envelope.requestId,
       undefined,
       this.options.maxResponseBytes,
     );
@@ -205,11 +206,14 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       try {
         listener(localRequest, localResponse);
       } catch (error) {
-        const verserError = createVerserError('local-handler-failure', getErrorMessage(error), {
-          guestId: this.options.guestId,
-          requestId: envelope.requestId,
-          path: envelope.path,
-        });
+        const verserError =
+          error instanceof VerserError && error.code === 'protocol-error'
+            ? error
+            : createVerserError('local-handler-failure', getErrorMessage(error), {
+                guestId: this.options.guestId,
+                requestId: envelope.requestId,
+                path: envelope.path,
+              });
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.error,
           requestId: envelope.requestId,
@@ -472,8 +476,39 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
         complete();
       });
       localResponse.once('error', (err) => {
+        if (completed) return;
         completed = true;
-        reject(err);
+        const verserError =
+          err instanceof VerserError && err.code === 'protocol-error'
+            ? err
+            : createVerserError('local-handler-failure', getErrorMessage(err), {
+                guestId: this.options.guestId,
+                requestId: metadata.requestId,
+                path: metadata.path,
+              });
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.error,
+          requestId: metadata.requestId,
+          error: verserError,
+        });
+        if (localResponse.headersStarted) {
+          selfCancelled = true;
+          lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+          resolve();
+          return;
+        }
+        lease.stream.end(
+          encodeVerserEnvelope({
+            type: 'error',
+            metadata: {
+              requestId: metadata.requestId,
+              code: verserError.code,
+              message: verserError.message,
+              context: verserError.context,
+            },
+          }),
+        );
+        resolve();
       });
 
       // Detect H2 RST cancellation from the remote peer (e.g. Broker abort)
@@ -505,11 +540,14 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       try {
         listener(localRequest, localResponse);
       } catch (error) {
-        const verserError = createVerserError('local-handler-failure', getErrorMessage(error), {
-          guestId: this.options.guestId,
-          requestId: metadata.requestId,
-          path: metadata.path,
-        });
+        const verserError =
+          error instanceof VerserError && error.code === 'protocol-error'
+            ? error
+            : createVerserError('local-handler-failure', getErrorMessage(error), {
+                guestId: this.options.guestId,
+                requestId: metadata.requestId,
+                path: metadata.path,
+              });
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.error,
           requestId: metadata.requestId,

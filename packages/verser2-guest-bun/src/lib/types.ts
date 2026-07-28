@@ -1,4 +1,5 @@
 import type { VerserClientTlsOptions } from '@signicode/verser-common';
+import type { VerserHeaderPair } from '@signicode/verser-common';
 import type {
   VerserBroker,
   VerserBrokerOptions,
@@ -255,7 +256,7 @@ export interface VerserBunGuestRequestHandler {
 export interface VerserBunGuestResponse {
   readonly status: number;
   readonly statusText: string;
-  readonly headers: Record<string, string>;
+  readonly headerPairs: readonly VerserHeaderPair[];
   readonly text: () => Promise<string>;
   readonly json: () => Promise<unknown>;
 }

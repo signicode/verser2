@@ -10,6 +10,7 @@ const {
   loadVerserHost,
 } = require('./support/verser-package-imports.cjs');
 const { trusted, clientCa, trustedClient } = require('./support/tls-fixtures.cjs');
+const common = require('../packages/verser-common/dist/index.js');
 
 const { createVerserHost } = loadVerserHost();
 const { createVerserBroker } = loadVerserGuestNode();
@@ -164,6 +165,253 @@ test('Host close fails pending federated request stream waiters with bounded rej
     await broker.close();
     rawSession.destroy();
     await manager.close();
+  }
+});
+
+test('Federated raw response metadata is canonicalized before local Broker delivery', async () => {
+  const manager = createVerserHost({ hostId: 'federation-raw-manager', tls: tlsOptions() });
+  await manager.start();
+  const raw = await connectRawClient(manager.address.port);
+  let rawBroker;
+  let broker;
+  const federationResponseHeaders = [];
+  const openRequest = async (respond) => {
+    const stream = raw.request({
+      ':method': 'POST',
+      ':path': '/verser/host/federation/request',
+      'x-verser-host-id': 'federation-raw-runner',
+    });
+    const responseHeaders = await once(stream, 'response');
+    federationResponseHeaders.push(responseHeaders);
+    assert.equal(responseHeaders['x-verser-response-metadata'], undefined);
+    void common
+      .readLeaseRequestMetadataFromStream(stream, {
+        guestId: 'federation-raw-runner',
+        leaseId: 'federation-raw',
+      })
+      .then((metadata) => respond(metadata, stream));
+  };
+  try {
+    const handshake = raw.request({ ':method': 'POST', ':path': '/verser/host/federation' });
+    handshake.end(
+      JSON.stringify({
+        hostId: 'federation-raw-runner',
+        protocolVersion: 1,
+        importRoutes: true,
+        exportRoutes: true,
+      }),
+    );
+    await once(handshake, 'response');
+    handshake.resume();
+    manager.setImportedFederatedRoutes('federation-raw-runner', [
+      {
+        targetId: 'federation-raw-guest',
+        domain: 'federation-raw.test',
+        originHostId: 'federation-raw-runner',
+        nextHopHostId: 'federation-raw-runner',
+        hopCount: 1,
+        viaHostIds: ['federation-raw-runner'],
+        source: 'upstream',
+      },
+    ]);
+    broker = await manager.attachLocalBroker({ brokerId: 'federation-raw-broker' });
+    await openRequest((metadata, stream) =>
+      stream.end(
+        common.encodeVerserEnvelope({
+          type: 'response',
+          metadata: {
+            requestId: metadata.requestId,
+            statusCode: 218,
+            statusText: 'Federated Raw',
+            headers: { 'x-legacy': 'wrong' },
+            headerPairs: [
+              ['x-repeat', 'one'],
+              ['x-repeat', 'two'],
+              ['set-cookie', 'a=1'],
+              ['set-cookie', 'b=2'],
+              ['connection', 'x-drop'],
+              ['x-drop', 'drop'],
+              ['upgrade', 'websocket'],
+            ],
+          },
+        }),
+      ),
+    );
+    const response = await broker.request({
+      targetId: 'federation-raw-guest',
+      routeDomain: 'federation-raw.test',
+      method: 'GET',
+      path: '/',
+    });
+    assert.equal(response.statusText, 'Federated Raw');
+    assert.deepEqual(response.headerPairs, [
+      ['x-repeat', 'one'],
+      ['x-repeat', 'two'],
+      ['set-cookie', 'a=1'],
+      ['set-cookie', 'b=2'],
+    ]);
+    assert.deepEqual(response.headers, { 'x-repeat': 'two', 'set-cookie': 'b=2' });
+
+    await openRequest((metadata, stream) =>
+      stream.end(
+        common.encodeVerserEnvelope({
+          type: 'response',
+          metadata: {
+            requestId: metadata.requestId,
+            statusCode: 219,
+            statusText: 'Federated Terminal',
+            headers: { 'x-federated-terminal': 'legacy' },
+            headerPairs: [
+              ['x-federated-terminal', 'pair'],
+              ['set-cookie', 'terminal=1'],
+            ],
+          },
+        }),
+      ),
+    );
+    rawBroker = await connectRawClient(manager.address.port);
+    const brokerStream = rawBroker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-request-id': 'federation-raw-terminal-request',
+      'x-verser-source-id': 'federation-raw-terminal-broker',
+      'x-verser-target-id': 'federation-raw-guest',
+      'x-verser-route-domain': 'federation-raw.test',
+      'x-verser-method': 'GET',
+      'x-verser-path': '/terminal',
+      'x-verser-headers': '{}',
+    });
+    const finalHeaders = await once(brokerStream, 'response');
+    assert.equal(finalHeaders[':status'], 219);
+    assert.equal(finalHeaders['x-federated-terminal'], 'pair');
+    const metadataHeaders = Array.isArray(finalHeaders['x-verser-response-metadata'])
+      ? finalHeaders['x-verser-response-metadata']
+      : [finalHeaders['x-verser-response-metadata']];
+    assert.equal(metadataHeaders.length, 1);
+    assert.deepEqual(common.decodeVerserResponseMetadata(metadataHeaders[0]), {
+      version: 1,
+      requestId: 'federation-raw-terminal-request',
+      statusCode: 219,
+      statusText: 'Federated Terminal',
+      headers: [
+        ['x-federated-terminal', 'pair'],
+        ['set-cookie', 'terminal=1'],
+      ],
+    });
+    assert.equal(await text(brokerStream), '');
+    assert.equal(federationResponseHeaders.length, 2);
+
+    await openRequest((_metadata, stream) =>
+      stream.end(
+        common.encodeVerserEnvelope({
+          type: 'response',
+          metadata: { requestId: 'untrusted-federated-id', statusCode: 200, headers: {} },
+        }),
+      ),
+    );
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'federation-raw-guest',
+          routeDomain: 'federation-raw.test',
+          method: 'GET',
+          path: '/mismatched-local',
+        }),
+      (error) =>
+        error.code === 'protocol-error' &&
+        error.context.requestId === 'federation-raw-broker-2' &&
+        error.context.targetId === 'federation-raw-guest' &&
+        error.context.responseRequestId === 'untrusted-federated-id',
+    );
+
+    await openRequest((_metadata, stream) =>
+      stream.end(
+        common.encodeVerserEnvelope({
+          type: 'error',
+          metadata: {
+            requestId: 'untrusted-federated-error-id',
+            code: 'local-handler-failure',
+            message: 'untrusted error',
+          },
+        }),
+      ),
+    );
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'federation-raw-guest',
+          routeDomain: 'federation-raw.test',
+          method: 'GET',
+          path: '/mismatched-error-local',
+        }),
+      (error) =>
+        error.code === 'protocol-error' &&
+        error.context.requestId === 'federation-raw-broker-3' &&
+        error.context.targetId === 'federation-raw-guest' &&
+        error.context.responseRequestId === 'untrusted-federated-error-id',
+    );
+
+    await openRequest((metadata, stream) =>
+      stream.end(
+        common.encodeVerserEnvelope({
+          type: 'error',
+          metadata: {
+            requestId: metadata.requestId,
+            code: 'local-handler-failure',
+            message: 'matching error',
+            context: {
+              requestId: 'spoofed-request-id',
+              targetId: 'spoofed-target-id',
+              diagnostic: 'preserved',
+            },
+          },
+        }),
+      ),
+    );
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'federation-raw-guest',
+          routeDomain: 'federation-raw.test',
+          method: 'GET',
+          path: '/matching-error-local',
+        }),
+      (error) =>
+        error.code === 'local-handler-failure' &&
+        error.context.requestId === 'federation-raw-broker-4' &&
+        error.context.targetId === 'federation-raw-guest' &&
+        error.context.diagnostic === 'preserved',
+    );
+
+    await openRequest((metadata, stream) =>
+      stream.end(
+        common.encodeVerserEnvelope({
+          type: 'response',
+          metadata: {
+            requestId: metadata.requestId,
+            statusCode: 218,
+            statusText: 'unsafe\nstatus',
+            headers: {},
+            headerPairs: [],
+          },
+        }),
+      ),
+    );
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'federation-raw-guest',
+          routeDomain: 'federation-raw.test',
+          method: 'GET',
+          path: '/unsafe',
+        }),
+      (error) => error.code === 'protocol-error',
+    );
+  } finally {
+    rawBroker?.close();
+    if (broker !== undefined) await broker.close('test-complete');
+    raw.close();
+    await manager.close('test-complete');
   }
 });
 
@@ -657,7 +905,10 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
         assert.equal(request.headers.host, expectedGuestDomain);
         assert.equal(request.headers['x-forwarded-host'], 'public.example:8443');
         const body = await text(request);
-        response.writeHead(207, { 'x-federated': request.headers['x-forwarded-check'] });
+        response.writeHead(207, 'Federated Status', {
+          'x-federated': [request.headers['x-forwarded-check'], 'repeated'],
+          'set-cookie': ['upstream=one', 'upstream=two'],
+        });
         response.end(`forwarded:${request.method}:${request.url}:${body}`);
       },
     });
@@ -688,7 +939,14 @@ test('Broker connected to an upstream Host reaches a downstream Guest through fe
     });
 
     assert.equal(response.statusCode, 207);
-    assert.equal(response.headers['x-federated'], 'yes');
+    assert.equal(response.statusText, 'Federated Status');
+    assert.equal(response.headers['x-federated'], 'repeated');
+    assert.deepEqual(response.headerPairs, [
+      ['x-federated', 'yes'],
+      ['x-federated', 'repeated'],
+      ['set-cookie', 'upstream=one'],
+      ['set-cookie', 'upstream=two'],
+    ]);
     assert.equal(await text(response.body), 'forwarded:POST:/federated?phase=5:request-body');
     expectedGuestDomain = 'runner-alt.verser.test';
     const alternateResponse = await broker.request({
@@ -1479,7 +1737,12 @@ test('Bun-facing Broker fetch reaches imported upstream route through federation
         assert.equal(request.headers.host, 'manager-bun-fetch.verser.test');
         assert.equal(request.headers['x-forwarded-host'], undefined);
         const body = await text(request);
-        response.writeHead(202, { 'x-bun-facing': request.method });
+        response.writeHead(202, 'Federated Bun Status', {
+          'x-bun-facing': request.method,
+          'set-cookie': ['first=1', 'second=2'],
+          'x-empty': '',
+          'x-comma': 'one,two',
+        });
         response.end(`${request.url}:${body}`);
       },
     });
@@ -1506,7 +1769,19 @@ test('Bun-facing Broker fetch reaches imported upstream route through federation
     });
 
     assert.equal(response.status, 202);
+    assert.equal(response.statusText, 'Federated Bun Status');
     assert.equal(response.headers.get('x-bun-facing'), 'POST');
+    assert.equal(response.headers.get('x-empty'), '');
+    assert.equal(response.headers.get('x-comma'), 'one,two');
+    const setCookies =
+      typeof response.headers.getSetCookie === 'function'
+        ? response.headers.getSetCookie()
+        : undefined;
+    if (setCookies !== undefined) {
+      assert.deepEqual(setCookies, ['first=1', 'second=2']);
+    } else {
+      assert.equal(response.headers.get('set-cookie'), 'first=1, second=2');
+    }
     assert.equal(await response.text(), '/from-bun?via=fetch:bun-fetch-body');
   } finally {
     await broker?.close();

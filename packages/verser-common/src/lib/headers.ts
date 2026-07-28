@@ -1,7 +1,16 @@
 import type { OutgoingHttpHeaders } from 'node:http';
 
+import {
+  VERSER_RESPONSE_METADATA_HEADER,
+  VERSER_RESPONSE_METADATA_MAX_STATUS_TEXT_BYTES,
+} from './constants';
 import { createVerserError } from './errors';
-import type { VerserHeaderInput, VerserHeaderValue, VerserHeaders } from './types';
+import type {
+  VerserHeaderInput,
+  VerserHeaderPair,
+  VerserHeaderValue,
+  VerserHeaders,
+} from './types';
 import { isValidHttpHeaderName } from './utils';
 
 const FORBIDDEN_HTTP1_HEADERS = new Set(['connection', 'upgrade', 'keep-alive']);
@@ -44,6 +53,27 @@ export function isValidHeaderValue(headerValue: string): boolean {
   }
 
   return true;
+}
+
+/** Checks whether a value can be represented by byte-oriented HTTP adapters. */
+function isLatin1(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) > 0xff) return false;
+  }
+  return true;
+}
+
+/** Validates an optional HTTP response reason phrase for the response metadata contract. @public */
+export function validateVerserStatusText(statusText: string): string {
+  if (
+    typeof statusText !== 'string' ||
+    Buffer.byteLength(statusText, 'utf8') > VERSER_RESPONSE_METADATA_MAX_STATUS_TEXT_BYTES ||
+    !isValidHeaderValue(statusText) ||
+    !isLatin1(statusText)
+  ) {
+    throw createVerserError('protocol-error', 'Invalid response metadata status text');
+  }
+  return statusText;
 }
 
 /**
@@ -231,6 +261,70 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 /**
+ * Validates and lowercases ordered header pairs without flattening repetitions.
+ *
+ * @public
+ */
+export function normalizeHeaderPairs(headerPairs: readonly VerserHeaderPair[]): VerserHeaderPair[] {
+  return headerPairs.map((pair) => {
+    if (
+      !Array.isArray(pair) ||
+      pair.length !== 2 ||
+      typeof pair[0] !== 'string' ||
+      typeof pair[1] !== 'string'
+    ) {
+      throw createVerserError('protocol-error', 'Invalid header pair');
+    }
+    const [name, value] = pair;
+    const normalizedName = name.toLowerCase();
+    if (!isValidHeaderName(normalizedName)) {
+      throw createVerserError('protocol-error', `Invalid header name: ${name}`, { header: name });
+    }
+    if (!isValidHeaderValue(value)) {
+      throw createVerserError('protocol-error', `Invalid header value for ${name}`, {
+        header: name,
+      });
+    }
+    return [normalizedName, value];
+  });
+}
+
+/**
+ * Sanitizes ordered response header pairs for HTTP/2 while preserving surviving order.
+ * It removes hop-by-hop fields, Connection-nominated fields, and Verser's reserved
+ * response metadata header.
+ *
+ * @public
+ */
+export function sanitizeHttp2ResponseHeaderPairs(
+  headerPairs: readonly VerserHeaderPair[],
+): VerserHeaderPair[] {
+  const normalizedPairs = normalizeHeaderPairs(headerPairs);
+  for (const [name, value] of normalizedPairs) {
+    if (!isLatin1(value)) {
+      throw createVerserError('protocol-error', `Invalid response header value for ${name}`, {
+        header: name,
+      });
+    }
+  }
+  const connectionTokens = new Set<string>();
+  for (const [name, value] of normalizedPairs) {
+    if (name === 'connection') {
+      for (const token of value.split(',')) {
+        const normalizedToken = token.trim().toLowerCase();
+        if (normalizedToken !== '') connectionTokens.add(normalizedToken);
+      }
+    }
+  }
+  return normalizedPairs.filter(
+    ([name]) =>
+      !HOP_BY_HOP_HEADERS.has(name) &&
+      !connectionTokens.has(name) &&
+      name !== VERSER_RESPONSE_METADATA_HEADER,
+  );
+}
+
+/**
  * Sanitizes response headers for HTTP/2 transport by removing hop-by-hop
  * headers that have no meaning in HTTP/2.
  *
@@ -248,39 +342,29 @@ const HOP_BY_HOP_HEADERS = new Set([
 export function sanitizeHttp2ResponseHeaders(headers: VerserHeaders): Record<string, string> {
   const sanitized: Record<string, string> = {};
   const connectionTokens = new Set<string>();
-
-  // Collect connection tokens from the Connection header value.
   for (const [name, value] of Object.entries(headers)) {
     if (name.toLowerCase() === 'connection' && value !== null && value !== undefined) {
       const rawValue = Array.isArray(value)
         ? value.map((entry) => String(entry)).join(',')
         : String(value);
       for (const token of rawValue.split(',')) {
-        const trimmed = token.trim().toLowerCase();
-        if (trimmed.length > 0) {
-          connectionTokens.add(trimmed);
-        }
+        const normalizedToken = token.trim().toLowerCase();
+        if (normalizedToken !== '') connectionTokens.add(normalizedToken);
       }
     }
   }
-
   for (const [name, value] of Object.entries(headers)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
+    if (value === null || value === undefined) continue;
     const normalizedName = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(normalizedName)) {
-      // Skip hop-by-hop headers.
+    if (
+      HOP_BY_HOP_HEADERS.has(normalizedName) ||
+      connectionTokens.has(normalizedName) ||
+      normalizedName === VERSER_RESPONSE_METADATA_HEADER
+    )
       continue;
-    }
-    if (connectionTokens.has(normalizedName)) {
-      // Skip headers listed in the Connection header value.
-      continue;
-    }
     sanitized[name] = Array.isArray(value)
       ? value.map((entry) => String(entry)).join(',')
       : String(value);
   }
-
   return sanitized;
 }
