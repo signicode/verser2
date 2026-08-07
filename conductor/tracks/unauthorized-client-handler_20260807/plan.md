@@ -2,19 +2,21 @@
 
 ## Phase 1: Branch and Contract Preparation
 
-- [ ] Task: Create track branch and PR review surface
-    - [ ] Capture the current branch as the PR base during `/conductor:implement`.
-    - [ ] Create `conductor/unauthorized-client-handler_20260807` from the captured HEAD and perform all track work on it.
-    - [ ] Create or update a draft PR whose title and description describe the completed one-shot unauthorized-client handler behavior.
-    - [ ] Record the branch and PR URL in this plan.
-- [ ] Task: Confirm the public API and security boundary before implementation
-    - [ ] Scan `@signicode/verser-common` TLS, certificate, header, error, and stream helpers for reuse; record the common-versus-Host ownership decision.
-    - [ ] Define exported request, context, handler-result, and options types for `tls.clientAuth.unauthorizedClientHandler`, including defaults and validation rules.
-    - [ ] Confirm the callback receives bounded method, path, ordinary headers, `Buffer` body, and `AbortSignal`, and returns only a declarative response or no response.
-    - [ ] Confirm handler mode is the only opt-in to internally permissive TLS acceptance; no result may admit the active session to normal Host routing.
-    - [ ] Confirm reserved Verser and federation paths are silently refused before callback invocation.
-- [ ] Task: Request review of the public API and TLS security design before implementation
-- [ ] Task: Conductor - Phase Checkpoint 'Branch and Contract Preparation' (Protocol in workflow.md)
+- [x] Task: Create track branch and PR review surface
+    - [x] Captured `main` as the PR base during `/conductor:implement`.
+    - [x] Created `conductor/unauthorized-client-handler_20260807` from `main` and perform all track work on it.
+    - [x] Created draft PR [#60](https://github.com/signicode/verser2/pull/60) describing the completed one-shot unauthorized-client handler behavior.
+    - [x] Recorded branch `conductor/unauthorized-client-handler_20260807` and PR URL `https://github.com/signicode/verser2/pull/60`.
+- [x] Task: Confirm the public API and security boundary before implementation
+    - [x] Scanned `@signicode/verser-common` TLS, certificate, header, error, and stream helpers. Common owns public types, TLS normalization, identity extraction, and header validation; the Host owns session classification and one-shot stream handling.
+    - [x] Defined the intended exported request, context, handler-result, and options types for `tls.clientAuth.unauthorizedClientHandler`, including defaults and validation rules.
+    - [x] Confirmed the callback receives bounded method, path, ordinary headers, `Buffer` body, and `AbortSignal`, and returns only a declarative response or no response.
+    - [x] Confirmed handler presence is the only opt-in to internally permissive TLS acceptance; no result may admit the active session to normal Host routing.
+    - [x] Confirmed an outer session gate synchronously claims every first unauthorized stream: reserved Verser and federation paths are silently refused and close the session, while only a non-reserved first stream may invoke the callback.
+- [x] Task: Request review of the public API and TLS security design before implementation
+    - [x] Reviewer accepted the corrected one-stream, reserved-first, and lifecycle-isolation boundary.
+- [x] Task: Conductor - Phase Checkpoint 'Branch and Contract Preparation' (Protocol in workflow.md)
+    - [x] Reviewer checkpoint passed after remediating reserved-first-stream and lifecycle-isolation requirements.
 
 ## Phase 2: Test-Driven TLS Gate and One-Shot Handler
 
@@ -34,7 +36,7 @@
 - [ ] Task: Implement the Host authorization gate and bounded one-shot callback flow
     - [ ] Classify each TLS session before normal stream routing and retain unauthorized sessions only for shutdown.
     - [ ] Claim one eligible stream synchronously, send GOAWAY, buffer and validate the request under limits and deadline, and abort the callback on closure or timeout.
-    - [ ] Refuse internal paths and concurrent/later streams silently without normal parsing, routing, authorization callbacks, or lifecycle events.
+    - [ ] Refuse a reserved first stream and all concurrent/later streams silently, then close the unauthorized session without normal parsing, routing, authorization callbacks, or lifecycle events.
     - [ ] Validate and write declarative callback responses, close after completion, and use a hard-close fallback.
     - [ ] Keep the implementation Host-specific while centralizing reusable types, TLS normalization, and header validation in common code.
 - [ ] Task: Run focused tests, build, and lint; review coverage and deduplication

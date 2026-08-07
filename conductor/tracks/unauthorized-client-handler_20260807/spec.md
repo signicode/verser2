@@ -12,7 +12,7 @@ Add an opt-in Host callback for the first HTTP/2 request on a TLS session whose 
 - When the handler is enabled, configure TLS internally to request a client certificate while allowing the TLS session to complete so an HTTP/2 response can be produced.
 - Treat a session as authorized only when Node TLS reports authorization and a real peer certificate is present. Do not rely on TLS authorization status alone.
 - Keep normal Host routing exclusive to authorized sessions. Unauthenticated sessions must not reach registration, Guest control or lease paths, Broker request or WebSocket paths, federation paths, registration authorization callbacks, or federation authorization callbacks.
-- Silently refuse requests addressed to reserved Verser or federation protocol paths; do not invoke the unauthorized-client handler for them.
+- Claim the first stream on every unauthorized session synchronously. If its path is reserved for Verser or federation protocol, silently refuse it and close the session without invoking the unauthorized-client handler.
 - For a non-reserved first request on an unauthorized session, invoke the handler exactly once. Do not serve any concurrent or subsequent streams on that session.
 - Expose a bounded, buffered request context rather than raw Node HTTP/2 stream or session objects. It includes the method, path, ordinary request headers with pseudo-headers removed, a byte-preserving `Buffer` body, and an `AbortSignal`.
 - Let the handler return a declarative response with status code, optional headers, and optional `string` or `Buffer` body. An absent result closes the session without a response. Do not provide an allow/continue outcome.
@@ -20,7 +20,7 @@ Add an opt-in Host callback for the first HTTP/2 request on a TLS session whose 
 - Provide documented safe defaults and optional configuration for request body size, response body size, and request/handler timeout.
 - Start the one-shot deadline when first-stream headers arrive. Return a generic bounded HTTP error where possible for oversize requests, request timeout, handler timeout, callback exceptions, and invalid handler results; then close the session.
 - After claiming the first eligible stream, send GOAWAY, refuse concurrent or later streams without parsing or responding to them, write the selected response, then close the session with a hard-close fallback.
-- Track unauthorized sessions only as needed for Host shutdown. They must not become registered peers or produce registration, routing, or federation lifecycle events.
+- Track unauthorized sessions only as needed for Host shutdown. They must not become registered peers or produce Host lifecycle events.
 
 ## Compatibility and Documentation
 
@@ -35,7 +35,7 @@ Add an opt-in Host callback for the first HTTP/2 request on a TLS session whose 
 - Enabling the handler without client trust material fails Host configuration validation.
 - A missing or untrusted client certificate can receive exactly one handler-produced HTTP/2 response for a non-reserved first request.
 - A valid client certificate continues through existing Host behavior unchanged.
-- Reserved Verser and federation requests from an unauthorized session are silently refused and never reach the callback or normal protocol handlers.
+- A reserved first request from an unauthorized session is silently refused, closes that session, and never reaches the callback or normal protocol handlers.
 - Concurrent and subsequent streams on an unauthorized session are refused; the callback is never invoked more than once.
 - Oversized, incomplete, timed-out, invalid, and throwing callback cases have bounded, documented failure behavior and close the session.
 - Tests cover TLS authorization classification, including resumed-session certificate absence, request and response limits, timeouts, shutdown, and lifecycle isolation.
