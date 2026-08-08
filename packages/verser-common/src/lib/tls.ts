@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 
+import {
+  DEFAULT_MAX_UNAUTHORIZED_CLIENT_REQUEST_BODY_BYTES,
+  DEFAULT_MAX_UNAUTHORIZED_CLIENT_RESPONSE_BODY_BYTES,
+  DEFAULT_UNAUTHORIZED_CLIENT_HANDLER_TIMEOUT_MS,
+  DEFAULT_UNAUTHORIZED_CLIENT_REQUEST_TIMEOUT_MS,
+} from './constants';
 import type {
   VerserCertificateIdentity,
   VerserClientTlsOptions,
@@ -231,14 +237,16 @@ export function normalizeClientTlsOptions(
 /**
  * Normalizes Host mTLS client authentication options.
  *
- * When `ca` or `caFile` is provided, returns an options object that enables
- * `requestCert` and `rejectUnauthorized` on the Host's TLS context. If neither
- * is provided (and `authorizeRegistration` is absent), returns `undefined`
- * (no client cert verification).
+ * When `ca` or `caFile` is provided, returns options that enable `requestCert`
+ * and strict client rejection on the Host's TLS context. An
+ * `unauthorizedClientHandler` is the only opt-in that changes the rejection
+ * mode: it still requests the certificate but allows the session to complete
+ * so the Host can produce one bounded HTTP/2 response. The handler requires
+ * configured client trust material.
  *
  * @param options - The Host client auth TLS options.
  * @returns Normalized options for Node's TLS context, or `undefined` if client auth is not configured.
- * @throws {Error} If both `ca` and `caFile` are specified (ambiguous).
+ * @throws {Error} If trust material is ambiguous or a handler has no client trust material.
  * @public
  */
 export function normalizeHostClientAuthTlsOptions(options?: VerserHostClientAuthTlsOptions):
@@ -247,6 +255,19 @@ export function normalizeHostClientAuthTlsOptions(options?: VerserHostClientAuth
       requestCert: true;
       rejectUnauthorized: true;
       knownExtensionOids: readonly string[];
+    }
+  | {
+      ca: string;
+      requestCert: true;
+      rejectUnauthorized: false;
+      knownExtensionOids: readonly string[];
+      unauthorizedClientHandler: NonNullable<
+        VerserHostClientAuthTlsOptions['unauthorizedClientHandler']
+      >;
+      unauthorizedClientMaxRequestBodyBytes: number;
+      unauthorizedClientMaxResponseBodyBytes: number;
+      unauthorizedClientRequestTimeoutMs: number;
+      unauthorizedClientHandlerTimeoutMs: number;
     }
   | undefined {
   if (options === undefined) {
@@ -262,16 +283,72 @@ export function normalizeHostClientAuthTlsOptions(options?: VerserHostClientAuth
     );
   }
 
+  const handlerEnabled = options.unauthorizedClientHandler !== undefined;
   if (!hasCa && !hasCaFile) {
+    if (handlerEnabled) {
+      throw new Error(
+        'An unauthorized client handler requires trusted client CA material via `tls.clientAuth.ca` or `tls.clientAuth.caFile`.',
+      );
+    }
     return undefined;
   }
 
-  return {
+  const normalized = {
     ca: hasCaFile ? readFileSync(options.caFile, 'utf8') : (options.ca ?? ''),
-    requestCert: true,
-    rejectUnauthorized: true,
+    requestCert: true as const,
     knownExtensionOids: options.knownExtensionOids ?? [],
   };
+
+  if (!handlerEnabled) {
+    return { ...normalized, rejectUnauthorized: true };
+  }
+
+  const handler = options.unauthorizedClientHandler;
+  if (handler === undefined) {
+    throw new Error('Unauthorized client handler configuration is invalid.');
+  }
+
+  return {
+    ...normalized,
+    rejectUnauthorized: false,
+    unauthorizedClientHandler: handler,
+    unauthorizedClientMaxRequestBodyBytes: normalizePositiveSafeInteger(
+      options.unauthorizedClientMaxRequestBodyBytes,
+      'tls.clientAuth.unauthorizedClientMaxRequestBodyBytes',
+      DEFAULT_MAX_UNAUTHORIZED_CLIENT_REQUEST_BODY_BYTES,
+    ),
+    unauthorizedClientMaxResponseBodyBytes: normalizePositiveSafeInteger(
+      options.unauthorizedClientMaxResponseBodyBytes,
+      'tls.clientAuth.unauthorizedClientMaxResponseBodyBytes',
+      DEFAULT_MAX_UNAUTHORIZED_CLIENT_RESPONSE_BODY_BYTES,
+    ),
+    unauthorizedClientRequestTimeoutMs: normalizePositiveSafeInteger(
+      options.unauthorizedClientRequestTimeoutMs,
+      'tls.clientAuth.unauthorizedClientRequestTimeoutMs',
+      DEFAULT_UNAUTHORIZED_CLIENT_REQUEST_TIMEOUT_MS,
+    ),
+    unauthorizedClientHandlerTimeoutMs: normalizePositiveSafeInteger(
+      options.unauthorizedClientHandlerTimeoutMs,
+      'tls.clientAuth.unauthorizedClientHandlerTimeoutMs',
+      DEFAULT_UNAUTHORIZED_CLIENT_HANDLER_TIMEOUT_MS,
+    ),
+  };
+}
+
+function normalizePositiveSafeInteger(
+  value: number | undefined,
+  optionName: string,
+  defaultValue: number,
+): number {
+  if (value === undefined) {
+    return defaultValue;
+  }
+
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${optionName} must be a positive safe integer.`);
+  }
+
+  return value;
 }
 
 /**

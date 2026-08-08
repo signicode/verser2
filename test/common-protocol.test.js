@@ -1176,6 +1176,57 @@ test('shared TLS normalizers support Host client certificate trust', () => {
   );
 });
 
+test('shared TLS normalizer enables soft client rejection only for an unauthorized-client handler', () => {
+  const unauthorizedClientHandler = async () => undefined;
+
+  assert.deepEqual(
+    common.normalizeHostClientAuthTlsOptions({
+      ca: clientCa.certificate,
+      unauthorizedClientHandler,
+    }),
+    {
+      ca: clientCa.certificate,
+      requestCert: true,
+      rejectUnauthorized: false,
+      knownExtensionOids: [],
+      unauthorizedClientHandler,
+      unauthorizedClientMaxRequestBodyBytes: 64 * 1024,
+      unauthorizedClientMaxResponseBodyBytes: 64 * 1024,
+      unauthorizedClientRequestTimeoutMs: 5000,
+      unauthorizedClientHandlerTimeoutMs: 5000,
+    },
+  );
+});
+
+test('shared unauthorized-client handler limits have bounded safe defaults', () => {
+  assert.equal(common.DEFAULT_MAX_UNAUTHORIZED_CLIENT_REQUEST_BODY_BYTES, 64 * 1024);
+  assert.equal(common.DEFAULT_MAX_UNAUTHORIZED_CLIENT_RESPONSE_BODY_BYTES, 64 * 1024);
+  assert.equal(common.DEFAULT_UNAUTHORIZED_CLIENT_REQUEST_TIMEOUT_MS, 5000);
+  assert.equal(common.DEFAULT_UNAUTHORIZED_CLIENT_HANDLER_TIMEOUT_MS, 5000);
+});
+
+test('shared TLS normalizer validates unauthorized-client handler limits', () => {
+  assert.throws(
+    () =>
+      common.normalizeHostClientAuthTlsOptions({
+        ca: clientCa.certificate,
+        unauthorizedClientHandler: async () => undefined,
+        unauthorizedClientMaxRequestBodyBytes: 0,
+      }),
+    /unauthorizedClientMaxRequestBodyBytes.*positive safe integer/i,
+  );
+});
+
+test('shared TLS normalizer rejects an unauthorized-client handler without client trust material', () => {
+  assert.throws(
+    () =>
+      common.normalizeHostClientAuthTlsOptions({
+        unauthorizedClientHandler: async () => undefined,
+      }),
+    /unauthorized.*client.*handler.*(ca|trust)/i,
+  );
+});
+
 test('shared certificate identity extraction summarizes peer certificate metadata', () => {
   const raw = Buffer.from('trusted-client-raw');
   const identity = common.extractCertificateIdentity(

@@ -146,3 +146,31 @@ export const VERSER_ROUTE_EVENT_REASONS = {
  * @public
  */
 export const DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS = 5000;
+
+/**
+ * Maximum buffered request-body size accepted by an unauthorized-client handler.
+ *
+ * @public
+ */
+export const DEFAULT_MAX_UNAUTHORIZED_CLIENT_REQUEST_BODY_BYTES = 64 * 1024;
+
+/**
+ * Maximum response-body size an unauthorized-client handler may return.
+ *
+ * @public
+ */
+export const DEFAULT_MAX_UNAUTHORIZED_CLIENT_RESPONSE_BODY_BYTES = 64 * 1024;
+
+/**
+ * Maximum time allowed to receive an unauthorized client's first request body.
+ *
+ * @public
+ */
+export const DEFAULT_UNAUTHORIZED_CLIENT_REQUEST_TIMEOUT_MS = 5000;
+
+/**
+ * Maximum time allowed for an unauthorized-client handler to produce a result.
+ *
+ * @public
+ */
+export const DEFAULT_UNAUTHORIZED_CLIENT_HANDLER_TIMEOUT_MS = 5000;

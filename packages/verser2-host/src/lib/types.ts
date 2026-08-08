@@ -36,6 +36,10 @@ export interface VerserHostOptions {
    * requires server certificate material via `tls.cert`/`tls.key`,
    * `tls.certFile`/`tls.keyFile`, `tls.pfx`, or `tls.pfxFile`.
    * Optional `tls.clientAuth` enables mTLS client certificate authentication.
+   * An optional `tls.clientAuth.unauthorizedClientHandler` gates the Verser
+   * protocol after TLS, producing one bounded response for a client without a
+   * valid certificate instead of rejecting at the transport; the strict mTLS
+   * default is unchanged when the handler is absent.
    */
   readonly tls?: VerserHostTlsOptions;
   /**
@@ -300,6 +304,9 @@ export interface VerserHostLifecycleEvent {
  * - Registration authorization via `tls.clientAuth.authorizeRegistration` is a
  *   registration-time mTLS hook only — not a complete per-request authentication
  *   or authorization gateway.
+ * - TLS sessions served only by `tls.clientAuth.unauthorizedClientHandler` are
+ *   not registered peers: they produce no lifecycle events and are closed
+ *   after the one bounded response.
  *
  * @public
  */

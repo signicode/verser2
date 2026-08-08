@@ -177,6 +177,102 @@ async function safeCloseHost(host) {
   }
 }
 
+function withTimeout(promise, label, timeoutMs = 1000) {
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
+}
+
+function waitForSessionClose(session) {
+  if (session.closed || session.destroyed) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => session.once('close', resolve));
+}
+
+function destroyHttp2Session(session) {
+  if (session !== undefined && !session.closed && !session.destroyed) {
+    session.destroy();
+  }
+}
+
+async function connectUnauthorizedClient(port, identity = {}) {
+  const session = await connectSecureHttp2(`https://127.0.0.1:${port}`, {
+    ca: cert,
+    ...identity,
+  });
+  // Expected gate refusals can surface as session errors after the close event.
+  session.on('error', () => {});
+  return session;
+}
+
+function readHttp2Response(stream) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let responseHeaders;
+
+    stream.once('response', (headers) => {
+      responseHeaders = headers;
+    });
+    stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.once('end', () => {
+      resolve({ headers: responseHeaders, body: Buffer.concat(chunks) });
+    });
+    stream.once('error', reject);
+    stream.once('aborted', () => reject(new Error('HTTP/2 stream was aborted')));
+  });
+}
+
+function sendHttp2Request(session, headers, body = Buffer.alloc(0)) {
+  const stream = session.request(headers);
+  const response = readHttp2Response(stream);
+  stream.end(body);
+  return response;
+}
+
+async function expectSilentSessionRefusal(session, headers, body, label) {
+  const closed = waitForSessionClose(session);
+  const stream = session.request(headers);
+  let responseHeaders;
+  stream.once('response', (receivedHeaders) => {
+    responseHeaders = receivedHeaders;
+    stream.resume();
+  });
+  stream.on('error', () => {});
+  stream.end(body);
+
+  await withTimeout(closed, `${label} session close`);
+  assert.equal(responseHeaders, undefined, `${label} must not receive an HTTP response`);
+}
+
+async function expectRefusedStream(session, headers, body, label) {
+  let stream;
+  try {
+    stream = session.request(headers);
+  } catch {
+    return;
+  }
+
+  const outcome = await withTimeout(
+    new Promise((resolve) => {
+      stream.once('response', (responseHeaders) => {
+        stream.resume();
+        resolve({ responseHeaders });
+      });
+      stream.once('close', () => resolve({}));
+      stream.once('aborted', () => resolve({}));
+      stream.once('error', () => resolve({}));
+      stream.end(body);
+    }),
+    `${label} stream refusal`,
+  );
+
+  assert.equal(outcome.responseHeaders, undefined, `${label} must not receive an HTTP response`);
+}
+
 function registerRoutesFrameStreamResponse(stream, routes = []) {
   stream.respond({ ':status': 200, 'content-type': 'application/x-ndjson' });
   stream.end(`${JSON.stringify({ type: 'routes', routes })}\n`);
@@ -709,6 +805,548 @@ test('Host configured with client CA rejects Guest without client certificate', 
       destroyClientSession(guest);
     }
     await safeCloseHost(host);
+  }
+});
+
+test('Host rejects unauthorized-client handler configuration without client trust material', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        unauthorizedClientHandler: async () => undefined,
+      },
+    },
+  });
+
+  try {
+    await assert.rejects(() => host.start(), /unauthorized.*client.*handler.*(ca|trust)/i);
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host routes a valid client certificate normally when an unauthorized handler is enabled', async () => {
+  let unauthorizedHandlerCalls = 0;
+  const guestId = 'mtls-handler-enabled-trusted-guest';
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientHandler() {
+          unauthorizedHandlerCalls += 1;
+          return { statusCode: 200, body: 'unexpected' };
+        },
+      },
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId,
+      routedDomains: ['handler-enabled-trusted.verser.test'],
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await guest.connect();
+    assert.equal(guest.connected, true);
+    assert.equal(unauthorizedHandlerCalls, 0);
+    assert.deepEqual(host.getRoutedDomains(), [
+      { targetId: guestId, domain: 'handler-enabled-trusted.verser.test' },
+    ]);
+  } finally {
+    if (guest?.connected) {
+      await guest.close('test-complete');
+    } else if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host certificate-presence classification rejects authorized TLS mocks without a raw peer certificate', () => {
+  const host = createVerserHost({});
+  const isAuthorizedClientSession = host.isAuthorizedClientSession;
+  const rawCertificate = Buffer.from('client-certificate');
+
+  assert.equal(typeof isAuthorizedClientSession, 'function');
+  assert.equal(
+    isAuthorizedClientSession.call(host, {
+      socket: {
+        authorized: true,
+        getPeerCertificate: () => ({}),
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isAuthorizedClientSession.call(host, {
+      socket: {
+        authorized: true,
+        getPeerCertificate: () => ({ raw: rawCertificate }),
+      },
+    }),
+    true,
+  );
+});
+
+test('Host gives missing and untrusted client certificates one bounded handler response', async () => {
+  const contexts = [];
+  const requestBody = Buffer.from([0, 1, 255, 10]);
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientHandler(context) {
+          contexts.push({
+            method: context.method,
+            path: context.path,
+            headers: context.headers,
+            body: Buffer.from(context.body),
+          });
+          return {
+            statusCode: 201,
+            headers: { 'x-unauthorized-handler': 'handled' },
+            body: Buffer.from(context.body),
+          };
+        },
+      },
+    },
+  });
+
+  try {
+    await host.start();
+
+    for (const [label, identity] of [
+      ['missing certificate', {}],
+      ['untrusted certificate', { cert: untrustedClientCert, key: untrustedClientKey }],
+    ]) {
+      const session = await connectUnauthorizedClient(host.address.port, identity);
+      try {
+        const closed = waitForSessionClose(session);
+        const response = await sendHttp2Request(
+          session,
+          {
+            ':method': 'POST',
+            ':path': '/client-enrollment',
+            'content-type': 'application/octet-stream',
+            'x-client-fixture': label,
+          },
+          requestBody,
+        );
+
+        assert.equal(response.headers[':status'], 201);
+        assert.equal(response.headers['x-unauthorized-handler'], 'handled');
+        assert.deepEqual(response.body, requestBody);
+        await withTimeout(closed, `${label} session close`);
+      } finally {
+        destroyHttp2Session(session);
+      }
+    }
+
+    assert.equal(contexts.length, 2);
+    for (const [index, context] of contexts.entries()) {
+      assert.equal(context.method, 'POST');
+      assert.equal(context.path, '/client-enrollment');
+      assert.equal(
+        context.headers['x-client-fixture'],
+        ['missing certificate', 'untrusted certificate'][index],
+      );
+      assert.equal(context.headers[':path'], undefined);
+      assert.deepEqual(context.body, requestBody);
+    }
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host closes an unauthorized session when its handler returns no response', async () => {
+  let calls = 0;
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientHandler() {
+          calls += 1;
+          return undefined;
+        },
+      },
+    },
+  });
+  let session;
+
+  try {
+    await host.start();
+    session = await connectUnauthorizedClient(host.address.port);
+    await expectSilentSessionRefusal(
+      session,
+      { ':method': 'POST', ':path': '/client-enrollment' },
+      'no-response',
+      'no-response unauthorized handler',
+    );
+    assert.equal(calls, 1);
+  } finally {
+    destroyHttp2Session(session);
+    await safeCloseHost(host);
+  }
+});
+
+test('Host treats malformed unauthorized handler headers as generic failure and closes session', async () => {
+  const malformedHeaders = [
+    { label: 'null', value: null },
+    { label: 'string', value: 'not-an-object' },
+    { label: 'buffer', value: Buffer.from('not-an-object') },
+    { label: 'array', value: ['x-foo', 'y-bar'] },
+  ];
+
+  let calls = 0;
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientHandler() {
+          const { value } = malformedHeaders[calls];
+          calls += 1;
+          return {
+            statusCode: 200,
+            headers: value,
+            body: 'unexpected',
+          };
+        },
+      },
+    },
+  });
+
+  try {
+    await host.start();
+
+    for (const { label, value } of malformedHeaders) {
+      const session = await connectUnauthorizedClient(host.address.port);
+      try {
+        const closed = waitForSessionClose(session);
+        const response = await sendHttp2Request(
+          session,
+          { ':method': 'POST', ':path': '/client-enrollment' },
+          value === null ? '' : Buffer.from(String(value)),
+        );
+
+        assert.equal(response.headers[':status'], 500, `${label}: expected generic failure status`);
+        assert.equal(response.body.length, 0);
+        await withTimeout(closed, `${label}: session close`);
+      } finally {
+        destroyHttp2Session(session);
+      }
+    }
+
+    assert.equal(calls, malformedHeaders.length);
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host silently closes unauthorized reserved first streams without normal callbacks or lifecycle', async () => {
+  const lifecycle = [];
+  const registrations = [];
+  const federations = [];
+  const handlerCalls = [];
+  const host = createVerserHost({
+    hostId: 'unauthorized-reserved-host',
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        authorizeRegistration(context) {
+          registrations.push(context);
+          return { action: 'allow' };
+        },
+        authorizeFederation(context) {
+          federations.push(context);
+          return { action: 'allow' };
+        },
+        unauthorizedClientHandler(context) {
+          handlerCalls.push(context);
+          return { statusCode: 200, body: 'must not run' };
+        },
+      },
+    },
+  });
+  host.onLifecycle((event) => lifecycle.push(event));
+
+  try {
+    await host.start();
+
+    const reservedRequests = [
+      {
+        headers: { ':method': 'POST', ':path': '/verser/register' },
+        body: JSON.stringify({ peerId: 'unauthorized-guest', role: 'guest' }),
+        label: 'registration',
+      },
+      {
+        headers: { ':method': 'POST', ':path': '/verser/host/federation' },
+        body: JSON.stringify({
+          hostId: 'unauthorized-federation',
+          protocolVersion: 1,
+          importRoutes: true,
+          exportRoutes: true,
+        }),
+        label: 'federation',
+      },
+    ];
+
+    for (const request of reservedRequests) {
+      const session = await connectUnauthorizedClient(host.address.port);
+      try {
+        await expectSilentSessionRefusal(session, request.headers, request.body, request.label);
+      } finally {
+        destroyHttp2Session(session);
+      }
+    }
+
+    assert.deepEqual(handlerCalls, []);
+    assert.deepEqual(registrations, []);
+    assert.deepEqual(federations, []);
+    assert.deepEqual(lifecycle, []);
+    assert.deepEqual(host.getRoutedDomains(), []);
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host invokes an unauthorized handler once and refuses concurrent and later streams', async () => {
+  let calls = 0;
+  let releaseHandler;
+  let handlerStarted;
+  const handlerStartedPromise = new Promise((resolve) => {
+    handlerStarted = resolve;
+  });
+  const handlerResultPromise = new Promise((resolve) => {
+    releaseHandler = resolve;
+  });
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientHandler() {
+          calls += 1;
+          handlerStarted();
+          return handlerResultPromise.then(() => ({ statusCode: 202, body: 'accepted' }));
+        },
+      },
+    },
+  });
+  let session;
+
+  try {
+    await host.start();
+    session = await connectUnauthorizedClient(host.address.port);
+    const closed = waitForSessionClose(session);
+    const first = session.request({ ':method': 'POST', ':path': '/client-enrollment' });
+    const firstResponse = readHttp2Response(first);
+    first.end('first');
+
+    await withTimeout(handlerStartedPromise, 'unauthorized handler invocation');
+    await expectRefusedStream(
+      session,
+      { ':method': 'POST', ':path': '/client-enrollment/concurrent' },
+      'concurrent',
+      'concurrent unauthorized request',
+    );
+    assert.equal(calls, 1);
+
+    releaseHandler();
+    const response = await firstResponse;
+    assert.equal(response.headers[':status'], 202);
+    assert.equal(response.body.toString('utf8'), 'accepted');
+    await withTimeout(closed, 'handled unauthorized session close');
+
+    await expectRefusedStream(
+      session,
+      { ':method': 'POST', ':path': '/client-enrollment/later' },
+      'later',
+      'later unauthorized request',
+    );
+    assert.equal(calls, 1);
+  } finally {
+    if (releaseHandler !== undefined) {
+      releaseHandler();
+    }
+    destroyHttp2Session(session);
+    await safeCloseHost(host);
+  }
+});
+
+test('Host bounds unauthorized request and response bodies before callback output', async () => {
+  const requestHandlerCalls = [];
+  const requestHost = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientMaxRequestBodyBytes: 3,
+        unauthorizedClientHandler(context) {
+          requestHandlerCalls.push(context);
+          return { statusCode: 200, body: 'unexpected' };
+        },
+      },
+    },
+  });
+  let requestSession;
+  let responseSession;
+
+  try {
+    await requestHost.start();
+    requestSession = await connectUnauthorizedClient(requestHost.address.port);
+    const requestClosed = waitForSessionClose(requestSession);
+    const requestResponse = await sendHttp2Request(
+      requestSession,
+      { ':method': 'POST', ':path': '/client-enrollment' },
+      Buffer.from('four'),
+    );
+    assert.ok(Number(requestResponse.headers[':status']) >= 400);
+    assert.deepEqual(requestHandlerCalls, []);
+    await withTimeout(requestClosed, 'oversized unauthorized request close');
+    await safeCloseHost(requestHost);
+
+    const responseHandlerCalls = [];
+    const responseHost = createVerserHost({
+      port: 0,
+      tls: {
+        cert,
+        key,
+        clientAuth: {
+          ca: clientCaCert,
+          unauthorizedClientMaxResponseBodyBytes: 3,
+          unauthorizedClientHandler(context) {
+            responseHandlerCalls.push(context);
+            return { statusCode: 200, body: 'four' };
+          },
+        },
+      },
+    });
+    try {
+      await responseHost.start();
+      responseSession = await connectUnauthorizedClient(responseHost.address.port);
+      const responseClosed = waitForSessionClose(responseSession);
+      const response = await sendHttp2Request(responseSession, {
+        ':method': 'POST',
+        ':path': '/client-enrollment',
+      });
+      assert.ok(Number(response.headers[':status']) >= 400);
+      assert.equal(responseHandlerCalls.length, 1);
+      await withTimeout(responseClosed, 'oversized unauthorized response close');
+    } finally {
+      destroyHttp2Session(responseSession);
+      await safeCloseHost(responseHost);
+    }
+  } finally {
+    destroyHttp2Session(requestSession);
+    await safeCloseHost(requestHost);
+  }
+});
+
+test('Host times out incomplete unauthorized requests and stalled handlers', async () => {
+  const incompleteHandlerCalls = [];
+  const incompleteHost = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientRequestTimeoutMs: 25,
+        unauthorizedClientHandler(context) {
+          incompleteHandlerCalls.push(context);
+          return { statusCode: 200, body: 'unexpected' };
+        },
+      },
+    },
+  });
+  let incompleteSession;
+  let stalledSession;
+
+  try {
+    await incompleteHost.start();
+    incompleteSession = await connectUnauthorizedClient(incompleteHost.address.port);
+    const incompleteClosed = waitForSessionClose(incompleteSession);
+    const incompleteStream = incompleteSession.request({
+      ':method': 'POST',
+      ':path': '/client-enrollment',
+    });
+    incompleteStream.on('error', () => {});
+    incompleteStream.write('partial');
+    await withTimeout(incompleteClosed, 'incomplete unauthorized request close', 500);
+    assert.deepEqual(incompleteHandlerCalls, []);
+    await safeCloseHost(incompleteHost);
+
+    let handlerSignal;
+    let handlerStarted;
+    const handlerStartedPromise = new Promise((resolve) => {
+      handlerStarted = resolve;
+    });
+    const stalledHost = createVerserHost({
+      port: 0,
+      tls: {
+        cert,
+        key,
+        clientAuth: {
+          ca: clientCaCert,
+          unauthorizedClientHandlerTimeoutMs: 25,
+          unauthorizedClientHandler(context) {
+            handlerSignal = context.signal;
+            handlerStarted();
+            return new Promise(() => {});
+          },
+        },
+      },
+    });
+    try {
+      await stalledHost.start();
+      stalledSession = await connectUnauthorizedClient(stalledHost.address.port);
+      const stalledClosed = waitForSessionClose(stalledSession);
+      const stalledStream = stalledSession.request({
+        ':method': 'POST',
+        ':path': '/client-enrollment',
+      });
+      stalledStream.on('error', () => {});
+      stalledStream.end();
+      await withTimeout(handlerStartedPromise, 'stalled unauthorized handler invocation');
+      await withTimeout(stalledClosed, 'stalled unauthorized handler close', 500);
+      assert.equal(handlerSignal.aborted, true);
+    } finally {
+      destroyHttp2Session(stalledSession);
+      await safeCloseHost(stalledHost);
+    }
+  } finally {
+    destroyHttp2Session(incompleteSession);
+    await safeCloseHost(incompleteHost);
   }
 });
 

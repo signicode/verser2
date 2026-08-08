@@ -178,6 +178,54 @@ broker = create_verser_broker(
 
 PFX/PKCS12 is also supported with `tls_pfx_file` and `tls_pfx_password`.
 
+### Unauthorized client handler
+
+Strict mTLS remains the default: with `ca`/`caFile` configured and no
+`unauthorizedClientHandler`, the TLS handshake rejects clients without a valid
+client certificate. Configuring `unauthorizedClientHandler` under
+`tls.clientAuth` is the only opt-in that relaxes this at the transport. The
+Host then requests a client certificate but lets the session complete, and
+gates the Verser protocol instead of rejecting at the handshake:
+
+```ts
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    certFile: '/etc/verser/host.crt',
+    keyFile: '/etc/verser/host.key',
+    clientAuth: {
+      caFile: '/etc/verser/client-ca.crt',
+      unauthorizedClientHandler(context) {
+        return { statusCode: 200, body: 'ok' };
+      },
+    },
+  },
+});
+```
+
+This mode is a Host protocol gate, not transport-level strict mTLS:
+
+- Enabling the handler requires `ca` or `caFile`; Host configuration fails
+  without client trust material.
+- A session whose client certificate is missing or untrusted may receive
+  exactly one bounded HTTP/2 response for a non-reserved first request. The
+  handler context is buffered and bounded (method, path, ordinary headers with
+  pseudo-headers removed, `Buffer` body, `AbortSignal`); raw HTTP/2 stream or
+  session objects are not exposed.
+- Reserved Verser paths (`/verser` and `/verser/*`) are silently refused and
+  the session is closed without invoking the handler or any Verser protocol
+  handler.
+- The handler result is declarative only (`{ statusCode, headers?, body? }`).
+  It cannot admit the session to the Verser protocol, and the session is
+  closed after the one request. A client that later presents a valid
+  certificate must reconnect with a new TLS session.
+- Clients that complete TLS but send no request, or whose handshake or ALPN
+  fails before HTTP/2 is established, cannot receive a handler response.
+- Request and response bodies default to 64 KiB and deadlines to 5000 ms,
+  configurable via `unauthorizedClientMaxRequestBodyBytes`,
+  `unauthorizedClientMaxResponseBodyBytes`, `unauthorizedClientRequestTimeoutMs`,
+  and `unauthorizedClientHandlerTimeoutMs`.
+
 ### Upstream Host link TLS
 
 Host-to-Host upstream links use the Node client TLS option shape through

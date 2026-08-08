@@ -88,6 +88,7 @@ import type {
   VerserLocalGuestHandle,
   VerserLocalGuestOptions,
 } from './types';
+import * as unauthorizedClient from './unauthorized-client';
 import { toVerserError } from './utils';
 
 interface RegisteredPeer {
@@ -167,6 +168,8 @@ export class NodeHttp2VerserHost implements VerserHost {
   private readonly peers = new Map<VerserPeerId, RegisteredPeer>();
 
   private readonly sessions = new Set<http2.ServerHttp2Session>();
+
+  private unauthorizedClientHandler?: unauthorizedClient.UnauthorizedClientGate;
 
   private readonly leasePool = new LeasePool();
 
@@ -348,6 +351,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     const certificate = normalizeServerTlsOptions(this.options.tls);
     const clientAuth = normalizeHostClientAuthTlsOptions(this.options.tls?.clientAuth);
+    this.unauthorizedClientHandler = this.createUnauthorizedClientHandler(clientAuth);
     const server = http2.createSecureServer({
       cert: certificate.cert,
       key: certificate.key,
@@ -360,6 +364,9 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     server.on('session', (session) => this.trackSession(session));
     server.on('stream', (stream, headers) => {
+      if (this.handleUnauthorizedClientStream(stream, headers)) {
+        return;
+      }
       this.handleStream(stream, headers).catch((error: unknown) => {
         const verserError = toVerserError(error);
         this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: verserError });
@@ -774,17 +781,54 @@ export class NodeHttp2VerserHost implements VerserHost {
     return createVerserHostId(this.options.hostId);
   }
 
+  private createUnauthorizedClientHandler(
+    clientAuth: ReturnType<typeof normalizeHostClientAuthTlsOptions>,
+  ): unauthorizedClient.UnauthorizedClientGate | undefined {
+    if (clientAuth === undefined || !('unauthorizedClientHandler' in clientAuth)) {
+      return undefined;
+    }
+    return new unauthorizedClient.UnauthorizedClientGate({
+      handler: clientAuth.unauthorizedClientHandler,
+      maxRequestBodyBytes: clientAuth.unauthorizedClientMaxRequestBodyBytes,
+      maxResponseBodyBytes: clientAuth.unauthorizedClientMaxResponseBodyBytes,
+      requestTimeoutMs: clientAuth.unauthorizedClientRequestTimeoutMs,
+      handlerTimeoutMs: clientAuth.unauthorizedClientHandlerTimeoutMs,
+    });
+  }
+
   private trackSession(session: http2.ServerHttp2Session): void {
     this.sessions.add(session);
-    this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected });
+    const handler = this.unauthorizedClientHandler;
+    if (handler !== undefined && !this.isAuthorizedClientSession(session)) {
+      handler.trackSession(session);
+    } else {
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected });
+    }
 
     session.on('close', () => {
       this.sessions.delete(session);
+      if (handler?.handleSessionClose(session)) {
+        return;
+      }
       this.removeSessionPeers(session);
     });
     session.on('error', (error) => {
+      if (handler?.hasSession(session)) {
+        return;
+      }
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
     });
+  }
+
+  private isAuthorizedClientSession(session: http2.ServerHttp2Session): boolean {
+    return unauthorizedClient.isAuthorizedClientSession(session);
+  }
+
+  private handleUnauthorizedClientStream(
+    stream: http2.ServerHttp2Stream,
+    headers: http2.IncomingHttpHeaders,
+  ): boolean {
+    return this.unauthorizedClientHandler?.handleStream(stream, headers) ?? false;
   }
 
   private async handleStream(
