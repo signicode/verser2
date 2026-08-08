@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.7.1 - Unauthorized client handler
+
+- Hosts can opt into `tls.clientAuth.unauthorizedClientHandler` for one bounded
+  HTTP/2 response to a client without a valid certificate while strict mTLS
+  remains the default.
+- Unauthorized sessions are isolated from Verser and federation protocol paths,
+  are limited to one stream, and never become registered peers.
+- The handler has bounded request/response bodies and deadlines, declarative
+  response handling, and documentation for its TLS and lifecycle boundary.
+
 ## v0.6.0 - Federated VWS/1 WebSockets
 
 - Documents Node, Bun, and Python runtime-facing WebSocket APIs over explicit
