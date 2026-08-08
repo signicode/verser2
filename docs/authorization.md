@@ -98,6 +98,64 @@ The callback returns `{ action: 'allow' }` to accept the Host link or
 the application callback still decides whether the declared Host identity and
 certificate context are allowed.
 
+## Unauthorized client handler
+
+`tls.clientAuth.unauthorizedClientHandler` is an opt-in callback for the first
+request on a TLS session whose client certificate is missing or not valid for
+the configured client trust. Without the handler, strict mTLS is unchanged:
+the TLS handshake rejects such clients. With the handler configured, the Host
+requests a client certificate but allows the session to complete, then gates
+the Verser protocol instead of rejecting at the transport.
+
+This is a protocol gate, not transport-level strict mTLS:
+
+```ts
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    certFile: '/etc/verser/host.crt',
+    keyFile: '/etc/verser/host.key',
+    clientAuth: {
+      caFile: '/etc/verser/client-ca.crt',
+      unauthorizedClientHandler(context) {
+        // context.method, context.path, context.headers (pseudo-headers removed),
+        // context.body (Buffer), context.signal (AbortSignal)
+        return { statusCode: 200, body: 'ok' };
+      },
+    },
+  },
+});
+```
+
+Contract:
+
+- The callback is invoked at most once per session with a bounded, buffered
+  request context. Raw HTTP/2 stream or session objects are not exposed.
+- The result is declarative only: `{ statusCode, headers?, body? }`. Returning
+  `undefined` closes the session without a response. No result can authorize,
+  register, or otherwise promote the session to Verser protocol access.
+- A first request to a reserved Verser path (`/verser` or `/verser/*`) is
+  silently refused and the session closes without invoking the callback or any
+  Verser protocol handler.
+- Concurrent and subsequent streams on the session are refused; the callback
+  is never invoked more than once.
+- The session is closed after the one request. A client that later presents a
+  valid certificate must reconnect with a new TLS session.
+- Oversize, incomplete, timed-out, invalid, or throwing cases receive a
+  bounded HTTP error (413, 400, 408, or 500) where possible, then the session
+  closes.
+- Enabling the handler requires `ca` or `caFile`; Host configuration fails
+  without client trust material.
+- Sessions served only by this handler are not registered peers: they never
+  reach `authorizeRegistration`, `authorizeFederation`, normal route handling,
+  or Host lifecycle events.
+
+Defaults: request and response bodies 64 KiB
+(`unauthorizedClientMaxRequestBodyBytes`,
+`unauthorizedClientMaxResponseBodyBytes`), request and handler deadlines
+5000 ms (`unauthorizedClientRequestTimeoutMs`,
+`unauthorizedClientHandlerTimeoutMs`).
+
 ## Certificate identity and fingerprints
 
 When mTLS is enabled, the Host extracts structured certificate identity metadata
@@ -137,6 +195,11 @@ presented during the TLS handshake.
 - **Credential-based auth** — there is no built-in token, password, or session
   authentication for requests or registrations beyond the mTLS certificate
   check.
+- **Unauthorized-client admission** — `unauthorizedClientHandler` can only
+  produce one bounded HTTP response for a client without a valid certificate;
+  it cannot authorize the session for the Verser protocol. It is not
+  application protocol validation, rate limiting, certificate issuance, or CSR
+  processing.
 
 Applications that need request-level or route-level authorization should
 implement it at the application layer, for example by validating tokens in
@@ -149,6 +212,7 @@ Guest request handlers or by wrapping the Broker request path.
 | TLS handshake   | Encrypted transport, optional mTLS client verification |
 | Registration    | Certificate-based `authorizeRegistration` hook         |
 | Federation handshake | Certificate-based `authorizeFederation` hook for Host links |
+| Unauthorized client | One bounded handler response for a non-reserved first request; the Verser protocol is gated |
 | Local peer attach | In-process registration hook with Host-owned metadata |
 | Request routing | No per-request authorization                           |
 | Guest handler   | Application-controlled (token validation, etc.)        |

@@ -182,6 +182,13 @@ upstream Host links. Local registrations, upstream Host registration and
 disconnection, local Broker route advertisements, request start/completion,
 errors, and Host close events use the Host lifecycle surface.
 
+TLS sessions without a valid client certificate that are served only by
+`tls.clientAuth.unauthorizedClientHandler` are not registered peers: they
+produce no `connected`, `disconnected`, `registered`, or `error` lifecycle
+events and are tracked only for Host shutdown. Each such session receives at
+most one bounded handler response (or a bounded failure response), then the
+Host closes it.
+
 ### Node and Bun Guest lifecycle
 
 ```ts
@@ -282,6 +289,10 @@ try {
 | Lease acquire timeout      | Routed request fails with a timeout error                    |
 | Response exceeds max bytes | Direct dispatch fails with a size-limit error                |
 | Degraded route request     | Request to a disconnected Guest fails with `missing-guest` (peer removed from active table) |
+| Unauthorized client request exceeds body limit | Handler mode returns 413, then closes the session          |
+| Unauthorized client request times out or is incomplete | Handler mode returns 408 (or 400), then closes the session |
+| Unauthorized client handler fails, times out, or returns an invalid result | Handler mode returns 500, then closes the session          |
+| Unauthorized client sends a reserved `/verser` path | First stream is refused, the session closes silently, and the handler is not invoked |
 
 ## Error codes
 
@@ -303,6 +314,23 @@ failure classes:
 | `authorization-denied` | An upstream federation authorization callback rejected the Host link. |
 | `unsafe-retry` | Reserved for retry policy failures; active non-replayable streams are not retried transparently. |
 | `revocation-failed` | A route revocation request was rejected by the Host or produced an invalid response. |
+
+### Unauthorized client handler failures
+
+Failures in `tls.clientAuth.unauthorizedClientHandler` mode use plain HTTP
+status codes on the one bounded response, then close the session:
+
+| Status | Meaning |
+|--------|---------|
+| `400` | The request was aborted, failed, or closed before completion. |
+| `408` | The request timed out or was cancelled (the stream is also refused). |
+| `413` | The request body exceeded `unauthorizedClientMaxRequestBodyBytes`. |
+| `500` | The handler timed out, threw, or returned an invalid result, status code, headers, or body, or the response body exceeded `unauthorizedClientMaxResponseBodyBytes`. |
+
+Reserved first streams (`/verser` and `/verser/*`) are refused without any
+response, and the session closes without invoking the handler. Sessions that
+send no request, or whose TLS handshake or ALPN fails before HTTP/2 is
+established, receive no handler response at all.
 
 ## Clean shutdown
 

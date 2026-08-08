@@ -33,6 +33,11 @@
  * - Optional mTLS client authentication via `tls.clientAuth.ca` or `caFile`.
  * - An `authorizeRegistration` callback provides registration-time admission
  *   control based on the peer's certificate and metadata.
+ * - An optional `tls.clientAuth.unauthorizedClientHandler` produces one
+ *   bounded HTTP/2 response for the first non-reserved request from a session
+ *   without a valid client certificate, gating the Verser protocol after TLS
+ *   rather than rejecting at the transport; the strict mTLS default is
+ *   unchanged when the handler is absent.
  * - TLS certificates can be reloaded at runtime while the server is running.
  * - In-process local Guests and Brokers can be attached directly with
  *   `host.attachLocalGuest()` and `host.attachLocalBroker()` when they run in

@@ -24,6 +24,11 @@ and can connect outbound to upstream Hosts for route-aware federation.
   (`added`, `removed`, `changed`, `degraded`); returns unsubscribe function
 - Host option: `degradedRouteTimeoutMs` — timeout before degraded/disconnected
   routes are fully removed (default 5000 ms)
+- Host option: `tls.clientAuth.unauthorizedClientHandler` — one bounded
+  HTTP/2 response for the first non-reserved request from a client without a
+  valid certificate, while gating the Verser protocol after TLS (see
+  [Docs: Certificates](../../docs/certificates.md) and
+  [Docs: Authorization](../../docs/authorization.md))
 - Re-exported: `VerserPeerRole`
 - Constant: `VERSER2_HOST_PACKAGE_NAME`
 
@@ -104,6 +109,70 @@ forward HTTP/1 upgrade bytes, CONNECT/RFC8441, or L4 traffic. Agent/Dispatcher
 upgrades are unsupported; Bun `server.upgrade()` is implemented by the Bun Guest
 adapter, not by this Host package.
 
+## Unauthorized client handler
+
+Strict transport-level mTLS remains the default: when `tls.clientAuth.ca` or
+`tls.clientAuth.caFile` is configured and no handler is present, the TLS
+handshake rejects clients that present no client certificate or an untrusted
+one.
+
+Configuring `tls.clientAuth.unauthorizedClientHandler` is the only opt-in that
+changes this default. The TLS layer still requests a client certificate but
+lets the session complete, and the Host gates the Verser protocol instead of
+rejecting at the transport. A session without a valid certificate can produce
+exactly **one** bounded HTTP/2 response for a non-reserved first request:
+
+```ts
+const host = createVerserHost({
+  port: 8443,
+  tls: {
+    certFile: '/etc/verser/host.crt',
+    keyFile: '/etc/verser/host.key',
+    clientAuth: {
+      caFile: '/etc/verser/client-ca.crt',
+      unauthorizedClientHandler(context) {
+        return {
+          statusCode: 200,
+          headers: { 'content-type': 'text/plain' },
+          body: `Hello ${context.path}`,
+        };
+      },
+    },
+  },
+});
+```
+
+Behavior contract:
+
+- **Strict default unchanged** — without the handler, client authentication is
+  strict and rejects invalid clients at the TLS handshake. The handler is the
+  sole opt-in; there is no public `rejectUnauthorized: false` switch.
+- **One bounded callback request** — the Host claims the first stream on the
+  session synchronously, sends GOAWAY, and invokes the handler at most once.
+  Concurrent and later streams are refused without being parsed or answered.
+- **No raw HTTP/2** — the context exposes `method`, `path`, ordinary headers
+  (pseudo-headers removed), a byte-preserving `Buffer` body, and an
+  `AbortSignal`. Node HTTP/2 stream and session objects are not exposed.
+- **Reserved Verser paths silently close** — a first request whose path is
+  `/verser` or starts with `/verser/` is refused and the session is closed
+  without invoking the handler or any Verser protocol handler.
+- **Valid cert reconnect** — an unauthorized session is never admitted to the
+  Verser protocol and is closed after the one request. A client that later
+  presents a valid certificate must open a new TLS connection.
+- **Limits and errors** — request bodies and handler response bodies default
+  to 64 KiB and are configurable via `unauthorizedClientMaxRequestBodyBytes`
+  and `unauthorizedClientMaxResponseBodyBytes`; request and handler deadlines
+  default to 5000 ms via `unauthorizedClientRequestTimeoutMs` and
+  `unauthorizedClientHandlerTimeoutMs`. Oversize, incomplete, timed-out,
+  invalid, and throwing cases receive a bounded HTTP error (413, 400, 408, or
+  500) where possible, then the session closes.
+- **Protocol gate, not transport mTLS** — handler mode is optionally
+  client-authenticated TLS with strict Host protocol gating: the unauthorized
+  session cannot reach registration, Guest control/lease, Broker request or
+  WebSocket, or federation paths, and it produces no lifecycle events. A
+  session that never sends a request, or whose TLS handshake or ALPN fails
+  before HTTP/2 is established, receives no callback response.
+
 ## Caveats
 
 - Host uses Node TLS HTTP/2 and requires TLS options.
@@ -122,6 +191,10 @@ adapter, not by this Host package.
 - Local peers bypass TLS. Local registration still invokes
   `authorizeRegistration`, but the Host supplies `certificate: undefined` and
   Host-owned metadata `{ local: true, authorized: true }`.
+- `tls.clientAuth.unauthorizedClientHandler` gates the Verser protocol after
+  TLS instead of preserving transport-level strict mTLS. An unauthorized
+  session receives one bounded response and is then closed; a client that
+  later presents a valid certificate must reconnect.
 - The Host package exposes raw local `request()` primitives only. Agent,
   Dispatcher, and fetch helpers remain in `@signicode/verser2-guest-node` for
   remote Node Brokers.

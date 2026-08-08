@@ -827,6 +827,81 @@ test('Host rejects unauthorized-client handler configuration without client trus
   }
 });
 
+test('Host routes a valid client certificate normally when an unauthorized handler is enabled', async () => {
+  let unauthorizedHandlerCalls = 0;
+  const guestId = 'mtls-handler-enabled-trusted-guest';
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        unauthorizedClientHandler() {
+          unauthorizedHandlerCalls += 1;
+          return { statusCode: 200, body: 'unexpected' };
+        },
+      },
+    },
+  });
+  let guest;
+
+  try {
+    await host.start();
+    guest = createVerserNodeGuest({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      guestId,
+      routedDomains: ['handler-enabled-trusted.verser.test'],
+      minWaitingStreams: 0,
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await guest.connect();
+    assert.equal(guest.connected, true);
+    assert.equal(unauthorizedHandlerCalls, 0);
+    assert.deepEqual(host.getRoutedDomains(), [
+      { targetId: guestId, domain: 'handler-enabled-trusted.verser.test' },
+    ]);
+  } finally {
+    if (guest?.connected) {
+      await guest.close('test-complete');
+    } else if (guest !== undefined) {
+      destroyClientSession(guest);
+    }
+    await safeCloseHost(host);
+  }
+});
+
+test('Host certificate-presence classification rejects authorized TLS mocks without a raw peer certificate', () => {
+  const host = createVerserHost({});
+  const isAuthorizedClientSession = host.isAuthorizedClientSession;
+  const rawCertificate = Buffer.from('client-certificate');
+
+  assert.equal(typeof isAuthorizedClientSession, 'function');
+  assert.equal(
+    isAuthorizedClientSession.call(host, {
+      socket: {
+        authorized: true,
+        getPeerCertificate: () => ({}),
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    isAuthorizedClientSession.call(host, {
+      socket: {
+        authorized: true,
+        getPeerCertificate: () => ({ raw: rawCertificate }),
+      },
+    }),
+    true,
+  );
+});
+
 test('Host gives missing and untrusted client certificates one bounded handler response', async () => {
   const contexts = [];
   const requestBody = Buffer.from([0, 1, 255, 10]);
