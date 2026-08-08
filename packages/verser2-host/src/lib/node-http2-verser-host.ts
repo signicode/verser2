@@ -27,8 +27,6 @@ import {
   type VerserRegistrationRequest,
   type VerserRegistrationResponse,
   type VerserRouteLifecycleEvent,
-  type VerserUnauthorizedClientHandler,
-  type VerserUnauthorizedClientHandlerResult,
   createBrokerRouteLifecycleControlFrame,
   createBrokerRoutesControlFrame,
   createFederationVwsAccept,
@@ -51,8 +49,6 @@ import {
   parseRegistrationRequest,
   readNdjsonLines,
   readVwsLine,
-  sanitizeHttp2ResponseHeaders,
-  validateVerserHeaders,
 } from '@signicode/verser-common';
 import {
   type BrokerRoutingCallbacks,
@@ -92,6 +88,7 @@ import type {
   VerserLocalGuestHandle,
   VerserLocalGuestOptions,
 } from './types';
+import * as unauthorizedClient from './unauthorized-client';
 import { toVerserError } from './utils';
 
 interface RegisteredPeer {
@@ -139,30 +136,6 @@ interface FederatedVwsPoolWaiter {
   readonly onAbort?: () => void;
 }
 
-interface UnauthorizedClientGateOptions {
-  readonly handler: VerserUnauthorizedClientHandler;
-  readonly maxRequestBodyBytes: number;
-  readonly maxResponseBodyBytes: number;
-  readonly requestTimeoutMs: number;
-  readonly handlerTimeoutMs: number;
-}
-
-interface UnauthorizedClientSession {
-  claimed: boolean;
-  closing: boolean;
-  readonly controller: AbortController;
-  hardCloseTimer?: NodeJS.Timeout;
-}
-
-class UnauthorizedClientFailure extends Error {
-  public constructor(
-    readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
 /**
  * TLS HTTP/2 server implementation of the {@link VerserHost} interface.
  *
@@ -196,12 +169,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly sessions = new Set<http2.ServerHttp2Session>();
 
-  private readonly unauthorizedSessions = new Map<
-    http2.ServerHttp2Session,
-    UnauthorizedClientSession
-  >();
-
-  private unauthorizedClientGate?: UnauthorizedClientGateOptions;
+  private unauthorizedClientHandler?: unauthorizedClient.UnauthorizedClientGate;
 
   private readonly leasePool = new LeasePool();
 
@@ -211,8 +179,6 @@ export class NodeHttp2VerserHost implements VerserHost {
   private static readonly MAX_WS_IDLE_LEASES_PER_GUEST = 4;
 
   private static readonly MAX_FEDERATION_VWS_WAITERS = 64;
-
-  private static readonly UNAUTHORIZED_CLIENT_HARD_CLOSE_TIMEOUT_MS = 250;
 
   private readonly routeRegistry: HostRouteRegistry;
 
@@ -385,7 +351,7 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     const certificate = normalizeServerTlsOptions(this.options.tls);
     const clientAuth = normalizeHostClientAuthTlsOptions(this.options.tls?.clientAuth);
-    this.unauthorizedClientGate = this.getUnauthorizedClientGate(clientAuth);
+    this.unauthorizedClientHandler = this.createUnauthorizedClientHandler(clientAuth);
     const server = http2.createSecureServer({
       cert: certificate.cert,
       key: certificate.key,
@@ -815,375 +781,54 @@ export class NodeHttp2VerserHost implements VerserHost {
     return createVerserHostId(this.options.hostId);
   }
 
-  private getUnauthorizedClientGate(
+  private createUnauthorizedClientHandler(
     clientAuth: ReturnType<typeof normalizeHostClientAuthTlsOptions>,
-  ): UnauthorizedClientGateOptions | undefined {
+  ): unauthorizedClient.UnauthorizedClientGate | undefined {
     if (clientAuth === undefined || !('unauthorizedClientHandler' in clientAuth)) {
       return undefined;
     }
-    return {
+    return new unauthorizedClient.UnauthorizedClientGate({
       handler: clientAuth.unauthorizedClientHandler,
       maxRequestBodyBytes: clientAuth.unauthorizedClientMaxRequestBodyBytes,
       maxResponseBodyBytes: clientAuth.unauthorizedClientMaxResponseBodyBytes,
       requestTimeoutMs: clientAuth.unauthorizedClientRequestTimeoutMs,
       handlerTimeoutMs: clientAuth.unauthorizedClientHandlerTimeoutMs,
-    };
+    });
   }
 
   private trackSession(session: http2.ServerHttp2Session): void {
     this.sessions.add(session);
-    const unauthorized =
-      this.unauthorizedClientGate !== undefined && !this.isAuthorizedClientSession(session);
-    const unauthorizedSession = unauthorized
-      ? { claimed: false, closing: false, controller: new AbortController() }
-      : undefined;
-
-    if (unauthorizedSession !== undefined) {
-      this.unauthorizedSessions.set(session, unauthorizedSession);
+    const handler = this.unauthorizedClientHandler;
+    if (handler !== undefined && !this.isAuthorizedClientSession(session)) {
+      handler.trackSession(session);
     } else {
       this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected });
     }
 
     session.on('close', () => {
       this.sessions.delete(session);
-      const state = this.unauthorizedSessions.get(session);
-      if (state !== undefined) {
-        this.unauthorizedSessions.delete(session);
-        clearTimeout(state.hardCloseTimer);
-        state.controller.abort();
+      if (handler?.handleSessionClose(session)) {
         return;
       }
       this.removeSessionPeers(session);
     });
     session.on('error', (error) => {
-      if (!this.unauthorizedSessions.has(session)) {
-        this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+      if (handler?.hasSession(session)) {
+        return;
       }
+      this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
     });
   }
 
   private isAuthorizedClientSession(session: http2.ServerHttp2Session): boolean {
-    const tlsSocket = session.socket as TLSSocket;
-    const certificate = tlsSocket.getPeerCertificate(true);
-    return tlsSocket.authorized && Buffer.isBuffer(certificate.raw) && certificate.raw.length > 0;
+    return unauthorizedClient.isAuthorizedClientSession(session);
   }
 
   private handleUnauthorizedClientStream(
     stream: http2.ServerHttp2Stream,
     headers: http2.IncomingHttpHeaders,
   ): boolean {
-    const session = stream.session as http2.ServerHttp2Session | undefined;
-    if (session === undefined) {
-      return false;
-    }
-    const state = this.unauthorizedSessions.get(session);
-    const gate = this.unauthorizedClientGate;
-    if (state === undefined || gate === undefined) {
-      return false;
-    }
-
-    if (state.claimed) {
-      this.refuseUnauthorizedClientStream(stream);
-      return true;
-    }
-
-    state.claimed = true;
-    const path = String(headers[':path'] ?? '');
-    if (this.isReservedUnauthorizedClientPath(path)) {
-      this.refuseUnauthorizedClientStream(stream);
-      this.closeUnauthorizedClientSession(session, state);
-      return true;
-    }
-
-    try {
-      session.goaway(http2.constants.NGHTTP2_NO_ERROR);
-    } catch {
-      this.closeUnauthorizedClientSession(session, state);
-      return true;
-    }
-
-    void this.handleUnauthorizedClientFirstStream(stream, headers, session, state, gate);
-    return true;
-  }
-
-  private isReservedUnauthorizedClientPath(path: string): boolean {
-    return path === '/verser' || path.startsWith('/verser/');
-  }
-
-  private refuseUnauthorizedClientStream(stream: http2.ServerHttp2Stream): void {
-    if (stream.closed || stream.destroyed) {
-      return;
-    }
-    stream.once('error', () => {});
-    stream.close(http2.constants.NGHTTP2_REFUSED_STREAM);
-  }
-
-  private async handleUnauthorizedClientFirstStream(
-    stream: http2.ServerHttp2Stream,
-    headers: http2.IncomingHttpHeaders,
-    session: http2.ServerHttp2Session,
-    state: UnauthorizedClientSession,
-    gate: UnauthorizedClientGateOptions,
-  ): Promise<void> {
-    try {
-      const body = await this.readUnauthorizedClientRequestBody(
-        stream,
-        state.controller.signal,
-        gate,
-      );
-      if (state.controller.signal.aborted) {
-        return;
-      }
-      const result = await this.invokeUnauthorizedClientHandler(
-        gate,
-        {
-          method: String(headers[':method'] ?? ''),
-          path: String(headers[':path'] ?? ''),
-          headers: this.getUnauthorizedClientRequestHeaders(headers),
-          body,
-          signal: state.controller.signal,
-        },
-        state.controller,
-      );
-      if (state.controller.signal.aborted) {
-        return;
-      }
-      if (result === undefined) {
-        this.refuseUnauthorizedClientStream(stream);
-        return;
-      }
-      this.writeUnauthorizedClientResponse(stream, result, gate.maxResponseBodyBytes);
-    } catch (error) {
-      if (!session.closed && !session.destroyed && !stream.closed && !stream.destroyed) {
-        const statusCode = error instanceof UnauthorizedClientFailure ? error.statusCode : 500;
-        this.sendUnauthorizedClientFailure(stream, statusCode);
-        if (statusCode === 408) {
-          this.refuseUnauthorizedClientStream(stream);
-        }
-      }
-    } finally {
-      this.closeUnauthorizedClientSession(session, state);
-    }
-  }
-
-  private getUnauthorizedClientRequestHeaders(
-    headers: http2.IncomingHttpHeaders,
-  ): Readonly<Record<string, string | readonly string[]>> {
-    const ordinaryHeaders: Record<string, string | readonly string[]> = {};
-    for (const [name, value] of Object.entries(headers)) {
-      if (name.startsWith(':') || value === undefined) {
-        continue;
-      }
-      ordinaryHeaders[name] = Array.isArray(value)
-        ? value.map((entry) => String(entry))
-        : String(value);
-    }
-    return ordinaryHeaders;
-  }
-
-  private readUnauthorizedClientRequestBody(
-    stream: http2.ServerHttp2Stream,
-    signal: AbortSignal,
-    gate: UnauthorizedClientGateOptions,
-  ): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      let settled = false;
-      const finish = (callback: () => void): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        stream.off('data', onData);
-        stream.off('end', onEnd);
-        stream.off('aborted', onAborted);
-        stream.off('error', onError);
-        stream.off('close', onClose);
-        signal.removeEventListener('abort', onAbort);
-        callback();
-      };
-      const fail = (statusCode: number, message: string): void => {
-        finish(() => reject(new UnauthorizedClientFailure(statusCode, message)));
-      };
-      const onData = (chunk: Buffer): void => {
-        const buffer = Buffer.from(chunk);
-        totalBytes += buffer.length;
-        if (totalBytes > gate.maxRequestBodyBytes) {
-          fail(413, 'Unauthorized client request body exceeds the configured limit');
-          return;
-        }
-        chunks.push(buffer);
-      };
-      const onEnd = (): void => finish(() => resolve(Buffer.concat(chunks, totalBytes)));
-      const onAborted = (): void => fail(400, 'Unauthorized client request was aborted');
-      const onError = (): void => fail(400, 'Unauthorized client request failed');
-      const onClose = (): void => fail(400, 'Unauthorized client request closed before completion');
-      const onAbort = (): void => fail(408, 'Unauthorized client request was cancelled');
-      const timeout = setTimeout(
-        () => fail(408, 'Unauthorized client request timed out'),
-        gate.requestTimeoutMs,
-      );
-
-      stream.on('data', onData);
-      stream.once('end', onEnd);
-      stream.once('aborted', onAborted);
-      stream.once('error', onError);
-      stream.once('close', onClose);
-      if (signal.aborted) {
-        onAbort();
-        return;
-      }
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
-  }
-
-  private invokeUnauthorizedClientHandler(
-    gate: UnauthorizedClientGateOptions,
-    context: Parameters<VerserUnauthorizedClientHandler>[0],
-    controller: AbortController,
-  ): Promise<VerserUnauthorizedClientHandlerResult | undefined> {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = (callback: () => void): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        controller.signal.removeEventListener('abort', onAbort);
-        callback();
-      };
-      const onAbort = (): void => {
-        finish(() =>
-          reject(new UnauthorizedClientFailure(408, 'Unauthorized client handler was cancelled')),
-        );
-      };
-      const timeout = setTimeout(() => {
-        finish(() =>
-          reject(new UnauthorizedClientFailure(500, 'Unauthorized client handler timed out')),
-        );
-        controller.abort();
-      }, gate.handlerTimeoutMs);
-
-      if (controller.signal.aborted) {
-        onAbort();
-        return;
-      }
-      controller.signal.addEventListener('abort', onAbort, { once: true });
-      Promise.resolve()
-        .then(() => gate.handler(context))
-        .then(
-          (result) => finish(() => resolve(result)),
-          () =>
-            finish(() =>
-              reject(new UnauthorizedClientFailure(500, 'Unauthorized client handler failed')),
-            ),
-        );
-    });
-  }
-
-  private writeUnauthorizedClientResponse(
-    stream: http2.ServerHttp2Stream,
-    result: VerserUnauthorizedClientHandlerResult,
-    maxResponseBodyBytes: number,
-  ): void {
-    if (result === null || typeof result !== 'object') {
-      throw new UnauthorizedClientFailure(
-        500,
-        'Unauthorized client handler returned an invalid result',
-      );
-    }
-    if (
-      !Number.isSafeInteger(result.statusCode) ||
-      result.statusCode < 100 ||
-      result.statusCode > 599
-    ) {
-      throw new UnauthorizedClientFailure(
-        500,
-        'Unauthorized client handler returned an invalid status code',
-      );
-    }
-    if (result.headers !== undefined) {
-      const headers = result.headers;
-      const headersPrototype = headers === null ? null : Object.getPrototypeOf(headers);
-      if (
-        headers === null ||
-        typeof headers !== 'object' ||
-        (headersPrototype !== Object.prototype && headersPrototype !== null)
-      ) {
-        throw new UnauthorizedClientFailure(
-          500,
-          'Unauthorized client handler returned invalid headers',
-        );
-      }
-    }
-
-    let body: Buffer;
-    if (result.body === undefined) {
-      body = Buffer.alloc(0);
-    } else if (typeof result.body === 'string' || Buffer.isBuffer(result.body)) {
-      body = Buffer.from(result.body);
-    } else {
-      throw new UnauthorizedClientFailure(
-        500,
-        'Unauthorized client handler returned an invalid body',
-      );
-    }
-    if (body.length > maxResponseBodyBytes) {
-      throw new UnauthorizedClientFailure(
-        500,
-        'Unauthorized client response body exceeds the configured limit',
-      );
-    }
-
-    const sanitizedHeaders = sanitizeHttp2ResponseHeaders(
-      validateVerserHeaders(result.headers ?? {}),
-    );
-    const responseHeaders = Object.fromEntries(
-      Object.entries(sanitizedHeaders).filter(([name]) => name !== 'content-length'),
-    );
-    if (stream.closed || stream.destroyed || stream.headersSent) {
-      return;
-    }
-    stream.respond({
-      ':status': result.statusCode,
-      ...responseHeaders,
-      'content-length': String(body.length),
-    });
-    stream.end(body);
-  }
-
-  private sendUnauthorizedClientFailure(stream: http2.ServerHttp2Stream, statusCode: number): void {
-    if (stream.closed || stream.destroyed || stream.headersSent) {
-      return;
-    }
-    try {
-      stream.respond({ ':status': statusCode, 'content-length': '0' });
-      stream.end();
-    } catch {
-      this.refuseUnauthorizedClientStream(stream);
-    }
-  }
-
-  private closeUnauthorizedClientSession(
-    session: http2.ServerHttp2Session,
-    state: UnauthorizedClientSession,
-  ): void {
-    if (state.closing) {
-      return;
-    }
-    state.closing = true;
-    state.controller.abort();
-    if (session.destroyed) {
-      return;
-    }
-    if (!session.closed) {
-      session.close();
-    }
-    state.hardCloseTimer = setTimeout(() => {
-      if (!session.destroyed) {
-        session.destroy();
-      }
-    }, NodeHttp2VerserHost.UNAUTHORIZED_CLIENT_HARD_CLOSE_TIMEOUT_MS);
-    state.hardCloseTimer.unref();
+    return this.unauthorizedClientHandler?.handleStream(stream, headers) ?? false;
   }
 
   private async handleStream(
