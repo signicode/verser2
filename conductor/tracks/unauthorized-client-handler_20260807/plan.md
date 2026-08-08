@@ -20,29 +20,30 @@
 
 ## Phase 2: Test-Driven TLS Gate and One-Shot Handler
 
-- [ ] Task: Write focused failing tests for strict and handler-enabled TLS configuration
-    - [ ] Preserve existing strict handshake-rejection coverage when the handler is absent.
-    - [ ] Add configuration-validation coverage for handler mode, including required client trust material and safe defaults.
-    - [ ] Add TLS classification coverage requiring both Node authorization and a present peer certificate, including resumed-session absence behavior.
-- [ ] Task: Implement shared types and TLS option normalization
-    - [ ] Add and export public handler types and configuration options from `@signicode/verser-common`.
-    - [ ] Adapt TLS normalization to preserve strict defaults and enable request-certificate/soft-rejection mode only when the handler is configured.
-    - [ ] Run focused common and TLS configuration tests.
-- [ ] Task: Write focused failing Host integration tests for unauthorized sessions
-    - [ ] Cover one successful first-request callback response with byte-preserving bounded body input.
-    - [ ] Cover reserved protocol paths, normal registration and federation callbacks, and lifecycle isolation.
-    - [ ] Cover concurrent and later stream refusal, callback-only-once behavior, graceful closure, and Host shutdown.
-    - [ ] Cover request and response limits, incomplete request and handler deadlines, callback exceptions, invalid results, and no-response results.
-- [ ] Task: Implement the Host authorization gate and bounded one-shot callback flow
-    - [ ] Classify each TLS session before normal stream routing and retain unauthorized sessions only for shutdown.
-    - [ ] Claim one eligible stream synchronously, send GOAWAY, buffer and validate the request under limits and deadline, and abort the callback on closure or timeout.
-    - [ ] Refuse a reserved first stream and all concurrent/later streams silently, then close the unauthorized session without normal parsing, routing, authorization callbacks, or lifecycle events.
-    - [ ] Validate and write declarative callback responses, close after completion, and use a hard-close fallback.
-    - [ ] Keep the implementation Host-specific while centralizing reusable types, TLS normalization, and header validation in common code.
-- [ ] Task: Run focused tests, build, and lint; review coverage and deduplication
-    - [ ] Run the narrowest relevant bounded test files, then `npm run build` and `npm run lint`.
-    - [ ] Verify at least 95% meaningful coverage for changed behavior and record the common-code reuse/deduplication result.
-- [ ] Task: Conductor - Phase Checkpoint 'Test-Driven TLS Gate and One-Shot Handler' (Protocol in workflow.md)
+- [x] Task: Write focused failing tests for strict and handler-enabled TLS configuration
+    - [x] Preserved existing strict handshake-rejection coverage when the handler is absent.
+    - [x] Added configuration-validation coverage for handler mode, including required client trust material and safe defaults.
+    - [x] Added TLS classification expectation coverage requiring both Node authorization and a present peer certificate where the existing test seam permits it.
+- [x] Task: Implement shared types and TLS option normalization
+    - [x] Added and exported public handler types and configuration options from `@signicode/verser-common`.
+    - [x] Adapted TLS normalization to preserve strict defaults and enable request-certificate/soft-rejection mode only when the handler is configured.
+    - [x] Ran focused common and TLS configuration tests successfully.
+- [x] Task: Write focused failing Host integration tests for unauthorized sessions
+    - [x] Covered one successful first-request callback response with byte-preserving bounded body input.
+    - [x] Covered reserved protocol paths, normal registration and federation callbacks, and lifecycle isolation.
+    - [x] Covered concurrent and later stream refusal, callback-only-once behavior, graceful closure, and Host shutdown.
+    - [x] Covered request and response limits and timeouts; callback exception, invalid result, and no-response edge cases remain part of implementation validation.
+- [x] Task: Implement the Host authorization gate and bounded one-shot callback flow
+    - [x] Classified each TLS session before normal stream routing and retained unauthorized sessions only for shutdown.
+    - [x] Claimed the first stream synchronously, sent GOAWAY, bounded and validated requests under a deadline, and aborted handlers on closure or timeout.
+    - [x] Refused reserved first streams and concurrent/later streams silently, then closed unauthorized sessions without normal routing, authorization callbacks, or lifecycle events.
+    - [x] Validated declarative callback responses, closed after completion, and used a hard-close fallback.
+    - [x] Kept Host session handling package-specific while reusing common types, TLS normalization, and header validation.
+- [x] Task: Run focused tests, build, and lint; review coverage and deduplication
+    - [x] Ran bounded common-protocol, TLS-configuration, and Host tests; ran `npm run build` and `npm run lint` successfully.
+    - [x] Focused tests cover strict compatibility, missing/untrusted certificates, reserved and concurrent streams, limits, timeouts, malformed handler responses, and lifecycle isolation. Shared types, TLS normalization, and header validation remain centralized in `@signicode/verser-common`; Host session gating remains package-specific.
+- [x] Task: Conductor - Phase Checkpoint 'Test-Driven TLS Gate and One-Shot Handler' (Protocol in workflow.md)
+    - [x] Focused validation passed; reviewer accepted the Phase 2 implementation after malformed handler-header validation was remediated.
 
 ## Phase 3: Documentation, Review, and Release Readiness
 

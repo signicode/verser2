@@ -640,6 +640,72 @@ export type VerserRegistrationAuthorizationCallback = (
 ) => VerserRegistrationAuthorizationAction | Promise<VerserRegistrationAuthorizationAction>;
 
 /**
+ * Buffered request data provided to an unauthorized-client handler.
+ *
+ * This deliberately omits Node HTTP/2 stream and session objects. Header names
+ * are lowercase ordinary HTTP headers; HTTP/2 pseudo-headers are not exposed.
+ *
+ * @public
+ */
+export interface VerserUnauthorizedClientRequest {
+  /** HTTP method supplied by the client. */
+  readonly method: string;
+  /** Request path supplied by the client. */
+  readonly path: string;
+  /** Ordinary request headers, excluding HTTP/2 pseudo-headers. */
+  readonly headers: Readonly<Record<string, string | readonly string[]>>;
+  /** Complete bounded request body, preserving bytes exactly. */
+  readonly body: Buffer;
+}
+
+/**
+ * Context supplied to an unauthorized-client handler.
+ *
+ * The signal aborts when the Host closes the one-request TLS session or its
+ * configured handler deadline expires. It cannot be used to authorize or
+ * promote the current session to the Verser protocol.
+ *
+ * @public
+ */
+export interface VerserUnauthorizedClientHandlerContext extends VerserUnauthorizedClientRequest {
+  /** Signals Host cancellation of the one-shot unauthorized-client request. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * Declarative response an unauthorized-client handler may return.
+ *
+ * Returning `undefined` closes the session without a response. This response
+ * shape has no outcome that permits the session to access the Verser protocol.
+ *
+ * @public
+ */
+export interface VerserUnauthorizedClientHandlerResult {
+  /** Final HTTP response status code. */
+  readonly statusCode: number;
+  /** Optional ordinary response headers. */
+  readonly headers?: VerserHeaders;
+  /** Optional response body. */
+  readonly body?: string | Buffer;
+}
+
+/**
+ * Callback for the first request on an unauthorized client TLS session.
+ *
+ * The Host invokes this callback at most once per session. Its result can only
+ * provide a bounded HTTP response or close the session; it cannot authorize a
+ * peer, register it, or continue normal Verser routing.
+ *
+ * @public
+ */
+export type VerserUnauthorizedClientHandler = (
+  context: VerserUnauthorizedClientHandlerContext,
+) =>
+  | VerserUnauthorizedClientHandlerResult
+  | undefined
+  | Promise<VerserUnauthorizedClientHandlerResult | undefined>;
+
+/**
  * A route-control frame sent by the Host to Brokers over the control stream.
  *
  * When Guest routes change (additions, removals, disconnections), the Host
@@ -671,10 +737,12 @@ export interface VerserFederatedRoutesControlFrame {
 /**
  * Options for enabling mTLS client certificate authentication on the Host.
  *
- * When `ca` or `caFile` is provided, the Host sets `requestCert` and `rejectUnauthorized`
- * on the TLS context, requiring all connecting peers to present a client certificate
- * signed by the configured CA. An optional `authorizeRegistration` callback allows
- * application-level admission control at registration time.
+ * When `ca` or `caFile` is provided, the Host sets `requestCert` and
+ * `rejectUnauthorized` on the TLS context, requiring all connecting peers to
+ * present a client certificate signed by the configured CA. Configuring
+ * `unauthorizedClientHandler` is the sole opt-in that changes this strict TLS
+ * default: the Host still requests client certificates, but may produce one
+ * bounded HTTP/2 response for a session without a valid client certificate.
  *
  * **Note:** This is a registration-time authentication hook only. It is not a
  * complete per-request authorization or authentication gateway for Broker targets.
@@ -698,6 +766,19 @@ export type VerserHostClientAuthTlsOptions = {
    * Called for Host-to-Host upstream handshakes; returning `'close'` rejects the link.
    */
   readonly authorizeFederation?: VerserHostFederationAuthorizationCallback;
+  /**
+   * One-shot handler for the first request from a client without a valid
+   * certificate. Requires `ca` or `caFile`; it cannot grant Verser access.
+   */
+  readonly unauthorizedClientHandler?: VerserUnauthorizedClientHandler;
+  /** Maximum bytes buffered from the one unauthorized-client request body. */
+  readonly unauthorizedClientMaxRequestBodyBytes?: number;
+  /** Maximum bytes emitted from an unauthorized-client handler response body. */
+  readonly unauthorizedClientMaxResponseBodyBytes?: number;
+  /** Maximum milliseconds allowed to receive the one request body. */
+  readonly unauthorizedClientRequestTimeoutMs?: number;
+  /** Maximum milliseconds allowed for the handler to resolve. */
+  readonly unauthorizedClientHandlerTimeoutMs?: number;
 };
 
 /**
