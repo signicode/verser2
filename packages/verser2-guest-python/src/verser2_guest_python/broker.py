@@ -338,6 +338,26 @@ def json_dumps(value: dict[str, Any]) -> str:
     return _json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def _normalize_broker_hop_domain(value: str | None) -> str | None:
+    """Normalize an optional Broker hop-domain for registration.
+
+    Mirrors the Host's ``normalizeVerserRouteDomain``: trimmed, lowercased,
+    with a single trailing dot removed.  Returns ``None`` when the input is
+    ``None``; raises ``ValueError`` when a supplied value is empty or not a
+    string.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("broker_hop_domain must be a string or None")
+    normalized = value.strip().lower()
+    if normalized.endswith("."):
+        normalized = normalized[:-1]
+    if not normalized:
+        raise ValueError("broker_hop_domain must be a non-empty domain")
+    return normalized
+
+
 class VerserBrokerResponse:
     """A routed response from a Verser Host with one-shot body readers.
 
@@ -525,6 +545,7 @@ class VerserBroker:
         *,
         host_url: str,
         broker_id: str,
+        broker_hop_domain: str | None = None,
         tls_ca_file: str | None = None,
         **options: Any,
     ) -> None:
@@ -537,6 +558,14 @@ class VerserBroker:
         broker_id : str
             A unique peer identifier for Host registration.  Must not collide
             with any other peer ID on the same Host.
+        broker_hop_domain : str or None
+            Optional hop-domain advertised as this Broker's first federation
+            hop identity in the registration payload.  The value is
+            normalized (trimmed, lowercased, trailing dot removed) before it
+            is sent.  When the Host enables remote mTLS, it must exactly match
+            a DNS Subject Alternative Name on this Broker's client
+            certificate; otherwise the Host rejects registration.  When
+            ``None``, no hop-domain is sent.
         tls_ca_file : str or None
             Path to a PEM CA bundle for verifying the Host's TLS certificate.
         **options : any
@@ -556,6 +585,7 @@ class VerserBroker:
         """
         self.host_url = host_url
         self.broker_id = broker_id
+        self.broker_hop_domain = _normalize_broker_hop_domain(broker_hop_domain)
         self.tls_ca_file = tls_ca_file
         self.tls_cert_file = options.get("tls_cert_file")
         self.tls_key_file = options.get("tls_key_file")
@@ -707,8 +737,11 @@ class VerserBroker:
                 pass
         self._conn = None
 
-    def _registration_payload(self) -> dict[str, str]:
-        return {"peerId": self.broker_id, "role": "broker"}
+    def _registration_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"peerId": self.broker_id, "role": "broker"}
+        if self.broker_hop_domain is not None:
+            payload["brokerHopDomain"] = self.broker_hop_domain
+        return payload
 
     async def _register(self) -> None:
         payload = self._registration_payload()

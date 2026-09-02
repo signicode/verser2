@@ -18,6 +18,7 @@ import {
   type VerserCertificateIdentity,
   type VerserError,
   type VerserErrorCode,
+  type VerserFederatedRouteAuthorizationPair,
   type VerserGuestRevocationRequest,
   type VerserHostFederationHandshake,
   type VerserHostId,
@@ -46,6 +47,7 @@ import {
   normalizeClientTlsOptions,
   normalizeHostClientAuthTlsOptions,
   normalizeServerTlsOptions,
+  normalizeVerserRouteDomain,
   parseRegistrationRequest,
   readNdjsonLines,
   readVwsLine,
@@ -72,6 +74,7 @@ import {
   updateLocalBrokerRoutes,
   waitForLocalBrokerRoute,
 } from './local-peers';
+import { FederatedRouteAuthorizer } from './route-authorizer';
 import { type HostRouteRegistry, createHostRouteRegistry } from './route-registry';
 import type {
   VerserHost,
@@ -99,6 +102,13 @@ interface RegisteredPeer {
   readonly controlStream?: http2.ServerHttp2Stream;
   readonly localGuest?: LocalGuestState;
   readonly localBroker?: LocalBrokerState;
+  /**
+   * Normalized optional Broker hop-domain persisted at registration time.
+   * Remote Brokers bind it to an exact DNS SAN when Host mTLS is enabled;
+   * local Brokers are exempt from certificate matching. Undefined when the
+   * Broker did not advertise one or the peer is not a Broker.
+   */
+  readonly brokerHopDomain?: string;
 }
 
 interface UpstreamLink {
@@ -182,6 +192,13 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly routeRegistry: HostRouteRegistry;
 
+  /**
+   * Hop-local federated route authorizer. Created only when the Host is
+   * configured with a `routeAuthorizer` callback; forwarding paths then
+   * consult it after candidate resolution and before body/frame forwarding.
+   */
+  private readonly routeAuthorizer?: FederatedRouteAuthorizer;
+
   private readonly degradedCleanup: DegradedRouteCleanup;
 
   private readonly activeLocalRequests = new Map<VerserPeerId, Set<AbortController>>();
@@ -214,6 +231,10 @@ export class NodeHttp2VerserHost implements VerserHost {
   public constructor(options: VerserHostOptions) {
     this.options = options;
     this.routeRegistry = createHostRouteRegistry(options);
+    this.routeAuthorizer =
+      options.routeAuthorizer === undefined
+        ? undefined
+        : new FederatedRouteAuthorizer(options.routeAuthorizer);
     this.degradedCleanup = new DegradedRouteCleanup(
       this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS,
       this.createDegradedCleanupCallbacks(),
@@ -227,8 +248,15 @@ export class NodeHttp2VerserHost implements VerserHost {
    */
   private createDegradedCleanupCallbacks(): DegradedRouteCleanupCallbacks {
     return {
-      removeExpiredDegradedRoutes: (now, timeoutMs) =>
-        this.routeRegistry.removeExpiredDegradedRoutes(now, timeoutMs),
+      removeExpiredDegradedRoutes: (now, timeoutMs) => {
+        const result = this.routeRegistry.removeExpiredDegradedRoutes(now, timeoutMs);
+        if (result.expiredPeers.length > 0) {
+          // Direct lifecycle removal of expired degraded routes invalidates
+          // cached hop-local allows.
+          this.invalidateRouteAuthorizations();
+        }
+        return result;
+      },
       hasAnyDegradedRoutes: () => this.routeRegistry.hasAnyDegradedRoutes(),
       getDegradedPeerIds: () => [...this.routeRegistry.getDegradedEntries().keys()],
       getDegradedBrokerRoutesForPeer: (peerId) =>
@@ -282,8 +310,13 @@ export class NodeHttp2VerserHost implements VerserHost {
         this.advertiseRouteLifecycleEvents(events, skipFederation),
       forwardLifecycleEventsExcluding: (excludedOwnerId, frame) =>
         this.forwardFederationEventsToPeers(excludedOwnerId, frame),
-      removeImportedRoute: (ownerId, targetId, domain) =>
-        this.routeRegistry.removeImportedRoute(ownerId, targetId, domain),
+      removeImportedRoute: (ownerId, targetId, domain) => {
+        if (this.routeRegistry.removeImportedRoute(ownerId, targetId, domain)) {
+          // Direct lifecycle removal of an imported route invalidates cached
+          // hop-local allows.
+          this.invalidateRouteAuthorizations();
+        }
+      },
     };
   }
 
@@ -402,6 +435,8 @@ export class NodeHttp2VerserHost implements VerserHost {
    */
   public async close(reason = 'host-close'): Promise<void> {
     this.stopDegradedRouteCleanupTimer();
+    // Host shutdown invalidates every cached hop-local allow.
+    this.invalidateRouteAuthorizations();
     const server = this.server;
     this.server = undefined;
     this.failAllFederationVwsPoolWaiters(`Host closing: ${reason}`);
@@ -465,6 +500,8 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (!update.changed) {
       return update.rejected.map((rejection) => rejection.error);
     }
+    // Imported snapshot replacement invalidates cached hop-local allows.
+    this.invalidateRouteAuthorizations();
     this.advertiseRoutes();
     this.advertiseFederatedRoutes();
     return update.rejected.map((rejection) => rejection.error);
@@ -472,6 +509,9 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   public removeImportedFederatedRoutes(upstreamId: string): void {
     this.routeRegistry.removeImportedRoutes(upstreamId);
+    // Imported route removal (including federation-link removal) invalidates
+    // cached hop-local allows.
+    this.invalidateRouteAuthorizations();
     this.advertiseRoutes();
     this.advertiseFederatedRoutes();
   }
@@ -481,6 +521,56 @@ export class NodeHttp2VerserHost implements VerserHost {
     domain?: string,
   ): FederatedRouteRegistration[] {
     return this.routeRegistry.getCandidates(targetId, domain);
+  }
+
+  /**
+   * {@inheritDoc VerserHost.revokeRouteAuthorization}
+   */
+  public revokeRouteAuthorization(pair: VerserFederatedRouteAuthorizationPair): boolean {
+    return this.routeAuthorizer?.revokePair(pair) ?? false;
+  }
+
+  /**
+   * Hop-local authorization seam for the federation forwarding paths.
+   *
+   * Resolves `true` immediately when no `routeAuthorizer` is configured, so
+   * existing behavior is preserved. Phase 3 invokes this after candidate
+   * resolution and before federation stream/open-frame/body forwarding.
+   *
+   * @internal
+   */
+  public authorizeFederatedHopPair(
+    previousAdvertisedDomain: string,
+    nextSelectedDomain: string,
+  ): Promise<boolean> {
+    if (this.routeAuthorizer === undefined) {
+      return Promise.resolve(true);
+    }
+    return this.routeAuthorizer.authorizeHop({ previousAdvertisedDomain, nextSelectedDomain });
+  }
+
+  /**
+   * Returns the normalized `brokerHopDomain` persisted for a registered
+   * Broker peer, or `undefined` when the peer is unknown, is not a Broker,
+   * or did not advertise a hop-domain.
+   *
+   * @internal
+   */
+  public getRegisteredBrokerHopDomain(peerId: VerserPeerId): string | undefined {
+    const peer = this.peers.get(peerId);
+    if (peer === undefined || peer.role !== 'broker') {
+      return undefined;
+    }
+    return peer.brokerHopDomain;
+  }
+
+  /**
+   * Advances the invalidation generation and clears every cached allow so a
+   * pending decision cannot authorize forwarding against a removed route.
+   * Centralizes invalidation for all route/import/link/shutdown mutations.
+   */
+  private invalidateRouteAuthorizations(): void {
+    this.routeAuthorizer?.invalidate();
   }
 
   public async connectUpstream(
@@ -568,6 +658,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     const newDomains = options.routedDomains ?? [];
     const degradedDomains = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
     const hasDegraded = degradedDomains.length > 0;
+    // Local Guest attachment mutates local routes; invalidate cached
+    // hop-local allows before applying the new state.
+    this.invalidateRouteAuthorizations();
 
     if (hasDegraded) {
       // Re-attachment after degradation: compute diff between old degraded
@@ -702,6 +795,9 @@ export class NodeHttp2VerserHost implements VerserHost {
         }
         const result = this.routeRegistry.revokeRoutes(peerId, domains);
         if (result.revoked.length > 0) {
+          // Direct lifecycle removal of revoked routes invalidates cached
+          // hop-local allows.
+          this.invalidateRouteAuthorizations();
           const revokedEvents = result.revoked.map((domain) =>
             createRouteLifecycleEvent({
               type: 'removed',
@@ -727,15 +823,37 @@ export class NodeHttp2VerserHost implements VerserHost {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
     }
 
+    // Local Broker handles are already Host-owned: the optional hop-domain is
+    // normalized and validated before authorization and persisted after it,
+    // but exempt from client-certificate matching.
+    let brokerHopDomain: string | undefined;
+    if (options.brokerHopDomain !== undefined) {
+      brokerHopDomain = normalizeVerserRouteDomain(options.brokerHopDomain);
+      if (brokerHopDomain.length === 0) {
+        throw createVerserError(
+          'invalid-registration',
+          'brokerHopDomain must be a non-empty domain',
+          { peerId },
+        );
+      }
+    }
+
     await this.authorizeLocalRegistration(peerId, {
       peerId,
       role: 'broker',
       routedDomains: [],
+      ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
     });
 
     const localBroker = createLocalBrokerState(this.getRoutedDomains());
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'broker' });
-    this.peers.set(peerId, { peerId, role: 'broker', transport: 'local', localBroker });
+    this.peers.set(peerId, {
+      peerId,
+      role: 'broker',
+      transport: 'local',
+      localBroker,
+      ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
+    });
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'broker' });
 
     return {
@@ -923,12 +1041,21 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
+    let brokerHopDomain: string | undefined;
+    if (registration.role === 'broker' && registration.brokerHopDomain !== undefined) {
+      // `parseRegistrationRequest` already normalized and validated the
+      // value; with Host mTLS it must also match an exact DNS SAN.
+      brokerHopDomain = registration.brokerHopDomain;
+      this.assertBrokerHopDomainCertificate(session, peerId, brokerHopDomain);
+    }
+
     const peer: RegisteredPeer = {
       peerId,
       role: registration.role,
       transport: 'h2',
       session,
       controlStream: registration.role === 'broker' ? stream : undefined,
+      ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
     };
 
     this.peers.set(peerId, peer);
@@ -939,6 +1066,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
 
     if (registration.role === 'guest') {
+      // Guest (re-)registration mutates local routes; invalidate cached
+      // hop-local allows before advertising the new state.
+      this.invalidateRouteAuthorizations();
       const degradedDomains = this.routeRegistry.getDegradedBrokerRoutesForPeer(peerId);
       const hasDegraded = degradedDomains.length > 0;
       const newDomains = registration.routedDomains ?? [];
@@ -1079,6 +1209,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       peerId,
       role: registration.role,
       routedDomains: registration.routedDomains ?? [],
+      ...(registration.brokerHopDomain === undefined
+        ? {}
+        : { brokerHopDomain: registration.brokerHopDomain }),
       certificate: this.getCertificateIdentity(tlsSocket),
       metadata: {
         authorized: tlsSocket.authorized,
@@ -1524,6 +1657,38 @@ export class NodeHttp2VerserHost implements VerserHost {
     );
   }
 
+  /**
+   * When Host remote mTLS is enabled, a Broker-supplied hop-domain must
+   * exactly match a normalized DNS Subject Alternative Name on the peer
+   * certificate — no wildcard, suffix, or CN fallback. Without mTLS trust
+   * material there is no certificate to bind against, so the already
+   * validated and normalized value is stored as supplied.
+   */
+  private assertBrokerHopDomainCertificate(
+    session: http2.Http2Session,
+    peerId: VerserPeerId,
+    brokerHopDomain: string,
+  ): void {
+    const clientAuth = this.options.tls?.clientAuth;
+    const mtlsEnabled = clientAuth?.ca !== undefined || clientAuth?.caFile !== undefined;
+    if (!mtlsEnabled) {
+      return;
+    }
+
+    const certificate = this.getCertificateIdentity(session.socket as TLSSocket);
+    const matched =
+      certificate?.dnsNames.some(
+        (dnsName) => normalizeVerserRouteDomain(dnsName) === brokerHopDomain,
+      ) ?? false;
+    if (!matched) {
+      throw createVerserError(
+        'certificate-verification-failure',
+        'Broker hop domain is not bound to an exact DNS SAN on the client certificate',
+        { peerId, brokerHopDomain },
+      );
+    }
+  }
+
   private async authorizeLocalRegistration(
     peerId: VerserPeerId,
     registration: VerserRegistrationRequest,
@@ -1537,6 +1702,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       peerId,
       role: registration.role,
       routedDomains: registration.routedDomains ?? [],
+      ...(registration.brokerHopDomain === undefined
+        ? {}
+        : { brokerHopDomain: registration.brokerHopDomain }),
       certificate: undefined,
       metadata: { local: true, authorized: true },
     });
@@ -1573,6 +1741,8 @@ export class NodeHttp2VerserHost implements VerserHost {
       // Move routes to degraded state instead of removing immediately.
       // This matches the remote Guest disconnect behavior.
       this.routeRegistry.setDegraded(peerId);
+      // Local route loss (degradation) invalidates cached hop-local allows.
+      this.invalidateRouteAuthorizations();
       this.leasePool.closeGuestLeases(peerId);
       this.leasePool.failQueuedLeaseAcquisitions(peerId, reason);
       this.abortLocalRequestsForPeer(peerId);
@@ -2028,6 +2198,9 @@ export class NodeHttp2VerserHost implements VerserHost {
 
     // Broadcast lifecycle events for revoked routes
     if (result.revoked.length > 0) {
+      // Direct lifecycle removal of revoked routes invalidates cached
+      // hop-local allows.
+      this.invalidateRouteAuthorizations();
       const events: VerserRouteLifecycleEvent[] = result.revoked.map((domain) =>
         createRouteLifecycleEvent({
           type: 'removed',
@@ -2880,6 +3053,8 @@ export class NodeHttp2VerserHost implements VerserHost {
 
           // Move routes to degraded state instead of removing immediately
           this.routeRegistry.setDegraded(peerId);
+          // Remote route loss (degradation) invalidates cached hop-local allows.
+          this.invalidateRouteAuthorizations();
           this.leasePool.closeGuestLeases(peerId);
           this.leasePool.failQueuedLeaseAcquisitions(peerId, 'guest-disconnect');
 

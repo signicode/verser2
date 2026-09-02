@@ -540,6 +540,15 @@ export interface VerserRegistrationRequest {
    * Brokers typically omit this field.
    */
   readonly routedDomains?: readonly string[];
+  /**
+   * Optional hop-domain a Broker advertises as the identity of its first
+   * federation hop. Only valid for `role: 'broker'` registrations; the Host
+   * rejects it for Guests. When the Host enables remote mTLS, the normalized
+   * value must exactly match a DNS Subject Alternative Name on the Broker's
+   * client certificate (no wildcard or CN fallback). When absent, the Broker
+   * has no advertised hop-domain and remains `undefined`.
+   */
+  readonly brokerHopDomain?: string;
 }
 
 /**
@@ -604,6 +613,11 @@ export interface VerserRegistrationAuthorizationContext {
   readonly role: VerserPeerRole;
   /** Hostnames this Peer intends to handle (Guests only). */
   readonly routedDomains: readonly string[];
+  /**
+   * Normalized optional Broker hop-domain supplied at registration.
+   * Present only for Broker registrations that advertised one.
+   */
+  readonly brokerHopDomain?: string;
   /** Parsed TLS client certificate identity, if mTLS is configured. */
   readonly certificate?: VerserCertificateIdentity;
   /**
@@ -638,6 +652,60 @@ export type VerserRegistrationAuthorizationAction =
 export type VerserRegistrationAuthorizationCallback = (
   context: VerserRegistrationAuthorizationContext,
 ) => VerserRegistrationAuthorizationAction | Promise<VerserRegistrationAuthorizationAction>;
+
+/**
+ * A hop-local pair of normalized route domains the Host asks the application
+ * to authorize for one federated forwarding decision.
+ *
+ * The pair is exactly `{ previousAdvertisedDomain, nextSelectedDomain }`: the
+ * immediate previous advertised domain toward the concrete next selected
+ * domain. It carries no origin, hop history, or end-to-end Broker-to-Guest
+ * policy — authorization is hop-local only.
+ *
+ * @public
+ */
+export interface VerserFederatedRouteAuthorizationPair {
+  /** Normalized domain advertised to (or by) the previous hop. */
+  readonly previousAdvertisedDomain: string;
+  /** Normalized domain just selected as the next hop. */
+  readonly nextSelectedDomain: string;
+}
+
+/**
+ * Application authorization context for one hop-local federated route pair.
+ *
+ * Both domains are already normalized and resolved by the Host. The callback
+ * only decides allow or deny for the pair; it does not select, validate, or
+ * authorize either domain through another callback.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationContext = VerserFederatedRouteAuthorizationPair;
+
+/**
+ * The decision returned by a federated route authorization callback.
+ *
+ * - `'allow'` — the hop-local pair may forward; allowed decisions are cached.
+ * - `'deny'` — the hop-local pair must not forward; denied decisions are
+ *   never cached.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationDecision = 'allow' | 'deny';
+
+/**
+ * Callback for authorizing hop-local federated route pairs before forwarding.
+ *
+ * Configured via the Host `routeAuthorizer` option. The Host caches only
+ * allowed decisions (single-flight per normalized pair) and revokes cached
+ * allows on route mutations, federation-link removal, explicit pair
+ * revocation, and Host shutdown.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationCallback = (
+  context: VerserFederatedRouteAuthorizationContext,
+) => VerserFederatedRouteAuthorizationDecision | Promise<VerserFederatedRouteAuthorizationDecision>;
 
 /**
  * Buffered request data provided to an unauthorized-client handler.

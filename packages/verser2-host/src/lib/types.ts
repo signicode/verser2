@@ -8,6 +8,8 @@ import type {
   RoutedDomainRegistration,
   VerserClientTlsOptions,
   VerserError,
+  VerserFederatedRouteAuthorizationCallback,
+  VerserFederatedRouteAuthorizationPair,
   VerserHeaderPair,
   VerserHostTlsOptions,
   VerserRegistrationRequest,
@@ -61,6 +63,18 @@ export interface VerserHostOptions {
    * Defaults to {@link DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS} (5000 ms).
    */
   readonly degradedRouteTimeoutMs?: number;
+  /**
+   * Hop-local federated route authorization callback.
+   *
+   * When configured, the Host asks the application to allow or deny each
+   * normalized `{ previousAdvertisedDomain, nextSelectedDomain }` pair before
+   * forwarding across a federation hop. Allowed decisions are cached
+   * (single-flight) until an explicit revoke, a relevant route/import/link
+   * mutation, or Host shutdown invalidates them; denied decisions are never
+   * cached. When absent, no route authorization is performed and existing
+   * forwarding behavior is unchanged.
+   */
+  readonly routeAuthorizer?: VerserFederatedRouteAuthorizationCallback;
 }
 
 /**
@@ -135,6 +149,14 @@ export interface VerserLocalGuestOptions {
  */
 export interface VerserLocalBrokerOptions {
   readonly brokerId: string;
+  /**
+   * Optional hop-domain persisted with this local Broker's registration,
+   * mirroring the remote Broker `brokerHopDomain` registration field. Local
+   * Broker handles are already Host-owned, so this value is exempt from
+   * client-certificate DNS SAN matching. It is normalized before storage and
+   * omitted when not supplied.
+   */
+  readonly brokerHopDomain?: string;
 }
 
 /**
@@ -368,6 +390,15 @@ export interface VerserHost {
    * @internal Foundation seam used by Host federation route selection tests and later forwarding phases.
    */
   getFederatedRouteCandidates(targetId?: string, domain?: string): FederatedRouteRegistration[];
+  /**
+   * Explicitly revokes the cached allow for one hop-local federated route
+   * pair and abandons any in-flight decision for it.
+   *
+   * Both domains are normalized before matching. Returns `true` when a
+   * cached allow or pending decision was revoked, `false` when nothing was
+   * cached for the pair (including when no `routeAuthorizer` is configured).
+   */
+  revokeRouteAuthorization(pair: VerserFederatedRouteAuthorizationPair): boolean;
   /** Connects this Host outbound to an upstream Verser Host. */
   connectUpstream(options: VerserHostUpstreamOptions): Promise<VerserHostUpstreamHandle>;
   /** Returns currently connected upstream Host links. */

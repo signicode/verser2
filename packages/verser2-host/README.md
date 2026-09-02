@@ -29,6 +29,20 @@ and can connect outbound to upstream Hosts for route-aware federation.
   valid certificate, while gating the Verser protocol after TLS (see
   [Docs: Certificates](../../docs/certificates.md) and
   [Docs: Authorization](../../docs/authorization.md))
+- Host option: `routeAuthorizer` — async hop-local callback deciding
+  `'allow' | 'deny'` for a normalized
+  `{ previousAdvertisedDomain, nextSelectedDomain }` pair. Allowed decisions
+  are cached with single-flight sharing; denials are never cached. Cached
+  allows are invalidated by route/import/link mutations and Host shutdown;
+  pending allows observe a generation token so they cannot undo a later
+  revoke or route loss. When absent, no route authorization is performed.
+- Host method: `host.revokeRouteAuthorization(pair)` — explicitly revoke the
+  cached allow (and any in-flight decision) for one hop-local pair.
+- Broker hop-domain binding: remote Brokers may register an optional
+  `brokerHopDomain`; with Host mTLS its normalized value must exactly match a
+  DNS SAN on the Broker client certificate (no wildcard or CN fallback).
+  `attachLocalBroker({ brokerHopDomain })` persists the same optional value
+  for Host-owned local Brokers, exempt from certificate matching.
 - Re-exported: `VerserPeerRole`
 - Constant: `VERSER2_HOST_PACKAGE_NAME`
 
@@ -188,6 +202,10 @@ Behavior contract:
 - Registration authorization is a registration-time mTLS/client-certificate hook
   only — it is not complete application authentication/authorization, and
   per-request Broker target authorization is not implemented.
+- The `routeAuthorizer` foundation (hop-local cache, revoke, and lifecycle
+  invalidation) is implemented; forwarding-path enforcement across federated
+  HTTP and VWS streams is not yet wired, so the callback is not consulted on
+  live request forwarding.
 - Local peers bypass TLS. Local registration still invokes
   `authorizeRegistration`, but the Host supplies `certificate: undefined` and
   Host-owned metadata `{ local: true, authorized: true }`.

@@ -17,7 +17,8 @@ Implementation modules for the `@signicode/verser2-host` package. Contains the H
 | `federation.ts` | Federation and upstream-link helpers. | `sendUpstreamHandshake()`, `waitForUpstreamHandshakeResponse()`, `openUpstreamRouteStream()`, `openUpstreamRequestStream()`, `handleFederatedRouteFrame()`, `forwardFederatedLifecycleEventsExcluding()`, `handleFederatedIncomingRequestStream()`, `writeFederatedRoutes()`, `FederationRequestStream`, `AcquiredFederatedRequestStream`. Handles upstream link handshake/timeout, federated route/request streams, lifecycle forwarding, and incoming federated request dispatch. |
 | `local-peers.ts` | Local Host-side Guest/Broker helpers. | `createLocalBrokerState()`, `updateLocalBrokerRoutes()`, `waitForLocalBrokerRoute()`, `closeLocalBrokerState()`, `extractLocalGuestListener()`, `dispatchLocalGuestRequest()`, `toReadableBody()`. Provides minimal Node HTTP request/response shims, local route waiters, local response validation, and close/error propagation helpers. |
 | `http2-io.ts` | HTTP/2 stream write helpers. | `writeJsonLine()` — writes NDJSON to stream (responds 200 + `application/json` if headers not yet sent). `sendError()` — writes 502 + JSON error body. |
-| `types.ts` | Host-specific type definitions. | `VerserHostOptions` (port, host, tls), `VerserHostRegistrationRequest` (re-export alias), `VerserHostLifecycleEvent` (name, peerId, role, reason, error), local peer option/request/response/handle types, `VerserHost` interface (running, address, start, close, reloadTlsCertificate, getRoutedDomains, attachLocalGuest, attachLocalBroker, onLifecycle). |
+| `types.ts` | Host-specific type definitions. | `VerserHostOptions` (port, host, tls, routeAuthorizer), `VerserHostRegistrationRequest` (re-export alias), `VerserHostLifecycleEvent` (name, peerId, role, reason, error), local peer option/request/response/handle types (`VerserLocalBrokerOptions.brokerHopDomain`), `VerserHost` interface (running, address, start, close, reloadTlsCertificate, getRoutedDomains, revokeRouteAuthorization, attachLocalGuest, attachLocalBroker, onLifecycle). |
+| `route-authorizer.ts` | Host-private hop-local federated route authorizer. | `FederatedRouteAuthorizer` class, `federatedRouteAuthorizationPairKey()`. Normalized `{ previousAdvertisedDomain, nextSelectedDomain }` pair keys; allow-only single-flight cache with pending-decision sharing; explicit pair revoke; generation-safe `invalidate()` so pending allows cannot undo a revoke or route loss. Created only when `routeAuthorizer` is configured. |
 | `utils.ts` | Host error wrapping. | `toVerserError()` — wraps unknown errors into `VerserError` (preserves already-VerserError instances by duck-typing on `code` + `name`). |
 | `constants.ts` | Packaging constant. | `VERSER2_HOST_PACKAGE_NAME` (`'@signicode/verser2-host'`). |
 
@@ -38,10 +39,16 @@ Implementation modules for the `@signicode/verser2-host` package. Contains the H
 ## Data & Control Flow
 
 ### Peer registration
-1. Incoming stream on `/verser/register` → `handleStream()` reads full body via `readStreamText()` → `parseRegistrationRequest()` validates → `authorizeRegistration()` calls optional mTLS callback.
-2. If allowed: peer stored in `peers` map. Guest routes stored in `guestRegistrations`. Broker control stream stored as `peer.controlStream`.
+1. Incoming stream on `/verser/register` → `handleStream()` reads full body via `readStreamText()` → `parseRegistrationRequest()` validates (role; broker-only normalized `brokerHopDomain`) → `authorizeRegistration()` calls optional mTLS callback.
+2. If allowed: peer stored in `peers` map with its normalized `brokerHopDomain` when supplied; with Host mTLS (`clientAuth.ca`/`caFile`) a Broker hop-domain must exactly match a normalized DNS SAN on the peer certificate (`assertBrokerHopDomainCertificate()`, no wildcard/CN fallback). Guest routes stored in `guestRegistrations`. Broker control stream stored as `peer.controlStream`.
 3. Registration response sent: Brokers get NDJSON with full route table; Guests get JSON `{ status: 'registered' }`.
-4. `advertiseRoutes()` called for Guest registration → all Brokers receive updated route control frame.
+4. `advertiseRoutes()` called for Guest registration → all Brokers receive updated route control frame. Guest (re-)registration also calls `invalidateRouteAuthorizations()`.
+
+### Hop-local federation route authorization (foundation)
+1. When `routeAuthorizer` is configured, the Host creates a private `FederatedRouteAuthorizer` (`route-authorizer.ts`). Phase 3 forwarding paths call `authorizeFederatedHopPair(previousAdvertisedDomain, nextSelectedDomain)` after candidate resolution and before body/frame forwarding; without the option it resolves `true` (existing behavior preserved).
+2. Allowed decisions are cached per normalized pair with single-flight sharing; denials and callback rejections are never cached. `authorizeHop` only caches/forwards an allow whose generation token is still current when the callback returns.
+3. `invalidateRouteAuthorizations()` (generation bump + full allow-cache clear) is wired to: Guest (re-)registration, local/remote route degradation, revoked routes (remote and local handles), expired-degraded removal, imported snapshot replacement/removal, direct imported-route lifecycle removal, federation-link removal, and Host `close()`.
+4. `revokeRouteAuthorization(pair)` (public) removes one cached allow and abandons its pending decision. `getRegisteredBrokerHopDomain(peerId)` exposes the persisted normalized hop-domain for the Phase 3 first-leg baton rule.
 
 ### Broker request forwarding (delegated to `broker-routing.ts`)
 1. Incoming stream on `/verser/request` → `NodeHttp2VerserHost.routeBrokerRequest()` delegates to `routeBrokerRequest()` in `broker-routing.ts` which extracts targetId, requestId, lease timeout from headers.

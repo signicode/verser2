@@ -58,6 +58,10 @@ export type {
   VerserHostFederationAuthorizationCallback,
   VerserHostFederationAuthorizationContext,
   VerserHostFederationHandshake,
+  VerserFederatedRouteAuthorizationCallback,
+  VerserFederatedRouteAuthorizationContext,
+  VerserFederatedRouteAuthorizationDecision,
+  VerserFederatedRouteAuthorizationPair,
   VerserRegistrationRequest,
   VerserRegistrationAuthorizationAction,
   VerserRegistrationAuthorizationCallback,
@@ -144,6 +148,7 @@ export {
   createRoutedDomainRegistration,
   createRoutedRequestEnvelope,
   createRoutedResponseEnvelope,
+  normalizeVerserRouteDomain,
   resolveRouteForHostname,
   resolveRouteForUrl,
 } from './lib/routing';

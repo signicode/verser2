@@ -10,6 +10,7 @@ import {
   flattenVerserHeaderPairs,
   flattenVerserHeaders,
   normalizeClientTlsOptions,
+  normalizeVerserRouteDomain,
   readNdjsonLines,
   resolveRouteForUrl,
   stripHttp2PseudoHeaders,
@@ -623,7 +624,26 @@ export class Http2VerserBroker implements VerserBroker {
     readNdjsonLines<BrokerControlFrame>(stream, (frame: BrokerControlFrame) =>
       this.handleControlFrame(frame),
     );
-    stream.end(JSON.stringify({ peerId: this.options.brokerId, role: 'broker' }));
+    const brokerHopDomain =
+      this.options.brokerHopDomain === undefined
+        ? undefined
+        : normalizeVerserRouteDomain(this.options.brokerHopDomain);
+    if (this.options.brokerHopDomain !== undefined && (brokerHopDomain ?? '').length === 0) {
+      throw createVerserError(
+        'invalid-registration',
+        'brokerHopDomain must be a non-empty domain',
+        {
+          brokerId: this.options.brokerId,
+        },
+      );
+    }
+    stream.end(
+      JSON.stringify({
+        peerId: this.options.brokerId,
+        role: 'broker',
+        ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
+      }),
+    );
     await this.waitForRegistration(session, stream);
   }
 

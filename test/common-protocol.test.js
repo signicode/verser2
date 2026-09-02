@@ -223,6 +223,78 @@ test('shared registration protocol helpers parse registration requests and respo
   );
 });
 
+test('registration brokerHopDomain is broker-only, normalized, and omitted when absent', () => {
+  assert.deepEqual(
+    common.parseRegistrationRequest(
+      JSON.stringify({
+        peerId: 'broker-alpha',
+        role: 'broker',
+        brokerHopDomain: '  Broker.Hop.Example.  ',
+      }),
+    ),
+    {
+      peerId: 'broker-alpha',
+      role: 'broker',
+      routedDomains: [],
+      brokerHopDomain: 'broker.hop.example',
+    },
+  );
+  assert.deepEqual(
+    common.parseRegistrationRequest(
+      JSON.stringify({
+        peerId: 'broker-beta',
+        role: 'broker',
+        brokerHopDomain: 'beta.verser.test',
+      }),
+    ),
+    {
+      peerId: 'broker-beta',
+      role: 'broker',
+      routedDomains: [],
+      brokerHopDomain: 'beta.verser.test',
+    },
+  );
+  assert.equal(
+    'brokerHopDomain' in
+      common.parseRegistrationRequest(JSON.stringify({ peerId: 'broker-gamma', role: 'broker' })),
+    false,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({
+          peerId: 'guest-alpha',
+          role: 'guest',
+          routedDomains: ['alpha.verser.test'],
+          brokerHopDomain: 'hop.verser.test',
+        }),
+      ),
+    /brokerHopDomain is only valid for broker registrations/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({ peerId: 'broker-alpha', role: 'broker', brokerHopDomain: '   ' }),
+      ),
+    /brokerHopDomain must be a non-empty domain/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({ peerId: 'broker-alpha', role: 'broker', brokerHopDomain: 42 }),
+      ),
+    /brokerHopDomain must be a string/,
+  );
+});
+
+test('shared route domain normalizer produces the canonical exact-match form', () => {
+  assert.equal(common.normalizeVerserRouteDomain('  API.Example.COM. '), 'api.example.com');
+  assert.equal(common.normalizeVerserRouteDomain('api.example.com'), 'api.example.com');
+  assert.equal(common.normalizeVerserRouteDomain('[2001:db8::1]'), '2001:db8::1');
+  assert.equal(common.normalizeVerserRouteDomain('not a domain'), 'not a domain');
+  assert.equal(common.normalizeVerserRouteDomain(''), '');
+});
+
 test('shared broker control frames preserve route advertisements', () => {
   const frame = common.createBrokerRoutesControlFrame([
     { targetId: 'guest-alpha', domain: 'alpha.verser.test' },

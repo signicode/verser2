@@ -85,6 +85,12 @@ export type {
 } from './lib/types';
 
 export type { VerserPeerRole } from '@signicode/verser-common';
+export type {
+  VerserFederatedRouteAuthorizationCallback,
+  VerserFederatedRouteAuthorizationContext,
+  VerserFederatedRouteAuthorizationDecision,
+  VerserFederatedRouteAuthorizationPair,
+} from '@signicode/verser-common';
 
 export { HostRouteRegistry, createHostRouteRegistry } from './lib/route-registry';
 

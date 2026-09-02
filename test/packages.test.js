@@ -144,6 +144,7 @@ test('@signicode/verser-common package exposes common foundations', () => {
     'normalizeHostClientAuthTlsOptions',
     'normalizeRequestHeaders',
     'normalizeServerTlsOptions',
+    'normalizeVerserRouteDomain',
     'parseLeaseAcquireTimeoutMs',
     'parseRegistrationRequest',
     'parseRegistrationResponse',

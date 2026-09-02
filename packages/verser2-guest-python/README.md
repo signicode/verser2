@@ -181,6 +181,14 @@ broker = create_verser_broker(
 )
 ```
 
+Brokers may advertise an optional `broker_hop_domain` (keyword argument). The
+value is normalized (trimmed, lowercased, trailing dot removed) before it is
+sent in the registration payload; an empty or whitespace-only value raises
+`ValueError` at construction. When the Host enables remote mTLS, the Host
+requires the normalized value to exactly match a DNS Subject Alternative Name
+on the Broker's client certificate and rejects the registration otherwise.
+When omitted, no hop-domain is sent and behavior is unchanged.
+
 Python Guests support the same `tls_ca_file`, PEM client identity, and
 PFX/PKCS12 client identity options. PFX/PKCS12 support uses the package's
 `cryptography` dependency.
