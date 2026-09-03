@@ -51,6 +51,19 @@ space than they actively use.
 The 10-second test timeout is fixed by the canonical runner and cannot be
 disabled or overridden through compatibility options.
 
+`npm run test:bounded:staged` runs the same partitioned suite with
+`--skip-build-stage --live-timestamps`: it skips the build and staging steps
+only after a preflight confirms the complete staged publish set already exists
+— per staged workspace package `package.json`, `dist/index.js`,
+`dist/index.d.ts`, `LICENSE`, and `README.md`, plus real Python wheel and
+source-distribution files — failing with the missing paths otherwise, and it streams each test child
+process's stdout/stderr line-by-line prefixed with a monotonic relative
+timestamp and a `p<partition>:<stream>` label instead of inheriting raw TAP.
+Partial lines are buffered and any final newline-less remainder is flushed;
+child exit/signal semantics are unchanged. The canonical runner also accepts
+`--test-concurrency <n>` (validated positive integer, default `1`). Without
+`--live-timestamps` the default inherited raw TAP output is preserved.
+
 Default repository tests must remain compatible with the bounded runner. New or
 changed tests should pass with the default bounded heap and the guarded per-test
 growth threshold. If a test needs a larger per-test growth allowance, document

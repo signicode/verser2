@@ -17,6 +17,16 @@ const packageDirectories = [
 const forbiddenPublishFields = ['private', 'scripts', 'devDependencies', 'workspaces'];
 const runPackDryRunTests = process.env.VERSER_RUN_PACK_DRY_RUN_TESTS === '1';
 const requiredKeywords = ['verser2', 'reverse-http', 'http2', 'guest', 'broker'];
+// Shared, non-drifting publish artifact requirements with scripts/stage-packages.js
+// and the bounded runner's --skip-build-stage preflight.
+const {
+  STAGED_PACKAGE_REQUIRED_FILES,
+  PYTHON_DISTRIBUTION_DIRECTORY,
+  PYTHON_DISTRIBUTION_PATTERNS,
+  safePackageName,
+  readStagedArtifactIssue,
+  findValidDistributionFile,
+} = require('../scripts/staged-artifacts.js');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -27,7 +37,7 @@ function getPackageName(packageDirectory) {
 }
 
 function getSafePackageDirectoryName(packageName) {
-  return packageName.replace(/^@/, '').replaceAll('/', '-');
+  return safePackageName(packageName);
 }
 
 function getStagedPackageDirectory(packageName) {
@@ -44,22 +54,14 @@ function assertStagedPackageArtifacts(packageName) {
     fs.existsSync(packageDirectory),
     `Expected staged package directory for ${packageName} at ${packageDirectory}`,
   );
-  assert.ok(
-    fs.existsSync(path.join(packageDirectory, 'dist/index.js')),
-    `Expected staged JavaScript entrypoint for ${packageName}`,
-  );
-  assert.ok(
-    fs.existsSync(path.join(packageDirectory, 'dist/index.d.ts')),
-    `Expected staged declaration entrypoint for ${packageName}`,
-  );
-  assert.ok(
-    fs.existsSync(path.join(packageDirectory, 'LICENSE')),
-    `Expected staged license for ${packageName}`,
-  );
-  assert.ok(
-    fs.existsSync(path.join(packageDirectory, 'README.md')),
-    `Expected staged README for ${packageName}`,
-  );
+  for (const requiredFile of STAGED_PACKAGE_REQUIRED_FILES) {
+    const issue = readStagedArtifactIssue(path.join(packageDirectory, requiredFile));
+    assert.equal(
+      issue,
+      undefined,
+      `Expected staged ${requiredFile} for ${packageName} to be a regular non-empty file (${issue})`,
+    );
+  }
 }
 
 test('central staging tree contains publish-ready packages', () => {
@@ -179,23 +181,21 @@ test(
 );
 
 test('Python Guest build emits native Python distribution artifacts', () => {
-  const pythonDistDirectory = path.join(
-    rootDirectory,
-    'packages',
-    'verser2-guest-python',
-    'dist',
-    'python',
-  );
+  const pythonDistDirectory = path.join(rootDirectory, ...PYTHON_DISTRIBUTION_DIRECTORY.split('/'));
 
   assert.ok(fs.existsSync(pythonDistDirectory), 'Expected Python dist directory to exist');
 
-  const artifacts = fs.readdirSync(pythonDistDirectory).sort();
-  assert.ok(
-    artifacts.some((artifact) => /^verser2_guest_python-.*\.tar\.gz$/.test(artifact)),
-    'Expected Python source distribution artifact',
-  );
-  assert.ok(
-    artifacts.some((artifact) => /^verser2_guest_python-.*-py3-none-any\.whl$/.test(artifact)),
-    'Expected Python wheel artifact',
-  );
+  for (const [kind, pattern] of Object.entries(PYTHON_DISTRIBUTION_PATTERNS)) {
+    const artifact = findValidDistributionFile(pythonDistDirectory, pattern);
+    assert.notEqual(
+      artifact,
+      undefined,
+      `Expected Python ${kind} artifact matching ${pattern} as a regular non-empty file`,
+    );
+    assert.equal(
+      readStagedArtifactIssue(path.join(pythonDistDirectory, artifact)),
+      undefined,
+      `Expected Python ${kind} ${artifact} to be a regular non-empty file`,
+    );
+  }
 });
