@@ -149,7 +149,7 @@ test('remote Broker HTTP egress authorizes the hop pair once, caches the allow, 
     broker = createVerserBroker({
       hostUrl: hostUrl(manager),
       brokerId: 'authz-fwd-broker',
-      brokerHopDomain: 'Broker.Fwd.Hop.',
+      brokerDomain: 'Broker.Fwd.Hop.',
       tls: clientTls(),
     });
     await broker.connect();
@@ -189,11 +189,12 @@ test('remote Broker HTTP egress authorizes the hop pair once, caches the allow, 
   }
 });
 
-test('denied local Broker egress fails with authorization-denied without consuming the body, and denials are not cached', async () => {
+test('denied local Broker egress fails with authorization-denied without consuming the body, and zero-TTL denials are not cached', async () => {
   let calls = 0;
   const manager = createVerserHost({
     hostId: 'authz-deny-manager',
     tls: tlsOptions(),
+    routeAuthorizationNegativeCacheTtlMs: 0,
     routeAuthorizer: () => {
       calls += 1;
       return 'deny';
@@ -224,7 +225,7 @@ test('denied local Broker egress fails with authorization-denied without consumi
     );
     const broker = await manager.attachLocalBroker({
       brokerId: 'authz-deny-local-broker',
-      brokerHopDomain: 'deny-hop.verser.test',
+      brokerDomain: 'deny-hop.verser.test',
     });
 
     await assert.rejects(
@@ -266,7 +267,7 @@ test('denied local Broker egress fails with authorization-denied without consumi
   }
 });
 
-test('configured authorizer denies Broker-selected federation requests lacking a hop domain and spoofed sessions', async () => {
+test('configured authorizer denies Broker-selected federation requests lacking a domain and spoofed sessions', async () => {
   let calls = 0;
   const manager = createVerserHost({
     hostId: 'authz-spoof-manager',
@@ -318,7 +319,7 @@ test('configured authorizer denies Broker-selected federation requests lacking a
         }),
       (error) => {
         assert.equal(error.code, 'authorization-denied');
-        assert.match(error.message, /no registered hop domain/i);
+        assert.match(error.message, /no registered domain/i);
         return true;
       },
     );
@@ -327,13 +328,13 @@ test('configured authorizer denies Broker-selected federation requests lacking a
     boundBroker = createVerserBroker({
       hostUrl: hostUrl(manager),
       brokerId: 'authz-spoof-bound',
-      brokerHopDomain: 'bound-hop.verser.test',
+      brokerDomain: 'bound-hop.verser.test',
       tls: clientTls(),
     });
     await boundBroker.connect();
 
     // A different HTTP/2 session claiming the registered Broker's ID must be
-    // denied before the stored hop-domain is read or any stream is acquired.
+    // denied before the stored domain is read or any stream is acquired.
     rawSession = await connectRawClient(manager.address.port);
     const spoofed = await rawBrokerRequest(rawSession, {
       'x-verser-request-id': 'authz-spoof-attempt',
@@ -408,7 +409,7 @@ test('Host-to-Host HTTP egress replaces sourceId with the local Host identity an
     ]);
     broker = await manager.attachLocalBroker({
       brokerId: 'authz-raw-broker',
-      brokerHopDomain: 'raw-hop.verser.test',
+      brokerDomain: 'raw-hop.verser.test',
     });
 
     const requestStream = raw.request({
@@ -497,7 +498,7 @@ test('incoming federation HTTP dispatch is authorized hop-locally on the receivi
     broker = createVerserBroker({
       hostUrl: hostUrl(manager),
       brokerId: 'authz-inbound-broker',
-      brokerHopDomain: 'inbound-hop.verser.test',
+      brokerDomain: 'inbound-hop.verser.test',
       tls: clientTls(),
     });
     await broker.connect();
@@ -554,7 +555,7 @@ test('direct Broker VWS authorizes the hop pair before open forwarding; denial r
     broker = createVerserBroker({
       hostUrl: hostUrl(manager),
       brokerId: 'authz-vws-broker',
-      brokerHopDomain: 'vws-hop.verser.test',
+      brokerDomain: 'vws-hop.verser.test',
       tls: clientTls(),
     });
     guest = createVerserNodeGuest({
@@ -648,7 +649,7 @@ test('incoming federation VWS dispatch is authorized hop-locally on the receivin
     broker = createVerserBroker({
       hostUrl: hostUrl(manager),
       brokerId: 'authz-vwsin-broker',
-      brokerHopDomain: 'vwsin-hop.verser.test',
+      brokerDomain: 'vwsin-hop.verser.test',
       tls: clientTls(),
     });
     guest = createVerserNodeGuest({
@@ -738,7 +739,7 @@ test('explicit revoke forces a fresh decision between forwarded requests', async
     broker = createVerserBroker({
       hostUrl: hostUrl(manager),
       brokerId: 'authz-revoke-broker',
-      brokerHopDomain: 'revoke-hop.verser.test',
+      brokerDomain: 'revoke-hop.verser.test',
       tls: clientTls(),
     });
     await broker.connect();
@@ -832,7 +833,7 @@ test('multi-hop HTTP replaces the baton at each egress: middle Host authorizes {
     broker = createVerserBroker({
       hostUrl: hostUrl(root),
       brokerId: 'authz-multi-broker',
-      brokerHopDomain: 'multi-hop.verser.test',
+      brokerDomain: 'multi-hop.verser.test',
       tls: clientTls(),
     });
     await broker.connect();
@@ -866,5 +867,261 @@ test('multi-hop HTTP replaces the baton at each egress: middle Host authorizes {
     await root.close('test-complete');
     await middle.close('test-complete');
     await leaf.close('test-complete');
+  }
+});
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+test('route-bound federation HTTP stream keeps its authorization through TTL expiry and revoke mid-flight', async () => {
+  let calls = 0;
+  const manager = createVerserHost({
+    hostId: 'authz-bind-manager',
+    tls: tlsOptions(),
+    routeAuthorizationCacheTtlMs: 40,
+    routeAuthorizationNegativeCacheTtlMs: 40,
+    routeAuthorizer: () => {
+      calls += 1;
+      return 'allow';
+    },
+  });
+  const runner = createVerserHost({ hostId: 'authz-bind-runner', tls: tlsOptions() });
+  let broker;
+
+  try {
+    await manager.start();
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: clientTls(),
+    });
+    // The Guest holds the request open well past the 40 ms allow TTL.
+    await runner.attachLocalGuest({
+      guestId: 'authz-bind-guest',
+      routedDomains: ['authz-bind.verser.test'],
+      listener: async (request, response) => {
+        await text(request);
+        await sleep(150);
+        response.writeHead(200, { 'content-type': 'text/plain' });
+        response.end('slow-ok');
+      },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('authz-bind-guest', 'authz-bind.verser.test').length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'authz-bind-broker',
+      brokerDomain: 'bind-hop.verser.test',
+      tls: clientTls(),
+    });
+    await broker.connect();
+
+    const inflight = broker.request({
+      targetId: 'authz-bind-guest',
+      routeDomain: 'authz-bind.verser.test',
+      method: 'GET',
+      path: '/slow',
+    });
+    // Revoke while the authorized stream is still open: the in-flight
+    // request must not be interrupted, migrated, or reauthorized.
+    await sleep(10);
+    assert.equal(
+      manager.revokeRouteAuthorization({
+        previousAdvertisedDomain: 'bind-hop.verser.test',
+        nextSelectedDomain: 'authz-bind.verser.test',
+      }),
+      true,
+    );
+    const response = await inflight;
+    assert.equal(response.statusCode, 200);
+    assert.equal(await text(response.body), 'slow-ok');
+    assert.equal(calls, 1);
+
+    // A new forwarding decision after expiry and revoke reauthorizes.
+    const next = await broker.request({
+      targetId: 'authz-bind-guest',
+      routeDomain: 'authz-bind.verser.test',
+      method: 'GET',
+      path: '/next',
+    });
+    assert.equal(next.statusCode, 200);
+    await text(next.body);
+    assert.equal(calls, 2);
+  } finally {
+    await broker?.close('test-complete');
+    await manager.close('test-complete');
+    await runner.close('test-complete');
+  }
+});
+
+test('accepted federated VWS connection keeps its authorization through expiry and revoke; new opens reauthorize', async () => {
+  let calls = 0;
+  const manager = createVerserHost({
+    hostId: 'authz-vwsbind-manager',
+    tls: tlsOptions(),
+    routeAuthorizationCacheTtlMs: 60,
+    routeAuthorizer: () => {
+      calls += 1;
+      return 'allow';
+    },
+  });
+  const runner = createVerserHost({ hostId: 'authz-vwsbind-runner', tls: tlsOptions() });
+  let broker;
+  let guest;
+
+  try {
+    await manager.start();
+    await runner.start();
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'authz-vwsbind-broker',
+      brokerDomain: 'vwsbind-hop.verser.test',
+      tls: clientTls(),
+    });
+    guest = createVerserNodeGuest({
+      hostUrl: hostUrl(runner),
+      guestId: 'authz-vwsbind-guest',
+      tls: clientTls(),
+    });
+    guest.attachWebSocket((_open, ws) => {
+      ws.on('message', (data, options) => void ws.send(data, options));
+    }, 'authz-vwsbind.verser.test');
+    await broker.connect();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: clientTls(),
+    });
+    await guest.connect();
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('authz-vwsbind-guest', 'authz-vwsbind.verser.test')
+          .length,
+        1,
+      ),
+    );
+
+    const ws = await broker.webSocket({
+      targetId: 'authz-vwsbind-guest',
+      domain: 'authz-vwsbind.verser.test',
+    });
+    assert.equal(calls, 1);
+
+    // Let the allow TTL expire, then revoke: the accepted connection keeps
+    // bridging without any reauthorization.
+    await sleep(120);
+    assert.equal(
+      manager.revokeRouteAuthorization({
+        previousAdvertisedDomain: 'vwsbind-hop.verser.test',
+        nextSelectedDomain: 'authz-vwsbind.verser.test',
+      }),
+      true,
+    );
+    const echo = new Promise((resolve) => ws.once('message', resolve));
+    await ws.send('still-bound', { type: 'text' });
+    assert.equal(await echo, 'still-bound');
+    assert.equal(calls, 1);
+    ws.close();
+
+    // A new open decision reauthorizes.
+    const second = await broker.webSocket({
+      targetId: 'authz-vwsbind-guest',
+      domain: 'authz-vwsbind.verser.test',
+    });
+    assert.equal(calls, 2);
+    second.close();
+  } finally {
+    await broker?.close('test-complete');
+    await guest?.close('test-complete');
+    await manager.close('test-complete');
+    await runner.close('test-complete');
+  }
+});
+
+test('physical HTTP/2 sessions stay multiplexed: a denied decision does not poison later decisions on the same session', async () => {
+  let mode = 'deny';
+  let calls = 0;
+  const manager = createVerserHost({
+    hostId: 'authz-session-manager',
+    tls: tlsOptions(),
+    routeAuthorizer: () => {
+      calls += 1;
+      return mode;
+    },
+  });
+  const runner = createVerserHost({ hostId: 'authz-session-runner', tls: tlsOptions() });
+  const guest = guestListenerFactory(async (request) => (await text(request)).length);
+  let broker;
+
+  try {
+    await manager.start();
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: clientTls(),
+    });
+    await runner.attachLocalGuest({
+      guestId: 'authz-session-guest',
+      routedDomains: ['authz-session.verser.test'],
+      listener: guest.listener,
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('authz-session-guest', 'authz-session.verser.test')
+          .length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'authz-session-broker',
+      brokerDomain: 'session-hop.verser.test',
+      tls: clientTls(),
+    });
+    await broker.connect();
+
+    await assert.rejects(
+      () =>
+        broker.request({
+          targetId: 'authz-session-guest',
+          routeDomain: 'authz-session.verser.test',
+          method: 'GET',
+          path: '/denied',
+        }),
+      (error) => error.code === 'authorization-denied',
+    );
+    assert.equal(calls, 1);
+
+    // Same physical session, later allowed decision: the cached denial must
+    // gate only its own pair/decision, and the session stays usable.
+    assert.equal(
+      manager.revokeRouteAuthorization({
+        previousAdvertisedDomain: 'session-hop.verser.test',
+        nextSelectedDomain: 'authz-session.verser.test',
+      }),
+      true,
+    );
+    mode = 'allow';
+    const ok = await broker.request({
+      targetId: 'authz-session-guest',
+      routeDomain: 'authz-session.verser.test',
+      method: 'GET',
+      path: '/allowed',
+    });
+    assert.equal(ok.statusCode, 200);
+    await text(ok.body);
+    assert.equal(calls, 2);
+    assert.equal(broker.sessionCount, 1);
+  } finally {
+    await broker?.close('test-complete');
+    await manager.close('test-complete');
+    await runner.close('test-complete');
   }
 });

@@ -68,13 +68,32 @@ export interface VerserHostOptions {
    *
    * When configured, the Host asks the application to allow or deny each
    * normalized `{ previousAdvertisedDomain, nextSelectedDomain }` pair before
-   * forwarding across a federation hop. Allowed decisions are cached
-   * (single-flight) until an explicit revoke, a relevant route/import/link
-   * mutation, or Host shutdown invalidates them; denied decisions are never
-   * cached. When absent, no route authorization is performed and existing
-   * forwarding behavior is unchanged.
+   * forwarding across a federation hop. Explicit allow and deny results are
+   * cached (single-flight) under the separately configured TTLs below until
+   * an explicit revoke, a relevant route/import/link mutation, or Host
+   * shutdown invalidates them; callback errors are never cached. Once a
+   * logical federation request stream or accepted federated VWS connection
+   * has been authorized, it keeps that decision for its lifetime — cache
+   * changes apply only to new forwarding/open decisions. When absent, no
+   * route authorization is performed and existing forwarding behavior is
+   * unchanged.
    */
   readonly routeAuthorizer?: VerserFederatedRouteAuthorizationCallback;
+  /**
+   * Positive (allow) authorization-cache TTL in milliseconds. Must be a
+   * finite non-negative integer. Defaults to `60000` (60 seconds). `0`
+   * disables the allow cache: every new hop decision invokes the callback.
+   * Entries expire lazily; no timers are created.
+   */
+  readonly routeAuthorizationCacheTtlMs?: number;
+  /**
+   * Negative (deny) authorization-cache TTL in milliseconds. Must be a
+   * finite non-negative integer. Defaults to
+   * `Math.floor(routeAuthorizationCacheTtlMs / 10)` (`6000` by default).
+   * `0` disables the deny cache. Callback errors are never cached regardless
+   * of this value.
+   */
+  readonly routeAuthorizationNegativeCacheTtlMs?: number;
 }
 
 /**
@@ -150,13 +169,14 @@ export interface VerserLocalGuestOptions {
 export interface VerserLocalBrokerOptions {
   readonly brokerId: string;
   /**
-   * Optional hop-domain persisted with this local Broker's registration,
-   * mirroring the remote Broker `brokerHopDomain` registration field. Local
+   * Optional domain persisted with this local Broker's registration,
+   * mirroring the remote Broker `brokerDomain` registration field. Local
    * Broker handles are already Host-owned, so this value is exempt from
    * client-certificate DNS SAN matching. It is normalized before storage and
-   * omitted when not supplied.
+   * omitted when not supplied. The legacy `brokerHopDomain` field is rejected
+   * at attachment time, not aliased.
    */
-  readonly brokerHopDomain?: string;
+  readonly brokerDomain?: string;
 }
 
 /**

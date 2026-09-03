@@ -25,12 +25,36 @@
 - Deepwork skill is unavailable in this environment; these requested deepwork
   controls are being followed manually.
 
-## Reviewed plan
+## Follow-up: cache TTL and route/session binding
 
-1. Add a Host-level, async hop-local callback and a cached-allow revocation
+- Current phase: delivery. Add separately configurable positive and negative
+  authorization-cache TTLs with defaults of `60_000` ms and one tenth of the
+  configured positive TTL, respectively.
+- Rename the public Broker option from `brokerHopDomain` to `brokerDomain`.
+  The rename covers registration payload/context, Node/Bun/Python and local
+  Broker options, docs, and tests. It is a clean replacement: the legacy field
+  is rejected rather than accepted as an alias.
+- The positive cache TTL defaults to `60_000` ms. The separately configurable
+  negative cache TTL defaults to `Math.floor(positiveTtlMs / 10)` (`6_000` ms
+  by default). TTL values are finite non-negative integers; `0` disables that
+  cache class. Entries expire lazily, without timers; callback errors are not
+  cached.
+- “Session” is the logical route-bearing unit: an authorized federation HTTP
+  request stream or an accepted federated VWS connection. It retains its
+  resolved route/authorization for its lifetime; TTL expiry, explicit revoke,
+  and route lifecycle changes apply only to new forwarding/open decisions.
+  Physical HTTP/2 sessions remain multiplexed and are never route-bound.
+- Revoke clears an allow or deny result and invalidates an in-flight decision
+  for the pair. Route/import/link/close invalidation clears both result classes
+  and prevents stale pending outcomes from authorizing or repopulating either.
+
+## Original reviewed plan (superseded cache terminology)
+
+1. Add a Host-level, async hop-local callback and a cached-pair revocation
    API. Its context and cache key are exactly normalized
-   `{ previousAdvertisedDomain, nextSelectedDomain }`; denied results are not
-   cached.
+   `{ previousAdvertisedDomain, nextSelectedDomain }`. The original
+   allow-only cache is superseded by the separately configured negative cache
+   described above.
 2. Invalidate allowed pairs on relevant route mutations and Host shutdown.
    After awaiting an initial decision, revalidate affected routes before
    forwarding.
@@ -51,7 +75,7 @@ previous-hop identity and never carries origin or hop history for authorization.
 
 The current protocol can use the incoming selected domain as a hop-local baton:
 each forwarding Host replaces it with its newly selected candidate domain. For
-a Broker-originated first leg, add an optional configurable Broker hop-domain.
+a Broker-originated first leg, add an optional configurable Broker domain.
 When absent, it remains undefined. When remote mTLS is used, registration must
 bind the supplied Broker ID/domain to an exact DNS SAN on that Broker
 certificate (no wildcard or CN fallback). This is the only first-leg identity
@@ -59,7 +83,7 @@ source; no origin or route history is introduced.
 
 ## Final plan amendments pending approval
 
-- Registration accepts `brokerHopDomain` only for Brokers and stores it only
+- Registration accepts `brokerDomain` only for Brokers and stores it only
   after validation. With Host mTLS enabled, its normalized value must exactly
   match a DNS SAN on the peer certificate.
 - Remote HTTP requests must bind `x-verser-source-id` to a Broker registered
@@ -67,17 +91,31 @@ source; no origin or route history is introduced.
   Broker handles are already Host-owned; VWS retains its existing session
   binding.
 - One Host-private authorization helper owns cache lookup, pending-decision
-  sharing, successful-allow insertion, pair revocation, invalidation, and
+  sharing, allow-or-deny insertion, pair revocation, invalidation, and
   post-await route revalidation. It is invoked after candidate resolution and
   before federation stream/open-frame/body forwarding.
 - If the route authorizer is configured, a Broker-selected federation request
-  requires a defined `brokerHopDomain`; otherwise it fails with
+  requires a defined `brokerDomain`; otherwise it fails with
   `authorization-denied` before forwarding. The rule applies to both remote
   and local Brokers. Local Broker options persist the same optional value but
   are exempt from certificate matching.
 - Invalidation covers local and imported route changes, imported snapshot
   replacement, direct lifecycle removal, federation-link removal, explicit
   pair revoke, and Host shutdown.
-- Invalidation advances a generation token. A pending allow may cache and
-  forward only if its token is still current after the callback returns, so an
-  explicit revoke or route loss cannot be undone by an earlier decision.
+- Invalidation advances a generation token. A current pending allow may cache
+  and authorize forwarding; a current pending deny may cache and deny. A stale
+  pending outcome may do neither, so an explicit revoke or route loss cannot
+  be undone by an earlier decision.
+
+## Follow-up acceptance criteria
+
+- Test default/derived TTLs, invalid and zero values, lazy allow/deny expiry,
+  callback-error non-caching, and single-flight after expiry.
+- Test revoke and all lifecycle invalidations for cached and pending allow/deny
+  results, plus reauthorization of new work after revocation.
+- Test that a route-bound federation HTTP stream and accepted federated VWS
+  connection continue without reauthorization through expiry/revocation, while
+  new forwarding/open decisions reauthorize.
+- Test the `brokerDomain` replacement across normalized remote/local
+  registration, mTLS DNS-SAN binding, every supported Broker runtime, and
+  legacy-field rejection.

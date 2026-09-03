@@ -541,14 +541,15 @@ export interface VerserRegistrationRequest {
    */
   readonly routedDomains?: readonly string[];
   /**
-   * Optional hop-domain a Broker advertises as the identity of its first
+   * Optional domain a Broker advertises as the identity of its first
    * federation hop. Only valid for `role: 'broker'` registrations; the Host
    * rejects it for Guests. When the Host enables remote mTLS, the normalized
    * value must exactly match a DNS Subject Alternative Name on the Broker's
    * client certificate (no wildcard or CN fallback). When absent, the Broker
-   * has no advertised hop-domain and remains `undefined`.
+   * has no advertised hop-domain and remains `undefined`. The legacy
+   * `brokerHopDomain` field is rejected, not aliased.
    */
-  readonly brokerHopDomain?: string;
+  readonly brokerDomain?: string;
 }
 
 /**
@@ -614,10 +615,10 @@ export interface VerserRegistrationAuthorizationContext {
   /** Hostnames this Peer intends to handle (Guests only). */
   readonly routedDomains: readonly string[];
   /**
-   * Normalized optional Broker hop-domain supplied at registration.
+   * Normalized optional Broker domain supplied at registration.
    * Present only for Broker registrations that advertised one.
    */
-  readonly brokerHopDomain?: string;
+  readonly brokerDomain?: string;
   /** Parsed TLS client certificate identity, if mTLS is configured. */
   readonly certificate?: VerserCertificateIdentity;
   /**

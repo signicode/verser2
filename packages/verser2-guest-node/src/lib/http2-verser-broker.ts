@@ -61,6 +61,13 @@ export class Http2VerserBroker implements VerserBroker {
   private readonly routeChangeEmitter = new EventEmitter({ captureRejections: true });
 
   public constructor(options: VerserBrokerOptions) {
+    if ('brokerHopDomain' in options) {
+      throw createVerserError(
+        'invalid-registration',
+        'brokerHopDomain is not supported; use brokerDomain',
+        { brokerId: String(options.brokerId ?? '') },
+      );
+    }
     this.options = options;
     this.routeChangeEmitter.on('error', () => {
       // Route-change listeners are observational; rejected async listeners must
@@ -624,24 +631,20 @@ export class Http2VerserBroker implements VerserBroker {
     readNdjsonLines<BrokerControlFrame>(stream, (frame: BrokerControlFrame) =>
       this.handleControlFrame(frame),
     );
-    const brokerHopDomain =
-      this.options.brokerHopDomain === undefined
+    const brokerDomain =
+      this.options.brokerDomain === undefined
         ? undefined
-        : normalizeVerserRouteDomain(this.options.brokerHopDomain);
-    if (this.options.brokerHopDomain !== undefined && (brokerHopDomain ?? '').length === 0) {
-      throw createVerserError(
-        'invalid-registration',
-        'brokerHopDomain must be a non-empty domain',
-        {
-          brokerId: this.options.brokerId,
-        },
-      );
+        : normalizeVerserRouteDomain(this.options.brokerDomain);
+    if (this.options.brokerDomain !== undefined && (brokerDomain ?? '').length === 0) {
+      throw createVerserError('invalid-registration', 'brokerDomain must be a non-empty domain', {
+        brokerId: this.options.brokerId,
+      });
     }
     stream.end(
       JSON.stringify({
         peerId: this.options.brokerId,
         role: 'broker',
-        ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
+        ...(brokerDomain === undefined ? {} : { brokerDomain }),
       }),
     );
     await this.waitForRegistration(session, stream);

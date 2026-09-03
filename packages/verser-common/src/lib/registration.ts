@@ -13,21 +13,26 @@ import { getErrorMessage } from './utils';
  * Parses and validates a peer registration request body.
  *
  * Expects JSON with `peerId`, `role` (`'broker'` | `'guest'`), optional
- * `routedDomains` array, and an optional `brokerHopDomain` that is accepted
- * only for Brokers. A supplied hop-domain is normalized with
+ * `routedDomains` array, and an optional `brokerDomain` that is accepted only
+ * for Brokers. A supplied Broker domain is normalized with
  * {@link normalizeVerserRouteDomain} and stored only after validation; it is
- * omitted entirely when absent. Throws if the role is invalid, if a Guest
- * supplies `brokerHopDomain`, or if a Broker supplies a value that is not a
- * non-empty string.
+ * omitted entirely when absent. The legacy `brokerHopDomain` field is a clean
+ * replacement: it is rejected whenever the property is present on the parsed
+ * body — including a `null` value — rather than accepted as an alias. Throws
+ * if the role is invalid, if a Guest supplies `brokerDomain`, or if a Broker
+ * supplies a value that is not a non-empty string.
  *
  * @param body - The raw JSON string from the registration stream.
  * @returns The parsed and validated registration request.
  * @throws {VerserError} With code `invalid-registration` if the role is not `'broker'` or `'guest'`,
- *   or if `brokerHopDomain` is invalid for the supplied role.
+ *   if the legacy `brokerHopDomain` field is present, or if `brokerDomain` is
+ *   invalid for the supplied role.
  * @public
  */
 export function parseRegistrationRequest(body: string): VerserRegistrationRequest {
-  const parsed = JSON.parse(body) as Partial<VerserRegistrationRequest>;
+  const parsed = JSON.parse(body) as Partial<VerserRegistrationRequest> & {
+    brokerHopDomain?: unknown;
+  };
   const role = parsed.role;
   if (role !== 'broker' && role !== 'guest') {
     throw createVerserError('invalid-registration', 'Registration role must be broker or guest', {
@@ -35,31 +40,36 @@ export function parseRegistrationRequest(body: string): VerserRegistrationReques
     });
   }
 
-  const hasBrokerHopDomain =
-    parsed.brokerHopDomain !== undefined && parsed.brokerHopDomain !== null;
-  if (hasBrokerHopDomain && role !== 'broker') {
+  // Reject the legacy field by own-property presence so a null (or otherwise
+  // present-but-empty) `brokerHopDomain` cannot slip through the value check.
+  if (Object.prototype.hasOwnProperty.call(parsed, 'brokerHopDomain')) {
     throw createVerserError(
       'invalid-registration',
-      'brokerHopDomain is only valid for broker registrations',
+      'brokerHopDomain is not supported; use brokerDomain',
+      { peerId: String(parsed.peerId ?? '') },
+    );
+  }
+
+  const hasBrokerDomain = parsed.brokerDomain !== undefined && parsed.brokerDomain !== null;
+  if (hasBrokerDomain && role !== 'broker') {
+    throw createVerserError(
+      'invalid-registration',
+      'brokerDomain is only valid for broker registrations',
       { role: String(role) },
     );
   }
-  let brokerHopDomain: string | undefined;
-  if (hasBrokerHopDomain) {
-    if (typeof parsed.brokerHopDomain !== 'string') {
-      throw createVerserError('invalid-registration', 'brokerHopDomain must be a string', {
+  let brokerDomain: string | undefined;
+  if (hasBrokerDomain) {
+    if (typeof parsed.brokerDomain !== 'string') {
+      throw createVerserError('invalid-registration', 'brokerDomain must be a string', {
         peerId: String(parsed.peerId ?? ''),
       });
     }
-    brokerHopDomain = normalizeVerserRouteDomain(parsed.brokerHopDomain);
-    if (brokerHopDomain.length === 0) {
-      throw createVerserError(
-        'invalid-registration',
-        'brokerHopDomain must be a non-empty domain',
-        {
-          peerId: String(parsed.peerId ?? ''),
-        },
-      );
+    brokerDomain = normalizeVerserRouteDomain(parsed.brokerDomain);
+    if (brokerDomain.length === 0) {
+      throw createVerserError('invalid-registration', 'brokerDomain must be a non-empty domain', {
+        peerId: String(parsed.peerId ?? ''),
+      });
     }
   }
 
@@ -67,7 +77,7 @@ export function parseRegistrationRequest(body: string): VerserRegistrationReques
     peerId: String(parsed.peerId ?? ''),
     role: role as VerserPeerRole,
     routedDomains: parsed.routedDomains ?? [],
-    ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
+    ...(brokerDomain === undefined ? {} : { brokerDomain }),
   };
 }
 

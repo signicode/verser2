@@ -1821,7 +1821,7 @@ function postRegistration(session, body) {
   });
 }
 
-test('Host with client CA binds a Broker hop-domain to an exact DNS SAN and accepts a normalized match', async () => {
+test('Host with client CA binds a Broker domain to an exact DNS SAN and accepts a normalized match', async () => {
   const contexts = [];
   const host = createVerserHost({
     port: 0,
@@ -1847,16 +1847,16 @@ test('Host with client CA binds a Broker hop-domain to an exact DNS SAN and acce
         JSON.stringify({
           peerId: 'mtls-broker-san-match',
           role: 'broker',
-          brokerHopDomain: ' Trusted-Client. ',
+          brokerDomain: ' Trusted-Client. ',
         }),
       );
       assert.equal(result.status, 200);
       assert.equal(result.body.status, 'registered');
       // The Host stores the normalized value and exposes it to the
       // registration hook for application-side binding checks.
-      assert.equal(host.getRegisteredBrokerHopDomain('mtls-broker-san-match'), 'trusted-client');
+      assert.equal(host.getRegisteredBrokerDomain('mtls-broker-san-match'), 'trusted-client');
       assert.equal(contexts.length, 1);
-      assert.equal(contexts[0].brokerHopDomain, 'trusted-client');
+      assert.equal(contexts[0].brokerDomain, 'trusted-client');
     } finally {
       destroyHttp2Session(session);
     }
@@ -1865,7 +1865,7 @@ test('Host with client CA binds a Broker hop-domain to an exact DNS SAN and acce
   }
 });
 
-test('Host with client CA rejects a Broker hop-domain that is not an exact DNS SAN', async () => {
+test('Host with client CA rejects a Broker domain that is not an exact DNS SAN', async () => {
   const host = createVerserHost({
     port: 0,
     tls: {
@@ -1884,12 +1884,12 @@ test('Host with client CA rejects a Broker hop-domain that is not an exact DNS S
         JSON.stringify({
           peerId: 'mtls-broker-san-mismatch',
           role: 'broker',
-          brokerHopDomain: 'other-client',
+          brokerDomain: 'other-client',
         }),
       );
       assert.equal(result.status, 502);
       assert.equal(result.body.error.code, 'certificate-verification-failure');
-      assert.equal(host.getRegisteredBrokerHopDomain('mtls-broker-san-mismatch'), undefined);
+      assert.equal(host.getRegisteredBrokerDomain('mtls-broker-san-mismatch'), undefined);
     } finally {
       destroyHttp2Session(session);
     }
@@ -1898,7 +1898,7 @@ test('Host with client CA rejects a Broker hop-domain that is not an exact DNS S
   }
 });
 
-test('Host rejects Guest registrations that supply a brokerHopDomain', async () => {
+test('Host rejects Guest registrations that supply a brokerDomain', async () => {
   const host = createVerserHost({
     port: 0,
     tls: {
@@ -1918,7 +1918,7 @@ test('Host rejects Guest registrations that supply a brokerHopDomain', async () 
           peerId: 'mtls-guest-with-hop',
           role: 'guest',
           routedDomains: ['hop-guest.verser.test'],
-          brokerHopDomain: 'trusted-client',
+          brokerDomain: 'trusted-client',
         }),
       );
       assert.equal(result.status, 502);
@@ -1932,7 +1932,7 @@ test('Host rejects Guest registrations that supply a brokerHopDomain', async () 
   }
 });
 
-test('Host without client CA stores a Broker hop-domain without certificate binding', async () => {
+test('Host without client CA stores a Broker domain without certificate binding', async () => {
   const host = createVerserHost({
     port: 0,
     tls: { cert, key },
@@ -1948,12 +1948,12 @@ test('Host without client CA stores a Broker hop-domain without certificate bind
         JSON.stringify({
           peerId: 'plain-broker-with-hop',
           role: 'broker',
-          brokerHopDomain: 'ANY.Hop.Example.',
+          brokerDomain: 'ANY.Hop.Example.',
         }),
       );
       assert.equal(result.status, 200);
       assert.equal(result.body.status, 'registered');
-      assert.equal(host.getRegisteredBrokerHopDomain('plain-broker-with-hop'), 'any.hop.example');
+      assert.equal(host.getRegisteredBrokerDomain('plain-broker-with-hop'), 'any.hop.example');
     } finally {
       destroyHttp2Session(session);
     }
@@ -1962,7 +1962,7 @@ test('Host without client CA stores a Broker hop-domain without certificate bind
   }
 });
 
-test('Node Broker sends a normalized brokerHopDomain in its registration payload', async () => {
+test('Node Broker sends a normalized brokerDomain in its registration payload', async () => {
   const host = createVerserHost({
     port: 0,
     tls: {
@@ -1978,7 +1978,7 @@ test('Node Broker sends a normalized brokerHopDomain in its registration payload
     broker = createVerserBroker({
       hostUrl: `https://127.0.0.1:${host.address.port}`,
       brokerId: 'mtls-broker-hop-option',
-      brokerHopDomain: ' Trusted-Client. ',
+      brokerDomain: ' Trusted-Client. ',
       tls: {
         ca: cert,
         cert: trustedClientCert,
@@ -1987,7 +1987,7 @@ test('Node Broker sends a normalized brokerHopDomain in its registration payload
     });
 
     await broker.connect();
-    assert.equal(host.getRegisteredBrokerHopDomain('mtls-broker-hop-option'), 'trusted-client');
+    assert.equal(host.getRegisteredBrokerDomain('mtls-broker-hop-option'), 'trusted-client');
   } finally {
     if (broker?.connected) {
       await broker.close('test-complete');

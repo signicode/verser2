@@ -245,10 +245,10 @@ async function assertFederationHopAllowed(
  * Resolves the previous-hop domain for a remote Broker HTTP request.
  *
  * Binds `x-verser-source-id` to a Broker registered on the current HTTP/2
- * session before reading its stored hop-domain; spoofed, unregistered, or
- * hop-domain-less sources fail with `authorization-denied` before forwarding.
+ * session before reading its stored Broker domain; spoofed, unregistered, or
+ * domain-less sources fail with `authorization-denied` before forwarding.
  */
-function resolveRemoteBrokerHopDomain(
+function resolveRemoteBrokerDomain(
   stream: http2.ServerHttp2Stream,
   headers: http2.IncomingHttpHeaders,
   callbacks: BrokerRoutingCallbacks,
@@ -267,15 +267,15 @@ function resolveRemoteBrokerHopDomain(
       { sourceId },
     );
   }
-  const brokerHopDomain = callbacks.getBrokerHopDomain(sourceId);
-  if (brokerHopDomain === undefined) {
+  const brokerDomain = callbacks.getBrokerDomain(sourceId);
+  if (brokerDomain === undefined) {
     throw createVerserError(
       'authorization-denied',
-      'Broker has no registered hop domain for federation route authorization',
+      'Broker has no registered domain for federation route authorization',
       { sourceId },
     );
   }
-  return brokerHopDomain;
+  return brokerDomain;
 }
 
 /** Minimal peer info needed by the routing functions. */
@@ -337,8 +337,8 @@ export interface BrokerRoutingCallbacks {
     nextSelectedDomain: string,
   ): Promise<boolean>;
 
-  /** Normalized `brokerHopDomain` persisted for a registered Broker peer. */
-  getBrokerHopDomain(sourceId: string): string | undefined;
+  /** Normalized `brokerDomain` persisted for a registered Broker peer. */
+  getBrokerDomain(sourceId: string): string | undefined;
 
   /**
    * Identity that replaces the request `sourceId` at every Host-to-Host
@@ -739,7 +739,7 @@ export async function routeBrokerRequest(
  * Iterates upstream route candidates and tries to acquire a federated
  * request stream for each candidate. When the Host route authorizer is
  * configured, `x-verser-source-id` is first bound to a Broker registered on
- * the current HTTP/2 session and its persisted hop-domain becomes the
+ * the current HTTP/2 session and its persisted Broker domain becomes the
  * previous hop; each concrete candidate is authorized (and revalidated after
  * an awaited decision) before stream acquisition or body forwarding. On
  * success, forwards the request via `routeH2BrokerRequestOverFederationStream`.
@@ -748,7 +748,7 @@ export async function routeBrokerRequest(
  *          `false` if no upstream candidates exist.
  * @throws `upstream-unavailable` if candidates exist but none are reachable.
  * @throws `authorization-denied` if the authorizer is configured and the
- *   source is not a session-bound Broker, lacks a hop-domain, or every
+ *   source is not a session-bound Broker, lacks a domain, or every
  *   resolved candidate pair was denied.
  */
 async function tryRouteH2BrokerRequestToFederatedHost(
@@ -800,7 +800,7 @@ async function tryRouteH2BrokerRequestToFederatedHost(
     hadUpstreamCandidate = true;
     if (callbacks.routeAuthorizerEnabled() && !hopDomainResolved) {
       hopDomainResolved = true;
-      previousHopDomain = resolveRemoteBrokerHopDomain(stream, headers, callbacks);
+      previousHopDomain = resolveRemoteBrokerDomain(stream, headers, callbacks);
     }
     const hop = await evaluateFederationHop(
       callbacks,
@@ -1132,8 +1132,8 @@ async function routeLocalRequestToH2Guest(
  * Iterates upstream route candidates and tries to acquire a federated
  * request stream for each. When the route authorizer is configured, the
  * previous hop is the incoming federation baton (`previousHopDomain`) or,
- * for Broker-originated requests, the local Broker's persisted hop-domain;
- * a missing hop-domain fails with `authorization-denied` and each concrete
+ * for Broker-originated requests, the local Broker's persisted domain;
+ * a missing domain fails with `authorization-denied` and each concrete
  * candidate is authorized and revalidated before stream acquisition or body
  * forwarding. On success, forwards the request via
  * `routeLocalRequestOverFederationStream`.
@@ -1186,13 +1186,13 @@ async function tryRouteLocalRequestToFederatedHost(
     if (callbacks.routeAuthorizerEnabled() && !hopDomainResolved) {
       hopDomainResolved = true;
       // Local Broker handles are Host-owned: use the persisted registration
-      // hop-domain. A Broker-selected federation request without one is
+      // domain. A Broker-selected federation request without one is
       // denied before forwarding.
-      previousHopDomain = callbacks.getBrokerHopDomain(request.sourceId);
+      previousHopDomain = callbacks.getBrokerDomain(request.sourceId);
       if (previousHopDomain === undefined) {
         throw createVerserError(
           'authorization-denied',
-          'Broker has no registered hop domain for federation route authorization',
+          'Broker has no registered domain for federation route authorization',
           { sourceId: request.sourceId, targetId: request.targetId },
         );
       }

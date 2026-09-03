@@ -109,13 +109,14 @@ export interface VerserBrokerOptions {
   /** Maximum number of internal 307/308 redirect hops followed by Broker request paths. Defaults to `3`. */
   readonly maxInternalRedirects?: number;
   /**
-   * Optional hop-domain advertised as this Broker's first federation hop
-   * identity in the registration payload. The value is normalized before it
-   * is sent. When the Host enables remote mTLS, it must exactly match a DNS
-   * Subject Alternative Name on the Broker's client certificate; otherwise
-   * the Host rejects registration. When omitted, no hop-domain is sent.
+   * Optional domain advertised as this Broker's first federation hop identity
+   * in the registration payload. The value is normalized before it is sent.
+   * When the Host enables remote mTLS, it must exactly match a DNS Subject
+   * Alternative Name on the Broker's client certificate; otherwise the Host
+   * rejects registration. When omitted, no domain is sent. The legacy
+   * `brokerHopDomain` option is rejected at construction, not aliased.
    */
-  readonly brokerHopDomain?: string;
+  readonly brokerDomain?: string;
   /** TLS options for the outbound HTTP/2 connection (CA trust, client certificates). */
   readonly tls?: VerserClientTlsOptions;
 }

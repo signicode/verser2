@@ -58,6 +58,10 @@ import {
   routeLocalBrokerRequest as routeLocalBrokerRequestModule,
   routeLocalRequestDispatch as routeLocalRequestDispatchModule,
 } from './broker-routing';
+import {
+  DEFAULT_ROUTE_AUTHORIZATION_CACHE_TTL_MS,
+  defaultRouteAuthorizationNegativeCacheTtlMs,
+} from './constants';
 import { DegradedRouteCleanup, type DegradedRouteCleanupCallbacks } from './degraded-route-cleanup';
 import type { FederatedRouteFrameCallbacks } from './federation';
 import * as federation from './federation';
@@ -103,12 +107,12 @@ interface RegisteredPeer {
   readonly localGuest?: LocalGuestState;
   readonly localBroker?: LocalBrokerState;
   /**
-   * Normalized optional Broker hop-domain persisted at registration time.
+   * Normalized optional Broker domain persisted at registration time.
    * Remote Brokers bind it to an exact DNS SAN when Host mTLS is enabled;
    * local Brokers are exempt from certificate matching. Undefined when the
    * Broker did not advertise one or the peer is not a Broker.
    */
-  readonly brokerHopDomain?: string;
+  readonly brokerDomain?: string;
 }
 
 interface UpstreamLink {
@@ -231,10 +235,13 @@ export class NodeHttp2VerserHost implements VerserHost {
   public constructor(options: VerserHostOptions) {
     this.options = options;
     this.routeRegistry = createHostRouteRegistry(options);
+    // TTL validation is unconditional so a misconfiguration fails at
+    // construction even before an authorizer is exercised.
+    const authorizationTtls = resolveRouteAuthorizationTtls(options);
     this.routeAuthorizer =
       options.routeAuthorizer === undefined
         ? undefined
-        : new FederatedRouteAuthorizer(options.routeAuthorizer);
+        : new FederatedRouteAuthorizer(options.routeAuthorizer, authorizationTtls);
     this.degradedCleanup = new DegradedRouteCleanup(
       this.options.degradedRouteTimeoutMs ?? DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS,
       this.createDegradedCleanupCallbacks(),
@@ -296,7 +303,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       routeAuthorizerEnabled: () => this.routeAuthorizer !== undefined,
       authorizeFederatedHop: (previousAdvertisedDomain, nextSelectedDomain) =>
         this.authorizeFederatedHopPair(previousAdvertisedDomain, nextSelectedDomain),
-      getBrokerHopDomain: (sourceId) => this.getRegisteredBrokerHopDomain(sourceId),
+      getBrokerDomain: (sourceId) => this.getRegisteredBrokerDomain(sourceId),
       getEgressSourceId: () => this.options.hostId ?? 'host',
       trackController: (peerId, controller) => this.trackLocalRequestController(peerId, controller),
       untrackController: (peerId, controller) =>
@@ -556,24 +563,25 @@ export class NodeHttp2VerserHost implements VerserHost {
   }
 
   /**
-   * Returns the normalized `brokerHopDomain` persisted for a registered
+   * Returns the normalized `brokerDomain` persisted for a registered
    * Broker peer, or `undefined` when the peer is unknown, is not a Broker,
-   * or did not advertise a hop-domain.
+   * or did not advertise a domain.
    *
    * @internal
    */
-  public getRegisteredBrokerHopDomain(peerId: VerserPeerId): string | undefined {
+  public getRegisteredBrokerDomain(peerId: VerserPeerId): string | undefined {
     const peer = this.peers.get(peerId);
     if (peer === undefined || peer.role !== 'broker') {
       return undefined;
     }
-    return peer.brokerHopDomain;
+    return peer.brokerDomain;
   }
 
   /**
-   * Advances the invalidation generation and clears every cached allow so a
-   * pending decision cannot authorize forwarding against a removed route.
-   * Centralizes invalidation for all route/import/link/shutdown mutations.
+   * Advances the invalidation generation and clears every cached allow and
+   * deny so a pending decision cannot authorize forwarding against a removed
+   * route and a stale outcome cannot repopulate either cache. Centralizes
+   * invalidation for all route/import/link/shutdown mutations.
    */
   private invalidateRouteAuthorizations(): void {
     this.routeAuthorizer?.invalidate();
@@ -829,18 +837,26 @@ export class NodeHttp2VerserHost implements VerserHost {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
     }
 
-    // Local Broker handles are already Host-owned: the optional hop-domain is
+    // Local Broker handles are already Host-owned: the optional domain is
     // normalized and validated before authorization and persisted after it,
-    // but exempt from client-certificate matching.
-    let brokerHopDomain: string | undefined;
-    if (options.brokerHopDomain !== undefined) {
-      brokerHopDomain = normalizeVerserRouteDomain(options.brokerHopDomain);
-      if (brokerHopDomain.length === 0) {
-        throw createVerserError(
-          'invalid-registration',
-          'brokerHopDomain must be a non-empty domain',
-          { peerId },
-        );
+    // but exempt from client-certificate matching. The legacy option name is
+    // rejected, not aliased.
+    if ('brokerHopDomain' in options) {
+      throw createVerserError(
+        'invalid-registration',
+        'brokerHopDomain is not supported; use brokerDomain',
+        {
+          peerId,
+        },
+      );
+    }
+    let brokerDomain: string | undefined;
+    if (options.brokerDomain !== undefined) {
+      brokerDomain = normalizeVerserRouteDomain(options.brokerDomain);
+      if (brokerDomain.length === 0) {
+        throw createVerserError('invalid-registration', 'brokerDomain must be a non-empty domain', {
+          peerId,
+        });
       }
     }
 
@@ -848,7 +864,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       peerId,
       role: 'broker',
       routedDomains: [],
-      ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
+      ...(brokerDomain === undefined ? {} : { brokerDomain }),
     });
 
     const localBroker = createLocalBrokerState(this.getRoutedDomains());
@@ -858,7 +874,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       role: 'broker',
       transport: 'local',
       localBroker,
-      ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
+      ...(brokerDomain === undefined ? {} : { brokerDomain }),
     });
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId, role: 'broker' });
 
@@ -1047,12 +1063,12 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
-    let brokerHopDomain: string | undefined;
-    if (registration.role === 'broker' && registration.brokerHopDomain !== undefined) {
+    let brokerDomain: string | undefined;
+    if (registration.role === 'broker' && registration.brokerDomain !== undefined) {
       // `parseRegistrationRequest` already normalized and validated the
       // value; with Host mTLS it must also match an exact DNS SAN.
-      brokerHopDomain = registration.brokerHopDomain;
-      this.assertBrokerHopDomainCertificate(session, peerId, brokerHopDomain);
+      brokerDomain = registration.brokerDomain;
+      this.assertBrokerDomainCertificate(session, peerId, brokerDomain);
     }
 
     const peer: RegisteredPeer = {
@@ -1061,7 +1077,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       transport: 'h2',
       session,
       controlStream: registration.role === 'broker' ? stream : undefined,
-      ...(brokerHopDomain === undefined ? {} : { brokerHopDomain }),
+      ...(brokerDomain === undefined ? {} : { brokerDomain }),
     };
 
     this.peers.set(peerId, peer);
@@ -1215,9 +1231,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       peerId,
       role: registration.role,
       routedDomains: registration.routedDomains ?? [],
-      ...(registration.brokerHopDomain === undefined
+      ...(registration.brokerDomain === undefined
         ? {}
-        : { brokerHopDomain: registration.brokerHopDomain }),
+        : { brokerDomain: registration.brokerDomain }),
       certificate: this.getCertificateIdentity(tlsSocket),
       metadata: {
         authorized: tlsSocket.authorized,
@@ -1670,10 +1686,10 @@ export class NodeHttp2VerserHost implements VerserHost {
    * material there is no certificate to bind against, so the already
    * validated and normalized value is stored as supplied.
    */
-  private assertBrokerHopDomainCertificate(
+  private assertBrokerDomainCertificate(
     session: http2.Http2Session,
     peerId: VerserPeerId,
-    brokerHopDomain: string,
+    brokerDomain: string,
   ): void {
     const clientAuth = this.options.tls?.clientAuth;
     const mtlsEnabled = clientAuth?.ca !== undefined || clientAuth?.caFile !== undefined;
@@ -1684,13 +1700,13 @@ export class NodeHttp2VerserHost implements VerserHost {
     const certificate = this.getCertificateIdentity(session.socket as TLSSocket);
     const matched =
       certificate?.dnsNames.some(
-        (dnsName) => normalizeVerserRouteDomain(dnsName) === brokerHopDomain,
+        (dnsName) => normalizeVerserRouteDomain(dnsName) === brokerDomain,
       ) ?? false;
     if (!matched) {
       throw createVerserError(
         'certificate-verification-failure',
-        'Broker hop domain is not bound to an exact DNS SAN on the client certificate',
-        { peerId, brokerHopDomain },
+        'Broker domain is not bound to an exact DNS SAN on the client certificate',
+        { peerId, brokerDomain },
       );
     }
   }
@@ -1708,9 +1724,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       peerId,
       role: registration.role,
       routedDomains: registration.routedDomains ?? [],
-      ...(registration.brokerHopDomain === undefined
+      ...(registration.brokerDomain === undefined
         ? {}
-        : { brokerHopDomain: registration.brokerHopDomain }),
+        : { brokerDomain: registration.brokerDomain }),
       certificate: undefined,
       metadata: { local: true, authorized: true },
     });
@@ -2462,9 +2478,9 @@ export class NodeHttp2VerserHost implements VerserHost {
         openFrame,
         candidates,
         undefined,
-        // Source is already session-bound above; the persisted hop-domain is
-        // the previous hop for a direct Broker VWS egress.
-        this.getRegisteredBrokerHopDomain(sourceId),
+        // Source is already session-bound above; the persisted Broker domain
+        // is the previous hop for a direct Broker VWS egress.
+        this.getRegisteredBrokerDomain(sourceId),
       );
       const responseHeaders: http2.OutgoingHttpHeaders = { ':status': 200 };
       if (result.protocol.length > 0) responseHeaders['x-verser-ws-protocol'] = result.protocol;
@@ -3161,4 +3177,38 @@ export class NodeHttp2VerserHost implements VerserHost {
   private emitLifecycle(event: VerserHostLifecycleEvent): void {
     this.lifecycle.emit('event', event);
   }
+}
+
+/**
+ * Validates and resolves the hop-local route authorization cache TTLs.
+ *
+ * Both TTLs must be finite, non-negative integers. The positive (allow) TTL
+ * defaults to {@link DEFAULT_ROUTE_AUTHORIZATION_CACHE_TTL_MS}; the negative
+ * (deny) TTL defaults to `Math.floor(allowTtlMs / 10)`. A resolved `0`
+ * disables that cache class.
+ */
+function resolveRouteAuthorizationTtls(options: VerserHostOptions): {
+  allowTtlMs: number;
+  denyTtlMs: number;
+} {
+  const allowTtlMs = validateAuthorizationTtl(
+    options.routeAuthorizationCacheTtlMs ?? DEFAULT_ROUTE_AUTHORIZATION_CACHE_TTL_MS,
+    'routeAuthorizationCacheTtlMs',
+  );
+  const denyTtlMs = validateAuthorizationTtl(
+    options.routeAuthorizationNegativeCacheTtlMs ??
+      defaultRouteAuthorizationNegativeCacheTtlMs(allowTtlMs),
+    'routeAuthorizationNegativeCacheTtlMs',
+  );
+  return { allowTtlMs, denyTtlMs };
+}
+
+function validateAuthorizationTtl(value: number, field: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw createVerserError('protocol-error', `${field} must be a finite non-negative integer`, {
+      field,
+      value: Number.isFinite(value) ? value : undefined,
+    });
+  }
+  return value;
 }
