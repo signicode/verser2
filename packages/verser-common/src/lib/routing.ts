@@ -60,6 +60,35 @@ export function createRoutedDomainRegistration(
 }
 
 /**
+ * Normalizes a route domain for hop-local comparisons and cache keys.
+ *
+ * The normalization is the single canonical form shared by registration
+ * binding, the Host route authorizer, and certificate DNS SAN matching:
+ * trimmed, lowercased, URL-hostname parsed when possible, with IPv4-style
+ * brackets and a single trailing dot removed. It performs no wildcard,
+ * suffix, or port handling — exact normalized equality is required.
+ *
+ * @param value - The domain or authority string to normalize.
+ * @returns The normalized domain, or an empty string when no usable hostname
+ *   can be derived from the input.
+ * @public
+ */
+export function normalizeVerserRouteDomain(value: string): string {
+  const trimmed = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  if (trimmed.length === 0) {
+    return '';
+  }
+  try {
+    const hostname = new URL(`http://${trimmed}`).hostname;
+    return hostname.replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
+  } catch {
+    return trimmed.replace(/\.$/, '');
+  }
+}
+
+/**
  * Resolves a route by exact hostname match.
  *
  * Route matching uses **exact** URL hostname equality. No wildcard or suffix

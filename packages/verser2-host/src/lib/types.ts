@@ -8,6 +8,8 @@ import type {
   RoutedDomainRegistration,
   VerserClientTlsOptions,
   VerserError,
+  VerserFederatedRouteAuthorizationCallback,
+  VerserFederatedRouteAuthorizationPair,
   VerserHeaderPair,
   VerserHostTlsOptions,
   VerserRegistrationRequest,
@@ -61,6 +63,45 @@ export interface VerserHostOptions {
    * Defaults to {@link DEFAULT_DEGRADED_ROUTE_TIMEOUT_MS} (5000 ms).
    */
   readonly degradedRouteTimeoutMs?: number;
+  /**
+   * Hop-local federated route authorization callback.
+   *
+   * When configured, the Host asks the application to allow or deny each
+   * normalized `{ previousAdvertisedDomain, nextSelectedDomain }` pair before
+   * forwarding across a federation hop. The callback returns the legacy
+   * `'allow'`/`'deny'` strings or an object
+   * `{ decision, cacheTtlMs? }` whose `cacheTtlMs` overrides the class TTL
+   * for that single result (`0` disables caching for it;
+   * `Number.POSITIVE_INFINITY` caches until revoke/lifecycle invalidation;
+   * omitted uses the finite Host TTLs below). Explicit allow and deny results
+   * are cached (single-flight) until an explicit revoke, a relevant
+   * route/import/link mutation, TTL expiry, or Host shutdown invalidates
+   * them; callback errors and malformed results are never cached. Once a
+   * logical federation request stream or accepted federated VWS connection
+   * has been authorized, it keeps that decision for its lifetime — cache
+   * changes gate only new forwarding/open decisions. When absent, no route
+   * authorization is performed and existing forwarding behavior is
+   * unchanged.
+   */
+  readonly routeAuthorizer?: VerserFederatedRouteAuthorizationCallback;
+  /**
+   * Positive (allow) authorization-cache TTL in milliseconds. Must be a
+   * finite non-negative integer. Defaults to `60000` (60 seconds). `0`
+   * disables the allow cache: every new hop decision invokes the callback.
+   * Entries expire lazily; no timers are created. Individual callback results
+   * may override this TTL via `cacheTtlMs` (the only way an infinite cache
+   * entry can exist).
+   */
+  readonly routeAuthorizationCacheTtlMs?: number;
+  /**
+   * Negative (deny) authorization-cache TTL in milliseconds. Must be a
+   * finite non-negative integer. Defaults to
+   * `Math.floor(routeAuthorizationCacheTtlMs / 10)` (`6000` by default).
+   * `0` disables the deny cache. Callback errors and malformed results are
+   * never cached regardless of this value. Individual callback results may
+   * override this TTL via `cacheTtlMs`.
+   */
+  readonly routeAuthorizationNegativeCacheTtlMs?: number;
 }
 
 /**
@@ -135,6 +176,15 @@ export interface VerserLocalGuestOptions {
  */
 export interface VerserLocalBrokerOptions {
   readonly brokerId: string;
+  /**
+   * Optional domain persisted with this local Broker's registration,
+   * mirroring the remote Broker `brokerDomain` registration field. Local
+   * Broker handles are already Host-owned, so this value is exempt from
+   * client-certificate DNS SAN matching. It is normalized before storage and
+   * omitted when not supplied. The legacy `brokerHopDomain` field is rejected
+   * at attachment time, not aliased.
+   */
+  readonly brokerDomain?: string;
 }
 
 /**
@@ -368,6 +418,15 @@ export interface VerserHost {
    * @internal Foundation seam used by Host federation route selection tests and later forwarding phases.
    */
   getFederatedRouteCandidates(targetId?: string, domain?: string): FederatedRouteRegistration[];
+  /**
+   * Explicitly revokes the cached allow for one hop-local federated route
+   * pair and abandons any in-flight decision for it.
+   *
+   * Both domains are normalized before matching. Returns `true` when a
+   * cached allow or pending decision was revoked, `false` when nothing was
+   * cached for the pair (including when no `routeAuthorizer` is configured).
+   */
+  revokeRouteAuthorization(pair: VerserFederatedRouteAuthorizationPair): boolean;
   /** Connects this Host outbound to an upstream Verser Host. */
   connectUpstream(options: VerserHostUpstreamOptions): Promise<VerserHostUpstreamHandle>;
   /** Returns currently connected upstream Host links. */

@@ -223,6 +223,123 @@ test('shared registration protocol helpers parse registration requests and respo
   );
 });
 
+test('registration brokerDomain is broker-only, normalized, and omitted when absent', () => {
+  assert.deepEqual(
+    common.parseRegistrationRequest(
+      JSON.stringify({
+        peerId: 'broker-alpha',
+        role: 'broker',
+        brokerDomain: '  Broker.Hop.Example.  ',
+      }),
+    ),
+    {
+      peerId: 'broker-alpha',
+      role: 'broker',
+      routedDomains: [],
+      brokerDomain: 'broker.hop.example',
+    },
+  );
+  assert.deepEqual(
+    common.parseRegistrationRequest(
+      JSON.stringify({
+        peerId: 'broker-beta',
+        role: 'broker',
+        brokerDomain: 'beta.verser.test',
+      }),
+    ),
+    {
+      peerId: 'broker-beta',
+      role: 'broker',
+      routedDomains: [],
+      brokerDomain: 'beta.verser.test',
+    },
+  );
+  assert.equal(
+    'brokerDomain' in
+      common.parseRegistrationRequest(JSON.stringify({ peerId: 'broker-gamma', role: 'broker' })),
+    false,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({
+          peerId: 'guest-alpha',
+          role: 'guest',
+          routedDomains: ['alpha.verser.test'],
+          brokerDomain: 'hop.verser.test',
+        }),
+      ),
+    /brokerDomain is only valid for broker registrations/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({ peerId: 'broker-alpha', role: 'broker', brokerDomain: '   ' }),
+      ),
+    /brokerDomain must be a non-empty domain/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({ peerId: 'broker-alpha', role: 'broker', brokerDomain: 42 }),
+      ),
+    /brokerDomain must be a string/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({
+          peerId: 'broker-alpha',
+          role: 'broker',
+          brokerHopDomain: 'legacy.verser.test',
+        }),
+      ),
+    /brokerHopDomain is not supported; use brokerDomain/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        JSON.stringify({
+          peerId: 'guest-alpha',
+          role: 'guest',
+          brokerHopDomain: 'legacy.verser.test',
+        }),
+      ),
+    /brokerHopDomain is not supported; use brokerDomain/,
+  );
+  // Regression: the legacy field is rejected by own-property presence, so a
+  // null-valued `brokerHopDomain` cannot slip through the value check.
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        '{"peerId":"broker-null-legacy","role":"broker","brokerHopDomain":null}',
+      ),
+    /brokerHopDomain is not supported; use brokerDomain/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        '{"peerId":"broker-null-legacy","role":"broker","brokerHopDomain":null,"brokerDomain":"valid.verser.test"}',
+      ),
+    /brokerHopDomain is not supported; use brokerDomain/,
+  );
+  assert.throws(
+    () =>
+      common.parseRegistrationRequest(
+        '{"peerId":"guest-null-legacy","role":"guest","brokerHopDomain":null}',
+      ),
+    /brokerHopDomain is not supported; use brokerDomain/,
+  );
+});
+
+test('shared route domain normalizer produces the canonical exact-match form', () => {
+  assert.equal(common.normalizeVerserRouteDomain('  API.Example.COM. '), 'api.example.com');
+  assert.equal(common.normalizeVerserRouteDomain('api.example.com'), 'api.example.com');
+  assert.equal(common.normalizeVerserRouteDomain('[2001:db8::1]'), '2001:db8::1');
+  assert.equal(common.normalizeVerserRouteDomain('not a domain'), 'not a domain');
+  assert.equal(common.normalizeVerserRouteDomain(''), '');
+});
+
 test('shared broker control frames preserve route advertisements', () => {
   const frame = common.createBrokerRoutesControlFrame([
     { targetId: 'guest-alpha', domain: 'alpha.verser.test' },

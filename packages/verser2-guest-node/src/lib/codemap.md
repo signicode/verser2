@@ -12,7 +12,7 @@ Broker routing stack.
 |------|------|
 | `types.ts` | All public type definitions (`VerserNodeGuestOptions`, `VerserNodeGuest`, `VerserBrokerOptions`, `VerserBroker`, `VerserBrokerRequest`, `VerserBrokerResponse`, `NodeRequestListener`, etc.) and internal interfaces (`BrokerRequestRouter`). |
 | `http2-verser-node-guest.ts` | `Http2VerserNodeGuest` — Guest implementation: connect, register, maintain lease pool, dispatch requests via `MinimalIncomingMessage`/`MinimalServerResponse`. |
-| `http2-verser-broker.ts` | `Http2VerserBroker` — Broker implementation: connect, register, receive route frames, forward requests, expose Agent/Dispatcher/Fetch factories. |
+| `http2-verser-broker.ts` | `Http2VerserBroker` — Broker implementation: connect, register (sends normalized optional `brokerDomain` in the registration payload when configured; rejects the legacy `brokerHopDomain` option), receive route frames, forward requests, expose Agent/Dispatcher/Fetch factories. |
 | `minimal-http.ts` | `MinimalIncomingMessage` (extends `PassThrough`) and `MinimalServerResponse` (extends `EventEmitter`) — lightweight HTTP/1 request/response surface for local handlers. |
 | `broker-agent.ts` | `VerserBrokerAgent` (extends `http.Agent`) — resolves target hostname from route table and bridges via `VerserBrokerSocket`. |
 | `broker-socket.ts` | `VerserBrokerSocket` (extends `Duplex`) — captures HTTP/1 request bytes, parses headers/body, forwards through the Broker, and pipes the response back as raw HTTP. |

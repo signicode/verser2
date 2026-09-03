@@ -1748,3 +1748,252 @@ test('Host clientAuth default allows valid client certificate registration witho
     await safeCloseHost(host);
   }
 });
+
+async function connectMtlsClientSession(host) {
+  const session = http2.connect(`https://127.0.0.1:${host.address.port}`, {
+    ca: cert,
+    cert: trustedClientCert,
+    key: trustedClientKey,
+  });
+  try {
+    await once(session, 'connect');
+  } catch (error) {
+    session.destroy();
+    throw error;
+  }
+  return session;
+}
+
+function postRegistration(session, body) {
+  return new Promise((resolve, reject) => {
+    const stream = session.request({ ':method': 'POST', ':path': '/verser/register' });
+    let buffer = Buffer.alloc(0);
+    let status = 0;
+    let settled = false;
+    const settle = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+      resolve(value);
+    };
+    const onData = (chunk) => {
+      buffer = Buffer.concat([buffer, Buffer.from(chunk)]);
+      const newline = buffer.indexOf(0x0a);
+      if (newline < 0) {
+        return;
+      }
+      try {
+        settle({ status, body: JSON.parse(buffer.subarray(0, newline).toString('utf8')) });
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const onError = (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    };
+    const onEnd = () => {
+      try {
+        settle({ status, body: JSON.parse(buffer.toString('utf8')) });
+      } catch (error) {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      }
+    };
+    stream.on('response', (headers) => {
+      status = Number(headers[':status'] ?? 0);
+    });
+    // A successful Broker registration keeps the stream open as the control
+    // stream, so settle on the first complete JSON line instead of 'end'.
+    // Error responses are single non-newline JSON bodies and settle on 'end'.
+    stream.on('data', onData);
+    stream.on('end', onEnd);
+    stream.on('error', onError);
+    stream.end(body);
+  });
+}
+
+test('Host with client CA binds a Broker domain to an exact DNS SAN and accepts a normalized match', async () => {
+  const contexts = [];
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: {
+        ca: clientCaCert,
+        authorizeRegistration(context) {
+          contexts.push(context);
+          return { action: 'allow' };
+        },
+      },
+    },
+  });
+
+  try {
+    await host.start();
+    const session = await connectMtlsClientSession(host);
+    try {
+      const result = await postRegistration(
+        session,
+        JSON.stringify({
+          peerId: 'mtls-broker-san-match',
+          role: 'broker',
+          brokerDomain: ' Trusted-Client. ',
+        }),
+      );
+      assert.equal(result.status, 200);
+      assert.equal(result.body.status, 'registered');
+      // The Host stores the normalized value and exposes it to the
+      // registration hook for application-side binding checks.
+      assert.equal(host.getRegisteredBrokerDomain('mtls-broker-san-match'), 'trusted-client');
+      assert.equal(contexts.length, 1);
+      assert.equal(contexts[0].brokerDomain, 'trusted-client');
+    } finally {
+      destroyHttp2Session(session);
+    }
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host with client CA rejects a Broker domain that is not an exact DNS SAN', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+
+  try {
+    await host.start();
+    const session = await connectMtlsClientSession(host);
+    try {
+      const result = await postRegistration(
+        session,
+        JSON.stringify({
+          peerId: 'mtls-broker-san-mismatch',
+          role: 'broker',
+          brokerDomain: 'other-client',
+        }),
+      );
+      assert.equal(result.status, 502);
+      assert.equal(result.body.error.code, 'certificate-verification-failure');
+      assert.equal(host.getRegisteredBrokerDomain('mtls-broker-san-mismatch'), undefined);
+    } finally {
+      destroyHttp2Session(session);
+    }
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host rejects Guest registrations that supply a brokerDomain', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+
+  try {
+    await host.start();
+    const session = await connectMtlsClientSession(host);
+    try {
+      const result = await postRegistration(
+        session,
+        JSON.stringify({
+          peerId: 'mtls-guest-with-hop',
+          role: 'guest',
+          routedDomains: ['hop-guest.verser.test'],
+          brokerDomain: 'trusted-client',
+        }),
+      );
+      assert.equal(result.status, 502);
+      assert.equal(result.body.error.code, 'invalid-registration');
+      assert.deepEqual(host.getRoutedDomains(), []);
+    } finally {
+      destroyHttp2Session(session);
+    }
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Host without client CA stores a Broker domain without certificate binding', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: { cert, key },
+  });
+
+  try {
+    await host.start();
+    const session = http2.connect(`https://127.0.0.1:${host.address.port}`, { ca: cert });
+    try {
+      await once(session, 'connect');
+      const result = await postRegistration(
+        session,
+        JSON.stringify({
+          peerId: 'plain-broker-with-hop',
+          role: 'broker',
+          brokerDomain: 'ANY.Hop.Example.',
+        }),
+      );
+      assert.equal(result.status, 200);
+      assert.equal(result.body.status, 'registered');
+      assert.equal(host.getRegisteredBrokerDomain('plain-broker-with-hop'), 'any.hop.example');
+    } finally {
+      destroyHttp2Session(session);
+    }
+  } finally {
+    await safeCloseHost(host);
+  }
+});
+
+test('Node Broker sends a normalized brokerDomain in its registration payload', async () => {
+  const host = createVerserHost({
+    port: 0,
+    tls: {
+      cert,
+      key,
+      clientAuth: { ca: clientCaCert },
+    },
+  });
+  let broker;
+
+  try {
+    await host.start();
+    broker = createVerserBroker({
+      hostUrl: `https://127.0.0.1:${host.address.port}`,
+      brokerId: 'mtls-broker-hop-option',
+      brokerDomain: ' Trusted-Client. ',
+      tls: {
+        ca: cert,
+        cert: trustedClientCert,
+        key: trustedClientKey,
+      },
+    });
+
+    await broker.connect();
+    assert.equal(host.getRegisteredBrokerDomain('mtls-broker-hop-option'), 'trusted-client');
+  } finally {
+    if (broker?.connected) {
+      await broker.close('test-complete');
+    } else if (broker !== undefined) {
+      destroyClientSession(broker);
+    }
+    await safeCloseHost(host);
+  }
+});

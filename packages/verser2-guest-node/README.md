@@ -86,6 +86,17 @@ The Broker provides multiple ways to route requests:
 - `broker.createDispatcher()` — Undici Dispatcher for `fetch(url, { dispatcher })`
 - `broker.createFetch()` — pre-wired fetch helper
 
+Brokers may advertise an optional `brokerDomain` in their Host registration
+payload. The value is normalized (trimmed, lowercased, trailing dot removed)
+before it is sent. When the Host enables remote mTLS, the Host requires the
+normalized value to exactly match a DNS Subject Alternative Name on the
+Broker's client certificate (no wildcard or CN fallback) and rejects the
+registration otherwise. When omitted, no domain is sent and behavior is
+unchanged. The legacy `brokerHopDomain` option is rejected at construction,
+not aliased. On Hosts with a `routeAuthorizer` configured, a Broker-selected
+federation request from a Broker without a registered domain fails with
+`authorization-denied` before forwarding.
+
 Broker request paths follow internal `307` and `308` redirects by default when
 the response `Location` hostname exactly matches an advertised verser2 route.
 The redirected request is resolved through the Broker route table, preserves the

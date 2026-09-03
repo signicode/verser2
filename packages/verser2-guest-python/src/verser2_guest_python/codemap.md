@@ -11,8 +11,9 @@ protocol.
   dispatch helper, TLS/mTLS client identity, and ASGI response/error envelope
   generation.
 - `broker.py`: outbound Broker peer, route control stream consumption, URL
-  hostname route matching, request helpers, TLS/mTLS client identity, and
-  one-shot response body readers.
+  hostname route matching, request helpers, TLS/mTLS client identity, optional
+  normalized ``broker_domain`` registration payload, and one-shot response
+  body readers.
 - `asgi.py`: ASGI 3 scope construction and buffered direct-dispatch machinery.
 - `protocol.py`: binary envelope constants, encode/decode helpers, and header
   normalization shared by Guest and Broker.

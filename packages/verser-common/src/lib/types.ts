@@ -540,6 +540,16 @@ export interface VerserRegistrationRequest {
    * Brokers typically omit this field.
    */
   readonly routedDomains?: readonly string[];
+  /**
+   * Optional domain a Broker advertises as the identity of its first
+   * federation hop. Only valid for `role: 'broker'` registrations; the Host
+   * rejects it for Guests. When the Host enables remote mTLS, the normalized
+   * value must exactly match a DNS Subject Alternative Name on the Broker's
+   * client certificate (no wildcard or CN fallback). When absent, the Broker
+   * has no advertised hop-domain and remains `undefined`. The legacy
+   * `brokerHopDomain` field is rejected, not aliased.
+   */
+  readonly brokerDomain?: string;
 }
 
 /**
@@ -604,6 +614,11 @@ export interface VerserRegistrationAuthorizationContext {
   readonly role: VerserPeerRole;
   /** Hostnames this Peer intends to handle (Guests only). */
   readonly routedDomains: readonly string[];
+  /**
+   * Normalized optional Broker domain supplied at registration.
+   * Present only for Broker registrations that advertised one.
+   */
+  readonly brokerDomain?: string;
   /** Parsed TLS client certificate identity, if mTLS is configured. */
   readonly certificate?: VerserCertificateIdentity;
   /**
@@ -638,6 +653,105 @@ export type VerserRegistrationAuthorizationAction =
 export type VerserRegistrationAuthorizationCallback = (
   context: VerserRegistrationAuthorizationContext,
 ) => VerserRegistrationAuthorizationAction | Promise<VerserRegistrationAuthorizationAction>;
+
+/**
+ * A hop-local pair of normalized route domains the Host asks the application
+ * to authorize for one federated forwarding decision.
+ *
+ * The pair is exactly `{ previousAdvertisedDomain, nextSelectedDomain }`: the
+ * immediate previous advertised domain toward the concrete next selected
+ * domain. It carries no origin, hop history, or end-to-end Broker-to-Guest
+ * policy — authorization is hop-local only.
+ *
+ * @public
+ */
+export interface VerserFederatedRouteAuthorizationPair {
+  /** Normalized domain advertised to (or by) the previous hop. */
+  readonly previousAdvertisedDomain: string;
+  /** Normalized domain just selected as the next hop. */
+  readonly nextSelectedDomain: string;
+}
+
+/**
+ * Application authorization context for one hop-local federated route pair.
+ *
+ * Both domains are already normalized and resolved by the Host. The callback
+ * only decides allow or deny for the pair; it does not select, validate, or
+ * authorize either domain through another callback.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationContext = VerserFederatedRouteAuthorizationPair;
+
+/**
+ * The legacy decision string returned by a federated route authorization
+ * callback.
+ *
+ * - `'allow'` — the hop-local pair may forward; cached under the Host's
+ *   positive cache TTL.
+ * - `'deny'` — the hop-local pair must not forward; cached under the Host's
+ *   negative cache TTL.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationDecision = 'allow' | 'deny';
+
+/**
+ * An object route authorization result with an optional per-decision cache
+ * TTL override.
+ *
+ * `cacheTtlMs` semantics:
+ * - omitted or `undefined` — the existing finite Host class TTL for the
+ *   decision (`routeAuthorizationCacheTtlMs` / `routeAuthorizationNegativeCacheTtlMs`).
+ * - `0` — disables caching for this single result only.
+ * - a positive safe integer whose computed `Date.now() + ttl` expiry is
+ *   itself a safe integer — overrides the class TTL for this result; the
+ *   expiry is validated and retained once, and a sum beyond the safe-integer
+ *   range (e.g. `Number.MAX_SAFE_INTEGER`) is rejected without caching.
+ * - `Number.POSITIVE_INFINITY` — caches until explicit revoke or lifecycle
+ *   invalidation. This is the only infinite option and is callback-only; the
+ *   Host TTL options remain finite.
+ *
+ * Any other value (null, non-number, NaN, negative, fractional, unsafe
+ * integer, negative infinity) is rejected deterministically and nothing is
+ * cached.
+ *
+ * @public
+ */
+export interface VerserFederatedRouteAuthorizationResult {
+  /** The hop-local decision for the pair. */
+  readonly decision: VerserFederatedRouteAuthorizationDecision;
+  /** Optional per-decision cache TTL override in milliseconds. */
+  readonly cacheTtlMs?: number;
+}
+
+/**
+ * The full result a federated route authorization callback may return: the
+ * legacy `'allow'`/`'deny'` strings or an object result with an optional
+ * per-decision cache TTL override.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationOutcome =
+  | VerserFederatedRouteAuthorizationDecision
+  | VerserFederatedRouteAuthorizationResult;
+
+/**
+ * Callback for authorizing hop-local federated route pairs before forwarding.
+ *
+ * Configured via the Host `routeAuthorizer` option. The Host caches explicit
+ * allow and deny results (single-flight per normalized pair) under the
+ * configured class TTLs, optionally overridden per decision via
+ * {@link VerserFederatedRouteAuthorizationResult.cacheTtlMs}, and revokes
+ * cached results on route mutations, federation-link removal, explicit pair
+ * revocation, and Host shutdown. Callback errors and malformed results are
+ * never cached.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationCallback = (
+  context: VerserFederatedRouteAuthorizationContext,
+) => VerserFederatedRouteAuthorizationOutcome | Promise<VerserFederatedRouteAuthorizationOutcome>;
 
 /**
  * Buffered request data provided to an unauthorized-client handler.

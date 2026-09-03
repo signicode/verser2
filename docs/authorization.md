@@ -98,6 +98,62 @@ The callback returns `{ action: 'allow' }` to accept the Host link or
 the application callback still decides whether the declared Host identity and
 certificate context are allowed.
 
+## Federated route authorization callback
+
+A Host with federation can also configure a top-level `routeAuthorizer`
+callback. It is hop-local only: the Host calls it with the already-resolved
+normalized pair `{ previousAdvertisedDomain, nextSelectedDomain }` — the
+immediate previous advertised domain toward the concrete next selected domain —
+after candidate resolution and before any federation stream acquisition,
+envelope/frame write, body piping, VWS open forwarding, or bridging. It is not
+end-to-end Broker-to-Guest policy.
+
+```ts
+const host = createVerserHost({
+  hostId: 'host-manager',
+  routeAuthorizer: async (context) => {
+    if (context.previousAdvertisedDomain === 'broker.corp.example') {
+      // Cache this allow for 5 minutes instead of the Host default.
+      return { decision: 'allow', cacheTtlMs: 5 * 60_000 };
+    }
+    // Legacy string result: use the configured Host cache TTLs.
+    return 'deny';
+  },
+});
+```
+
+Results are cached per normalized pair with single-flight sharing and can be
+revoked explicitly via `host.revokeRouteAuthorization(pair)` or are
+invalidated by route/import/link mutations and Host shutdown. An authorized
+logical federation request stream or accepted federated VWS connection keeps
+its decision for its lifetime; cache changes gate only new forwarding/open
+decisions, and physical HTTP/2 sessions are never route-bound.
+
+### Per-decision cache TTLs
+
+The positive (allow) and negative (deny) cache TTLs default to `60000` ms and
+`Math.floor(allow / 10)` ms (`6000` ms) and are configured via the finite
+Host options `routeAuthorizationCacheTtlMs` and
+`routeAuthorizationNegativeCacheTtlMs` (`0` disables a class; entries expire
+lazily without timers). A callback result may override the class TTL for that
+single result via the object form `{ decision, cacheTtlMs? }`:
+
+- omitted or `undefined` — the existing finite Host class TTL for the decision;
+- `0` — disables caching for this result only;
+- a positive safe integer whose computed `Date.now() + ttl` expiry is itself a
+  safe integer — overrides the class TTL (a sum beyond the safe-integer range,
+  e.g. `Number.MAX_SAFE_INTEGER`, is rejected without caching);
+- `Number.POSITIVE_INFINITY` — caches until explicit revoke or lifecycle
+  invalidation.
+
+`Infinity` is a callback-only override: the Host TTL options remain finite and
+reject it. Malformed or missing decisions and invalid TTLs (null, non-numbers,
+NaN, negative or fractional values, unsafe integers, negative infinity) fail
+deterministically without caching, as do callback errors. Revoke and
+lifecycle invalidation clear finite and infinite entries and abandon pending
+decisions; a stale pending result can neither take effect nor repopulate
+either cache.
+
 ## Unauthorized client handler
 
 `tls.clientAuth.unauthorizedClientHandler` is an opt-in callback for the first
@@ -188,7 +244,9 @@ presented during the TLS handshake.
 ## What is not implemented
 
 - **Per-request Broker target authorization** — the Host does not check whether
-  a Broker is authorized to send requests to a specific Guest or route.
+  a Broker is authorized to send requests to a specific Guest or route. The
+  hop-local `routeAuthorizer` gates federation forwarding decisions only; it is
+  not end-to-end Broker-to-Guest policy.
 - **Complete application authentication** — mTLS authenticates the transport
   and supports registration policy, but verser2 is not a complete public
   gateway.

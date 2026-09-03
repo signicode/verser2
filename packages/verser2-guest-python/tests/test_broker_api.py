@@ -393,6 +393,44 @@ class VerserBrokerApiRouteControlTest(unittest.TestCase):
         self.assertEqual(payload.get("peerId"), "python-unit-broker")
         self.assertEqual(payload.get("role"), "broker")
 
+    def test_registration_payload_omits_absent_broker_domain(self) -> None:
+        broker = self._broker_factory()
+        payload = self._registration_payload(broker)
+
+        self.assertNotIn("brokerDomain", payload)
+
+    def test_registration_payload_includes_normalized_broker_domain(self) -> None:
+        package = importlib.import_module("verser2_guest_python")
+        broker = package.create_verser_broker(
+            host_url="https://127.0.0.1:1",
+            broker_id="python-unit-broker-hop",
+            broker_domain="  Broker.Hop.Example.  ",
+        )
+        payload = self._registration_payload(broker)
+
+        self.assertEqual(payload.get("brokerDomain"), "broker.hop.example")
+
+    def test_empty_broker_domain_is_rejected_at_construction(self) -> None:
+        package = importlib.import_module("verser2_guest_python")
+
+        with self.assertRaises(ValueError):
+            package.create_verser_broker(
+                host_url="https://127.0.0.1:1",
+                broker_id="python-unit-broker-empty",
+                broker_domain="   ",
+            )
+
+    def test_legacy_broker_hop_domain_keyword_is_rejected(self) -> None:
+        package = importlib.import_module("verser2_guest_python")
+
+        with self.assertRaises(ValueError) as raised:
+            package.create_verser_broker(
+                host_url="https://127.0.0.1:1",
+                broker_id="python-unit-broker-legacy",
+                broker_hop_domain="legacy.verser.test",
+            )
+        self.assertIn("broker_domain", str(raised.exception))
+
     def test_invalid_registration_response_is_actionable(self) -> None:
         broker = self._broker_factory()
         locator = self._registration_response_validator(broker)
