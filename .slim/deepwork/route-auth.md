@@ -20,8 +20,8 @@
 
 ## Status
 
-- Current phase: 4 — final validation and delivery. Phase 2 checkpoint:
-  `b1bada4`; draft PR: #62. Phase 3 passed formal review.
+- Complete — Phase 2 and Phase 3 passed formal review; final `npm test` and
+  `npm run lint` passed. Commits: `b1bada4`, `6db6fac`, `02fe42d`; PR: #62.
 - Deepwork skill is unavailable in this environment; these requested deepwork
   controls are being followed manually.
 
