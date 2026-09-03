@@ -204,17 +204,8 @@ Behavior contract:
 - Registration authorization is a registration-time mTLS/client-certificate hook
   only — it is not complete application authentication/authorization, and
   per-request Broker target authorization is not implemented.
-- The `routeAuthorizer` foundation and forwarding enforcement are implemented:
-  hop-local allow/deny is consulted after concrete federation candidate
-  resolution and before federation stream acquisition, envelope/frame writes,
-  body piping, VWS open forwarding, or bridging on remote/local Broker HTTP,
-  incoming-federation HTTP dispatch, direct Broker VWS, and incoming/upstream
-  federation VWS. When configured, a Broker-selected federation request
-  without a registered `brokerHopDomain` fails with `authorization-denied`
-  (remote HTTP first binds `x-verser-source-id` to a Broker registered on the
-  same HTTP/2 session). Host-to-Host egress replaces the request/open
-  `sourceId` with the forwarding Host's identity; origin and hop history are
-  never used for authorization.
+- Federated route authorization follows the `routeAuthorizer` and Broker
+  hop-domain contract documented above.
 - Local peers bypass TLS. Local registration still invokes
   `authorizeRegistration`, but the Host supplies `certificate: undefined` and
   Host-owned metadata `{ local: true, authorized: true }`.
