@@ -708,6 +708,11 @@ export async function handleFederatedIncomingRequestStream(
       sourceId: metadata.sourceId,
       targetId: metadata.targetId,
       routeDomain: metadata.routeDomain,
+      // The incoming resolved route domain is this Host's hop-local baton
+      // (previous hop). An absent baton is marked empty so the route
+      // authorizer denies the dispatch instead of falling back to origin
+      // identity, which is never carried.
+      previousHopDomain: metadata.routeDomain ?? '',
       method: metadata.method,
       path: metadata.path,
       headers: flattenVerserHeaders(validateVerserHeaders(metadata.headers)),

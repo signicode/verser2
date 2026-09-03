@@ -49,6 +49,15 @@ export interface LocalDispatchRequest {
   readonly body: Readable;
   readonly leaseAcquireTimeoutMs: number;
   readonly signal?: AbortSignal;
+  /**
+   * Hop-local previous-hop domain for requests arriving through a federation
+   * link (the incoming resolved route/open domain). Present only in a
+   * federation context; an empty string marks a federated request that
+   * arrived without a hop-domain baton, which the route authorizer denies.
+   * Broker-originated requests resolve the hop domain from the Broker's
+   * persisted registration instead.
+   */
+  readonly previousHopDomain?: string;
 }
 
 type LocalRequest = Readable & {

@@ -42,7 +42,9 @@ and can connect outbound to upstream Hosts for route-aware federation.
   `brokerHopDomain`; with Host mTLS its normalized value must exactly match a
   DNS SAN on the Broker client certificate (no wildcard or CN fallback).
   `attachLocalBroker({ brokerHopDomain })` persists the same optional value
-  for Host-owned local Brokers, exempt from certificate matching.
+  for Host-owned local Brokers, exempt from certificate matching. When a
+  `routeAuthorizer` is configured, a Broker-selected federation request
+  without a registered hop-domain is denied before forwarding.
 - Re-exported: `VerserPeerRole`
 - Constant: `VERSER2_HOST_PACKAGE_NAME`
 
@@ -202,10 +204,17 @@ Behavior contract:
 - Registration authorization is a registration-time mTLS/client-certificate hook
   only — it is not complete application authentication/authorization, and
   per-request Broker target authorization is not implemented.
-- The `routeAuthorizer` foundation (hop-local cache, revoke, and lifecycle
-  invalidation) is implemented; forwarding-path enforcement across federated
-  HTTP and VWS streams is not yet wired, so the callback is not consulted on
-  live request forwarding.
+- The `routeAuthorizer` foundation and forwarding enforcement are implemented:
+  hop-local allow/deny is consulted after concrete federation candidate
+  resolution and before federation stream acquisition, envelope/frame writes,
+  body piping, VWS open forwarding, or bridging on remote/local Broker HTTP,
+  incoming-federation HTTP dispatch, direct Broker VWS, and incoming/upstream
+  federation VWS. When configured, a Broker-selected federation request
+  without a registered `brokerHopDomain` fails with `authorization-denied`
+  (remote HTTP first binds `x-verser-source-id` to a Broker registered on the
+  same HTTP/2 session). Host-to-Host egress replaces the request/open
+  `sourceId` with the forwarding Host's identity; origin and hop history are
+  never used for authorization.
 - Local peers bypass TLS. Local registration still invokes
   `authorizeRegistration`, but the Host supplies `certificate: undefined` and
   Host-owned metadata `{ local: true, authorized: true }`.

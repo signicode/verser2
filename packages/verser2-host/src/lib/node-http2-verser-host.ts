@@ -281,6 +281,7 @@ export class NodeHttp2VerserHost implements VerserHost {
         return {
           role: peer.role,
           transport: peer.transport,
+          session: peer.session,
           localGuest: peer.localGuest,
         };
       },
@@ -292,6 +293,11 @@ export class NodeHttp2VerserHost implements VerserHost {
         this.leasePool.acquireLease(guestId, requestId, timeoutMs),
       tryAcquireFederatedRequestStream: (hostId, timeoutMs) =>
         this.tryAcquireFederatedRequestStream(hostId, timeoutMs),
+      routeAuthorizerEnabled: () => this.routeAuthorizer !== undefined,
+      authorizeFederatedHop: (previousAdvertisedDomain, nextSelectedDomain) =>
+        this.authorizeFederatedHopPair(previousAdvertisedDomain, nextSelectedDomain),
+      getBrokerHopDomain: (sourceId) => this.getRegisteredBrokerHopDomain(sourceId),
+      getEgressSourceId: () => this.options.hostId ?? 'host',
       trackController: (peerId, controller) => this.trackLocalRequestController(peerId, controller),
       untrackController: (peerId, controller) =>
         this.untrackLocalRequestController(peerId, controller),
@@ -2451,7 +2457,15 @@ export class NodeHttp2VerserHost implements VerserHost {
       hopCount: 0,
     });
     try {
-      const result = await this.routeFederationVws(brokerStream, openFrame, candidates);
+      const result = await this.routeFederationVws(
+        brokerStream,
+        openFrame,
+        candidates,
+        undefined,
+        // Source is already session-bound above; the persisted hop-domain is
+        // the previous hop for a direct Broker VWS egress.
+        this.getRegisteredBrokerHopDomain(sourceId),
+      );
       const responseHeaders: http2.OutgoingHttpHeaders = { ':status': 200 };
       if (result.protocol.length > 0) responseHeaders['x-verser-ws-protocol'] = result.protocol;
       brokerStream.respond(responseHeaders);
@@ -2574,6 +2588,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     open: ReturnType<typeof createFederationVwsOpen>,
     candidates: readonly FederatedRouteRegistration[],
     sourceHostId?: string,
+    previousHopDomain?: string,
   ): Promise<{
     stream: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
     protocol: string;
@@ -2589,6 +2604,7 @@ export class NodeHttp2VerserHost implements VerserHost {
         open,
         candidates,
         sourceHostId,
+        previousHopDomain,
         controller.signal,
       );
     } finally {
@@ -2602,6 +2618,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     open: ReturnType<typeof createFederationVwsOpen>,
     candidates: readonly FederatedRouteRegistration[],
     sourceHostId?: string,
+    previousHopDomain?: string,
     signal?: AbortSignal,
   ): Promise<{
     stream: http2.ServerHttp2Stream | http2.ClientHttp2Stream;
@@ -2613,6 +2630,44 @@ export class NodeHttp2VerserHost implements VerserHost {
       if (candidate.source !== 'local' && candidate.nextHopHostId === sourceHostId) continue;
       let destination: http2.ServerHttp2Stream | http2.ClientHttp2Stream | undefined;
       try {
+        // Hop-local route authorization after concrete candidate resolution
+        // and before destination acquisition, VWS open forwarding, or
+        // bridging. Inbound/upstream federation VWS uses the incoming open
+        // domain as the previous hop; a direct Broker VWS egressing to an
+        // upstream candidate uses the Broker's persisted hop-domain.
+        if (
+          this.routeAuthorizer !== undefined &&
+          (sourceHostId !== undefined || candidate.source !== 'local')
+        ) {
+          const previous = sourceHostId !== undefined ? open.domain : previousHopDomain;
+          if (previous === undefined || previous.length === 0) {
+            throw createVerserError(
+              'authorization-denied',
+              'Broker VWS has no registered hop domain for federation route authorization',
+              { targetId: open.targetId, domain: candidate.domain, sourceId: open.sourceId },
+            );
+          }
+          const allowed = await this.authorizeFederatedHopPair(previous, candidate.domain);
+          if (!allowed) {
+            throw createVerserError(
+              'authorization-denied',
+              'Federation route authorization denied',
+              {
+                targetId: candidate.targetId,
+                domain: candidate.domain,
+              },
+            );
+          }
+          // Post-await revalidation: a route lost during the decision must
+          // not be forwarded on the stale allow.
+          if (this.routeRegistry.getCandidates(candidate.targetId, candidate.domain).length === 0) {
+            throw createVerserError(
+              'missing-guest',
+              'Federation WebSocket route was removed during authorization',
+              { targetId: candidate.targetId, domain: candidate.domain },
+            );
+          }
+        }
         if (candidate.source === 'local') {
           const leases = this.wsIdleLeases.get(candidate.targetId);
           if (leases === undefined || leases.length === 0) {
@@ -2792,6 +2847,10 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.validateFederationVwsOpen(open);
     return createFederationVwsOpen({
       ...open,
+      // Host-to-Host egress replaces the previous-hop identity: the origin
+      // Broker ID never crosses this boundary. Loop-prevention metadata stays
+      // protocol-internal and is never used for authorization.
+      sourceId: this.getFederationHostId(),
       viaHostIds: [...open.viaHostIds, nextHopHostId],
       hopCount: open.hopCount + 1,
     });

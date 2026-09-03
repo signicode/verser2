@@ -20,8 +20,8 @@
 
 ## Status
 
-- Current phase: 2 complete — authorization foundation and registration binding
-  passed review; preparing checkpoint commit and PR.
+- Current phase: 4 — final validation and delivery. Phase 2 checkpoint:
+  `b1bada4`; draft PR: #62. Phase 3 passed formal review.
 - Deepwork skill is unavailable in this environment; these requested deepwork
   controls are being followed manually.
 

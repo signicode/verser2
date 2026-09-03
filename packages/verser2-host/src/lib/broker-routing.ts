@@ -166,10 +166,123 @@ function rewriteGuestHeaders(
   return rewritten;
 }
 
+/**
+ * Outcome of one hop-local federation authorization evaluation.
+ *
+ * - `'not-required'` — no route authorizer configured (behavior preserved).
+ * - `'allowed'` — the pair is authorized and the candidate route is still
+ *   active after the (possibly awaited) decision.
+ * - `'denied'` — the pair lacks a previous-hop domain or was denied.
+ * - `'route-lost'` — allowed, but the affected route was removed during the
+ *   decision, so forwarding must not proceed on the stale decision.
+ */
+export type FederationHopOutcome = 'not-required' | 'allowed' | 'denied' | 'route-lost';
+
+/**
+ * Evaluates one hop-local `{ previousAdvertisedDomain, nextSelectedDomain }`
+ * pair after concrete candidate resolution and before any federation stream
+ * acquisition, envelope/frame write, body piping, or bridging.
+ *
+ * When no authorizer is configured this is a no-op (`'not-required'`) so
+ * existing behavior is preserved. After an awaited allow, the selected route
+ * is revalidated so a route lost during the decision cannot be forwarded on.
+ */
+export async function evaluateFederationHop(
+  callbacks: BrokerRoutingCallbacks,
+  previousAdvertisedDomain: string | undefined,
+  targetId: string,
+  nextSelectedDomain: string,
+): Promise<FederationHopOutcome> {
+  if (!callbacks.routeAuthorizerEnabled()) {
+    return 'not-required';
+  }
+  const previous =
+    previousAdvertisedDomain === undefined
+      ? ''
+      : normalizeRequestedDomain(previousAdvertisedDomain);
+  const selected = normalizeRequestedDomain(nextSelectedDomain);
+  if (previous.length === 0) {
+    return 'denied';
+  }
+  const allowed = await callbacks.authorizeFederatedHop(previous, selected);
+  if (!allowed) {
+    return 'denied';
+  }
+  const stillActive = Array.from(callbacks.getRouteCandidates(targetId)).some(
+    (candidate) => normalizeRequestedDomain(candidate.domain) === selected,
+  );
+  return stillActive ? 'allowed' : 'route-lost';
+}
+
+/** Throws the stable denial/unavailable errors for a federated hop outcome. */
+async function assertFederationHopAllowed(
+  callbacks: BrokerRoutingCallbacks,
+  previousAdvertisedDomain: string | undefined,
+  targetId: string,
+  nextSelectedDomain: string,
+): Promise<void> {
+  const outcome = await evaluateFederationHop(
+    callbacks,
+    previousAdvertisedDomain,
+    targetId,
+    nextSelectedDomain,
+  );
+  if (outcome === 'denied') {
+    throw createVerserError('authorization-denied', 'Federation route authorization denied', {
+      targetId,
+      domain: normalizeRequestedDomain(nextSelectedDomain),
+    });
+  }
+  if (outcome === 'route-lost') {
+    throw createVerserError('missing-guest', 'Federation route was removed during authorization', {
+      targetId,
+      domain: normalizeRequestedDomain(nextSelectedDomain),
+    });
+  }
+}
+
+/**
+ * Resolves the previous-hop domain for a remote Broker HTTP request.
+ *
+ * Binds `x-verser-source-id` to a Broker registered on the current HTTP/2
+ * session before reading its stored hop-domain; spoofed, unregistered, or
+ * hop-domain-less sources fail with `authorization-denied` before forwarding.
+ */
+function resolveRemoteBrokerHopDomain(
+  stream: http2.ServerHttp2Stream,
+  headers: http2.IncomingHttpHeaders,
+  callbacks: BrokerRoutingCallbacks,
+): string {
+  const sourceId = String(headers['x-verser-source-id'] ?? '');
+  const source = sourceId.length > 0 ? callbacks.getPeer(sourceId) : undefined;
+  if (
+    source === undefined ||
+    source.role !== 'broker' ||
+    source.transport !== 'h2' ||
+    source.session !== stream.session
+  ) {
+    throw createVerserError(
+      'authorization-denied',
+      'Request source is not a Broker registered on this HTTP/2 session',
+      { sourceId },
+    );
+  }
+  const brokerHopDomain = callbacks.getBrokerHopDomain(sourceId);
+  if (brokerHopDomain === undefined) {
+    throw createVerserError(
+      'authorization-denied',
+      'Broker has no registered hop domain for federation route authorization',
+      { sourceId },
+    );
+  }
+  return brokerHopDomain;
+}
+
 /** Minimal peer info needed by the routing functions. */
 export interface PeerInfo {
   readonly role: string;
   readonly transport?: string;
+  readonly session?: http2.Http2Session;
   readonly localGuest?: { readonly listener: VerserLocalGuestRequestListener };
 }
 
@@ -210,6 +323,28 @@ export interface BrokerRoutingCallbacks {
     hostId: string,
     timeoutMs: number,
   ): Promise<AcquiredFederatedRequestStream | undefined>;
+
+  /** Returns whether the Host has a hop-local `routeAuthorizer` configured. */
+  routeAuthorizerEnabled(): boolean;
+
+  /**
+   * Hop-local authorization for one resolved federation candidate pair.
+   * Resolves `true` when no authorizer is configured; otherwise consults the
+   * cached, revocable Host authorizer.
+   */
+  authorizeFederatedHop(
+    previousAdvertisedDomain: string,
+    nextSelectedDomain: string,
+  ): Promise<boolean>;
+
+  /** Normalized `brokerHopDomain` persisted for a registered Broker peer. */
+  getBrokerHopDomain(sourceId: string): string | undefined;
+
+  /**
+   * Identity that replaces the request `sourceId` at every Host-to-Host
+   * HTTP/VWS egress so origin and hop history are never carried forward.
+   */
+  getEgressSourceId(): string;
 
   /** Track an AbortController under a peer ID for cleanup on disconnect. */
   trackController(peerId: VerserPeerId, controller: AbortController): void;
@@ -279,7 +414,8 @@ async function readFederatedResponseMetadata(
  * Pipes the incoming Broker stream to the federation stream, reads response
  * metadata, then pipes the federation stream response back to the Broker
  * stream. Handles cancellation propagation (aborted/reset streams) and
- * cleanup.
+ * cleanup. The envelope `sourceId` is replaced with the local Host's egress
+ * identity so origin and hop history never cross a Host-to-Host boundary.
  */
 async function routeH2BrokerRequestOverFederationStream(
   stream: http2.ServerHttp2Stream,
@@ -288,6 +424,7 @@ async function routeH2BrokerRequestOverFederationStream(
   requestId: string,
   targetId: string,
   routeDomain: string | undefined,
+  egressSourceId: string,
 ): Promise<void> {
   let completed = false;
   const cancelForwarding = (): void => {
@@ -319,7 +456,9 @@ async function routeH2BrokerRequestOverFederationStream(
       type: 'request',
       metadata: {
         requestId,
-        sourceId: String(headers['x-verser-source-id'] ?? ''),
+        // Host-to-Host egress replaces the previous-hop identity: the origin
+        // Broker ID never crosses this boundary.
+        sourceId: egressSourceId,
         targetId,
         routeDomain,
         method: String(headers['x-verser-method'] ?? headers[':method'] ?? 'GET'),
@@ -598,12 +737,19 @@ export async function routeBrokerRequest(
  * target Guest is not locally registered.
  *
  * Iterates upstream route candidates and tries to acquire a federated
- * request stream for each candidate. On success, forwards the request
- * via `routeH2BrokerRequestOverFederationStream`.
+ * request stream for each candidate. When the Host route authorizer is
+ * configured, `x-verser-source-id` is first bound to a Broker registered on
+ * the current HTTP/2 session and its persisted hop-domain becomes the
+ * previous hop; each concrete candidate is authorized (and revalidated after
+ * an awaited decision) before stream acquisition or body forwarding. On
+ * success, forwards the request via `routeH2BrokerRequestOverFederationStream`.
  *
  * @returns `true` if the request was forwarded to a federated host,
  *          `false` if no upstream candidates exist.
  * @throws `upstream-unavailable` if candidates exist but none are reachable.
+ * @throws `authorization-denied` if the authorizer is configured and the
+ *   source is not a session-bound Broker, lacks a hop-domain, or every
+ *   resolved candidate pair was denied.
  */
 async function tryRouteH2BrokerRequestToFederatedHost(
   stream: http2.ServerHttp2Stream,
@@ -613,6 +759,9 @@ async function tryRouteH2BrokerRequestToFederatedHost(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<boolean> {
   let hadUpstreamCandidate = false;
+  let hadDeniedCandidate = false;
+  let previousHopDomain: string | undefined;
+  let hopDomainResolved = false;
   const requestedHeaders = decodeHeaderMap(String(headers['x-verser-headers'] ?? '{}'));
   const requestedValue =
     headers['x-verser-route-domain'] ??
@@ -649,6 +798,20 @@ async function tryRouteH2BrokerRequestToFederatedHost(
       continue;
     }
     hadUpstreamCandidate = true;
+    if (callbacks.routeAuthorizerEnabled() && !hopDomainResolved) {
+      hopDomainResolved = true;
+      previousHopDomain = resolveRemoteBrokerHopDomain(stream, headers, callbacks);
+    }
+    const hop = await evaluateFederationHop(
+      callbacks,
+      previousHopDomain,
+      targetId,
+      candidate.domain,
+    );
+    if (hop === 'denied' || hop === 'route-lost') {
+      hadDeniedCandidate = hadDeniedCandidate || hop === 'denied';
+      continue;
+    }
     unavailableCandidates.push({
       domain: candidate.domain,
       originHostId: candidate.originHostId,
@@ -670,8 +833,21 @@ async function tryRouteH2BrokerRequestToFederatedHost(
       requestId,
       targetId,
       candidate.domain,
+      callbacks.getEgressSourceId(),
     );
     return true;
+  }
+
+  if (hadDeniedCandidate) {
+    throw createVerserError(
+      'authorization-denied',
+      'Federation route authorization denied for every resolved candidate',
+      {
+        targetId,
+        direction: 'federated-candidates',
+        deniedCount: candidates.length,
+      },
+    );
   }
 
   if (hadUpstreamCandidate) {
@@ -782,6 +958,17 @@ export async function routeLocalRequestDispatch(
         request.headers,
         callbacks,
       );
+      // Incoming-federation dispatch hop: the incoming resolved route domain
+      // is the previous hop and the concrete selected candidate domain is the
+      // next. Enforced before any envelope write, body piping, or bridging.
+      if (request.previousHopDomain !== undefined) {
+        await assertFederationHopAllowed(
+          callbacks,
+          request.previousHopDomain,
+          request.targetId,
+          routeDomain ?? '',
+        );
+      }
       const localDispatchRequest = {
         ...dispatchRequest,
         routeDomain,
@@ -943,7 +1130,12 @@ async function routeLocalRequestToH2Guest(
  * target Guest is not locally registered.
  *
  * Iterates upstream route candidates and tries to acquire a federated
- * request stream for each. On success, forwards the request via
+ * request stream for each. When the route authorizer is configured, the
+ * previous hop is the incoming federation baton (`previousHopDomain`) or,
+ * for Broker-originated requests, the local Broker's persisted hop-domain;
+ * a missing hop-domain fails with `authorization-denied` and each concrete
+ * candidate is authorized and revalidated before stream acquisition or body
+ * forwarding. On success, forwards the request via
  * `routeLocalRequestOverFederationStream`.
  *
  * @returns The response if forwarded, `undefined` if no upstream candidates.
@@ -954,6 +1146,9 @@ async function tryRouteLocalRequestToFederatedHost(
   callbacks: BrokerRoutingCallbacks,
 ): Promise<VerserLocalBrokerResponse | undefined> {
   let hadUpstreamCandidate = false;
+  let hadDeniedCandidate = false;
+  let previousHopDomain = request.previousHopDomain;
+  let hopDomainResolved = request.previousHopDomain !== undefined;
   const requested =
     request.routeDomain ??
     headerValue(request.headers, 'host') ??
@@ -988,6 +1183,30 @@ async function tryRouteLocalRequestToFederatedHost(
       continue;
     }
     hadUpstreamCandidate = true;
+    if (callbacks.routeAuthorizerEnabled() && !hopDomainResolved) {
+      hopDomainResolved = true;
+      // Local Broker handles are Host-owned: use the persisted registration
+      // hop-domain. A Broker-selected federation request without one is
+      // denied before forwarding.
+      previousHopDomain = callbacks.getBrokerHopDomain(request.sourceId);
+      if (previousHopDomain === undefined) {
+        throw createVerserError(
+          'authorization-denied',
+          'Broker has no registered hop domain for federation route authorization',
+          { sourceId: request.sourceId, targetId: request.targetId },
+        );
+      }
+    }
+    const hop = await evaluateFederationHop(
+      callbacks,
+      previousHopDomain,
+      request.targetId,
+      candidate.domain,
+    );
+    if (hop === 'denied' || hop === 'route-lost') {
+      hadDeniedCandidate = hadDeniedCandidate || hop === 'denied';
+      continue;
+    }
     unavailableCandidates.push({
       domain: candidate.domain,
       originHostId: candidate.originHostId,
@@ -1005,6 +1224,21 @@ async function tryRouteLocalRequestToFederatedHost(
     return routeLocalRequestOverFederationStream(
       { ...request, routeDomain: candidate.domain },
       acquired.stream,
+      callbacks.getEgressSourceId(),
+    );
+  }
+
+  if (hadDeniedCandidate) {
+    return Promise.reject(
+      createVerserError(
+        'authorization-denied',
+        'Federation route authorization denied for every resolved candidate',
+        {
+          targetId: request.targetId,
+          direction: 'federated-candidates',
+          deniedCount: candidates.length,
+        },
+      ),
     );
   }
 
@@ -1030,11 +1264,14 @@ async function tryRouteLocalRequestToFederatedHost(
  * Forwards a local Broker request through an acquired federation stream.
  *
  * Writes the request envelope, pipes the request body, reads response
- * metadata, and pipes the federation stream response body back.
+ * metadata, and pipes the federation stream response body back. The envelope
+ * `sourceId` is replaced with the local Host's egress identity so origin and
+ * hop history never cross a Host-to-Host boundary.
  */
 async function routeLocalRequestOverFederationStream(
   request: LocalDispatchRequest,
   requestStream: FederationRequestStream,
+  egressSourceId: string,
 ): Promise<VerserLocalBrokerResponse> {
   const body = new PassThrough();
   const destroyBody = body.destroy.bind(body);
@@ -1088,7 +1325,9 @@ async function routeLocalRequestOverFederationStream(
       type: 'request',
       metadata: {
         requestId: request.requestId,
-        sourceId: request.sourceId,
+        // Host-to-Host egress replaces the previous-hop identity: the origin
+        // Broker ID never crosses this boundary.
+        sourceId: egressSourceId,
         targetId: request.targetId,
         routeDomain: request.routeDomain,
         method: request.method,
