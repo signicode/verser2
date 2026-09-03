@@ -27,9 +27,8 @@
 
 ## Follow-up: cache TTL and route/session binding
 
-- Current phase: delivery. Add separately configurable positive and negative
-  authorization-cache TTLs with defaults of `60_000` ms and one tenth of the
-  configured positive TTL, respectively.
+- Complete — final review passed; `npm test` and `npm run lint` passed.
+  Follow-up commit: `c5bc933` on PR #62.
 - Rename the public Broker option from `brokerHopDomain` to `brokerDomain`.
   The rename covers registration payload/context, Node/Bun/Python and local
   Broker options, docs, and tests. It is a clean replacement: the legacy field
