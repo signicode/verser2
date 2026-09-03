@@ -30,9 +30,13 @@ to override the staged publish registry for GitHub Packages previews.`);
   process.exit(0);
 }
 
-function safePackageName(name) {
-  return name.replace(/^@/, '').replaceAll('/', '-');
-}
+// Shared, non-drifting complete staged artifact specification (also used by
+// package readiness and the bounded runner's --skip-build-stage preflight).
+const {
+  STAGED_PACKAGE_REQUIRED_FILES,
+  safePackageName,
+  readStagedArtifactIssue,
+} = require('./staged-artifacts.js');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -40,12 +44,6 @@ function readJson(filePath) {
 
 function ensureDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true });
-}
-
-function requireFile(filePath) {
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`Required file is missing: ${filePath}`);
-  }
 }
 
 function getDocumentationReference() {
@@ -141,13 +139,61 @@ function buildStagedManifest(sourceManifest) {
 
 const docsReference = getDocumentationReference();
 
+/**
+ * Maps one shared-spec staged artifact path to its source input inside the
+ * workspace package directory. The staged output set is exactly
+ * STAGED_PACKAGE_REQUIRED_FILES; this only resolves inputs, so no parallel
+ * output list can drift from the central specification.
+ */
+function sourcePathForStagedArtifact(packageDirectory, requiredFile) {
+  switch (requiredFile) {
+    case 'package.json':
+      return path.join(packageDirectory, 'package.json');
+    case 'dist/index.js':
+      return path.join(packageDirectory, 'dist', 'index.js');
+    case 'dist/index.d.ts':
+      return path.join(packageDirectory, 'dist', 'index.d.ts');
+    case 'LICENSE':
+      return path.join(packageDirectory, 'dist', 'LICENSE');
+    case 'README.md':
+      return path.join(packageDirectory, 'README.md');
+    default:
+      throw new Error(`No staging source input defined for staged artifact ${requiredFile}`);
+  }
+}
+
+/** Requires a source input that satisfies the shared non-empty regular-file rule. */
+function requireSourceFile(filePath) {
+  const issue = readStagedArtifactIssue(filePath);
+  if (issue !== undefined) {
+    throw new Error(`Required ${issue} source file for staging: ${filePath}`);
+  }
+}
+
+/** Writes the staged form of one required artifact into the staged package. */
+function stageArtifact(packageDirectory, stagedPackageDirectory, requiredFile, sourceManifest) {
+  const stagedPath = path.join(stagedPackageDirectory, requiredFile);
+  ensureDirectory(path.dirname(stagedPath));
+  const sourcePath = sourcePathForStagedArtifact(packageDirectory, requiredFile);
+  if (requiredFile === 'package.json') {
+    const stagedManifest = buildStagedManifest(sourceManifest);
+    fs.writeFileSync(stagedPath, `${JSON.stringify(stagedManifest, null, 2)}\n`, 'utf8');
+    return;
+  }
+  if (requiredFile === 'README.md') {
+    const publishedReadme = rewriteReadmeLinksForPublishedPackage(
+      fs.readFileSync(sourcePath, 'utf8'),
+      packageDirectory,
+      docsReference,
+    );
+    fs.writeFileSync(stagedPath, publishedReadme, 'utf8');
+    return;
+  }
+  fs.copyFileSync(sourcePath, stagedPath);
+}
+
 for (const packageDirectory of packageDirectories) {
   const sourceManifestPath = path.join(packageDirectory, 'package.json');
-  const sourceDistDirectory = path.join(packageDirectory, 'dist');
-  const sourceJavaScriptArtifact = path.join(sourceDistDirectory, 'index.js');
-  const sourceDeclarationArtifact = path.join(sourceDistDirectory, 'index.d.ts');
-  const sourceLicenseArtifact = path.join(sourceDistDirectory, 'LICENSE');
-  const sourceReadmePath = path.join(packageDirectory, 'README.md');
 
   if (!fs.existsSync(sourceManifestPath)) {
     throw new Error(`Source package manifest is missing: ${sourceManifestPath}`);
@@ -160,30 +206,21 @@ for (const packageDirectory of packageDirectories) {
     throw new Error(`Source package manifest missing valid name: ${sourceManifestPath}`);
   }
 
-  requireFile(sourceJavaScriptArtifact);
-  requireFile(sourceDeclarationArtifact);
-  requireFile(sourceLicenseArtifact);
-  requireFile(sourceReadmePath);
-
   const stagedPackageDirectory = path.join(stagingRootDirectory, safePackageName(packageName));
   fs.rmSync(stagedPackageDirectory, { recursive: true, force: true });
   ensureDirectory(stagedPackageDirectory);
-  ensureDirectory(path.join(stagedPackageDirectory, 'dist'));
 
-  fs.copyFileSync(sourceJavaScriptArtifact, path.join(stagedPackageDirectory, 'dist', 'index.js'));
-  fs.copyFileSync(
-    sourceDeclarationArtifact,
-    path.join(stagedPackageDirectory, 'dist', 'index.d.ts'),
-  );
-  fs.copyFileSync(sourceLicenseArtifact, path.join(stagedPackageDirectory, 'LICENSE'));
-  const publishedReadme = rewriteReadmeLinksForPublishedPackage(
-    fs.readFileSync(sourceReadmePath, 'utf8'),
-    packageDirectory,
-    docsReference,
-  );
-  fs.writeFileSync(path.join(stagedPackageDirectory, 'README.md'), publishedReadme, 'utf8');
-
-  const stagedManifest = buildStagedManifest(sourceManifest);
-  const stagedManifestPath = path.join(stagedPackageDirectory, 'package.json');
-  fs.writeFileSync(stagedManifestPath, `${JSON.stringify(stagedManifest, null, 2)}\n`, 'utf8');
+  // Emit and then verify every member of the shared complete staged
+  // artifact specification; nothing outside the spec is staged and nothing
+  // in the spec is left unasserted.
+  for (const requiredFile of STAGED_PACKAGE_REQUIRED_FILES) {
+    requireSourceFile(sourcePathForStagedArtifact(packageDirectory, requiredFile));
+    stageArtifact(packageDirectory, stagedPackageDirectory, requiredFile, sourceManifest);
+    const issue = readStagedArtifactIssue(path.join(stagedPackageDirectory, requiredFile));
+    if (issue !== undefined) {
+      throw new Error(
+        `Staged ${requiredFile} for ${packageName} is ${issue}: ${path.join(stagedPackageDirectory, requiredFile)}`,
+      );
+    }
+  }
 }

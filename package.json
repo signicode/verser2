@@ -14,6 +14,7 @@
     "test:package-tarballs": "node ./scripts/test-package-tarballs.js",
     "test": "npm run test:bounded",
     "test:bounded": "node ./scripts/run-bounded-tests.js",
+    "test:bounded:staged": "node ./scripts/run-bounded-tests.js --skip-build-stage --live-timestamps",
     "test:coverage": "npm run build && npm run stage:packages && node --test --experimental-test-coverage test/*.test.js",
     "test:bounded:coverage": "node ./scripts/run-bounded-tests.js --coverage",
     "lint": "biome check ."
@@ -25,12 +26,12 @@
     "dts-bundle-generator": "^9.5.1",
     "tsup": "^8.5.1",
     "typescript": "^5.4.5",
-    "undici": "^7.28.0"
+    "undici": "^7.29.0"
   },
   "overrides": {
     "esbuild": "^0.28.1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18.1"
   }
 }

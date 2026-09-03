@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.8.0 - Hop-local federation route authorization
+
+- Hosts can configure `routeAuthorizer` to allow or deny resolved adjacent
+  federation route pairs before HTTP request bodies or VWS opens are forwarded.
+  Successful and denied decisions are cached, revocable, invalidated with route
+  lifecycle changes, and may receive per-decision TTL overrides.
+- Broker source registration now uses `brokerDomain`; the former
+  `brokerHopDomain` option and wire field are rejected. On mTLS Hosts, a remote
+  Broker domain must exactly match a DNS SAN on its client certificate.
+- Established federation request streams and accepted VWS connections remain
+  route-bound without reauthorization or migration; physical HTTP/2 sessions
+  continue to multiplex independent requests.
+- Updates `undici` to 7.29.0 and Python `cryptography` to 50.0.0.
+
 ## v0.7.1 - Unauthorized client handler
 
 - Hosts can opt into `tls.clientAuth.unauthorizedClientHandler` for one bounded

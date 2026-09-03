@@ -173,7 +173,7 @@ jobs:
 
       - name: Run source tests and lint
         run: |
-          node --test test/*.test.js
+          npm run test:bounded:staged
           npm run lint
 
       - name: Confirm validation job never publishes packages

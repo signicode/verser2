@@ -192,6 +192,7 @@ For both publish paths, the workflow:
 - Uploads the validation job's `dist/packages` tree and Python wheel/source-distribution artifacts, then downloads those artifacts in the publish job instead of running a second full `npm run build` / `npm run stage:packages` cycle.
 - Runs `npm pack` on staged packages and consumes staged/tarball package sources in local validation.
 - Runs automated tarball behavior tests before the pull-request validation job completes.
+- Runs source tests and lint in the validation job via `npm run test:bounded:staged` (`node ./scripts/run-bounded-tests.js --skip-build-stage --live-timestamps`) plus `npm run lint`, reusing the job's earlier build/stage output after the runner's staged-artifact preflight.
 - Re-runs staged consumer validation, import-only tarball consumer validation, and automated tarball behavior tests after applying the publish version so internal package dependencies point at the same published version.
 - Runs automated tarball behavior tests before any npm publish/stage command executes.
 - Optionally runs GitHub Packages consumer validation with `VERSER_RUN_GITHUB_CONSUMER_TESTS=1`.

@@ -107,8 +107,13 @@ test('workflow builds, stages, and validates consumers locally', () => {
 
 test('workflow reuses existing build outputs for source tests and lint in validation job', () => {
   assertHas(
-    /package-validation:[\s\S]*?node --test test\/\*\.test\.js[\s\S]*?npm run lint[\s\S]*?Confirm validation job never publishes packages/,
-    'Expected validation job to run source tests without re-running npm test build/stage work.',
+    /package-validation:[\s\S]*?npm run test:bounded:staged[\s\S]*?npm run lint[\s\S]*?Confirm validation job never publishes packages/,
+    'Expected validation job to run source tests via the staged bounded runner without re-running build/stage.',
+  );
+  assert.equal(
+    /node --test test\/\*\.test\.js/.test(loadWorkflow()),
+    false,
+    'Expected no raw node --test suite invocation in the workflow.',
   );
 });
 

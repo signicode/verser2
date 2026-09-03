@@ -59,7 +59,7 @@ Root workspace:
 
 - [ ] Keep root `package.json` private if it is only a monorepo aggregator.
 - [ ] Add root `repository`, `homepage`, `bugs`, and `keywords` if npm package metadata or repo discoverability should use them.
-- [ ] Confirm Node engine requirement remains `>=20`.
+- [ ] Confirm Node engine requirement remains `>=20.18.1`.
 
 All JavaScript workspace packages:
 
@@ -86,6 +86,7 @@ Per-package notes:
 Current `.github/workflows/package-publish.yml` behavior:
 
 - Pull requests to `main` run only when configured source/package/test/workflow paths change.
+- The validation job runs source tests and lint via `npm run test:bounded:staged` followed by `npm run lint`, reusing the job's own build/staging output (the runner preflights staged artifacts before skipping build/stage) and streaming timestamped live output.
 - Pushes to `main` run validation and publish SHA-derived versions to GitHub Packages with the `next` dist-tag.
 - Tags matching `v*` run validation and publish tag-derived versions to GitHub Packages with the policy-selected dist-tag.
 - Pull requests never publish.
