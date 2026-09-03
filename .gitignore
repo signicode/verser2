@@ -5,5 +5,6 @@ coverage/
 __pycache__/
 *.pyc
 .venv/
+.slim/deepwork/
 test/fixtures/generated-tls/
 test/fixtures/generated-tls.lock/
