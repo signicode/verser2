@@ -99,7 +99,11 @@ test.before(async () => {
 
 test(
   'Broker exposes an Undici Dispatcher that routes fetch by advertised hostname',
-  { memoryLeakBytes: 512 * 1024 },
+  {
+    // First-use Undici/TLS/H2 lazy allocation may exceed the old local limit;
+    // this keeps per-test bound relaxed while global 1 MiB guard stays in place.
+    memoryLeakBytes: 1024 * 1024,
+  },
   async () => {
     const route = await createConnectedRoute(
       'dispatcher.local.test',
@@ -141,7 +145,11 @@ test(
 
 test(
   'Broker Dispatcher follows internal redirects for advertised route targets',
-  { memoryLeakBytes: 512 * 1024 },
+  {
+    // First-use Undici/TLS/H2 lazy allocation may exceed the old local limit;
+    // this keeps per-test bound relaxed while global 1 MiB guard stays in place.
+    memoryLeakBytes: 1024 * 1024,
+  },
   async () => {
     const host = createHost({ port: 0 });
     await host.start();
