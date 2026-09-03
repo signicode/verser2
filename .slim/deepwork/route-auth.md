@@ -47,6 +47,28 @@
   for the pair. Route/import/link/close invalidation clears both result classes
   and prevents stale pending outcomes from authorizing or repopulating either.
 
+## Follow-up: per-decision cache TTLs
+
+- Complete — final review passed; full test and lint validation passed.
+- Route-authorizer allow/deny decisions may optionally specify `cacheTtlMs`:
+  omission uses the configured Host cache TTL, `0` disables caching for that
+  result, and `Infinity` retains it until explicit revoke or lifecycle
+  invalidation. Callback errors remain uncached.
+- The callback accepts legacy `'allow'`/`'deny'` strings or
+  `{ decision, cacheTtlMs? }`; an omitted/undefined override uses the Host
+  TTL. Only `0`, a positive safe integer with a finite representable expiry,
+  or `Number.POSITIVE_INFINITY` is valid. Invalid/missing decisions, null,
+  non-numbers, NaN, negative or fractional values, unsafe integers, and
+  negative infinity fail deterministically without caching.
+- Callback output is normalized once to `{ decision, ttlMs }`. A current
+  pending allow may take effect/cache; a current pending deny may deny/cache;
+  stale pending results may do neither. Revoke/invalidation clears finite and
+  infinite entries; a `0` result still resolves its shared in-flight callers.
+- Tests cover legacy strings; finite, zero, and infinite allow/deny overrides;
+  invalid uncached output; expiry arithmetic; single-flight; pending/revoked
+  and lifecycle-invalidated object results; and documentation that `Infinity`
+  is callback-only while Host TTL options remain finite.
+
 ## Original reviewed plan (superseded cache terminology)
 
 1. Add a Host-level, async hop-local callback and a cached-pair revocation

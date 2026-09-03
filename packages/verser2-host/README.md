@@ -31,23 +31,32 @@ and can connect outbound to upstream Hosts for route-aware federation.
   [Docs: Authorization](../../docs/authorization.md))
 - Host option: `routeAuthorizer` — async hop-local callback deciding
   `'allow' | 'deny'` for a normalized
-  `{ previousAdvertisedDomain, nextSelectedDomain }` pair. Explicit allow and
-  deny results are cached with single-flight sharing under independently
-  configured TTLs; callback errors are never cached. Cached results are
-  invalidated by route/import/link mutations and Host shutdown; pending
-  outcomes observe a generation token so they cannot undo a later revoke or
-  route loss. An authorized logical federation request stream or accepted
-  federated VWS connection keeps its decision for its lifetime — cache
-  changes gate only new forwarding/open decisions, and physical HTTP/2
-  sessions are never route-bound. When absent, no route authorization is
-  performed.
+  `{ previousAdvertisedDomain, nextSelectedDomain }` pair. The callback may
+  return the legacy strings or an object
+  `{ decision, cacheTtlMs? }` that overrides the cache TTL for that single
+  result: omitted uses the finite Host class TTL below, `0` disables caching
+  for that result only, a positive safe integer overrides it, and
+  `Number.POSITIVE_INFINITY` caches until explicit revoke or lifecycle
+  invalidation (the only infinite option, and callback-only — the Host TTL
+  options remain finite). Malformed/missing decisions and invalid TTLs fail
+  deterministically and are never cached, like callback errors. Explicit
+  allow and deny results are cached with single-flight sharing until an
+  explicit revoke, a relevant route/import/link mutation, TTL expiry, or Host
+  shutdown invalidates them. Pending results observe a generation token so
+  they cannot undo a later revoke or route loss. An authorized logical
+  federation request stream or accepted federated VWS connection keeps its
+  decision for its lifetime — cache changes gate only new forwarding/open
+  decisions, and physical HTTP/2 sessions are never route-bound. When absent,
+  no route authorization is performed.
 - Host options: `routeAuthorizationCacheTtlMs` (positive/allow cache TTL,
   default `60000`) and `routeAuthorizationNegativeCacheTtlMs` (negative/deny
   cache TTL, default `Math.floor(routeAuthorizationCacheTtlMs / 10)`, i.e.
   `6000`). Both must be finite non-negative integers; `0` disables that cache
-  class. Entries expire lazily without timers.
+  class. Entries expire lazily without timers. Individual callback results
+  may override these TTLs via `cacheTtlMs`.
 - Host method: `host.revokeRouteAuthorization(pair)` — explicitly revoke the
-  cached allow or deny (and any in-flight decision) for one hop-local pair.
+  cached allow or deny — finite or infinite — (and any in-flight decision)
+  for one hop-local pair.
 - Broker domain binding: remote Brokers may register an optional
   `brokerDomain`; with Host mTLS its normalized value must exactly match a
   DNS SAN on the Broker client certificate (no wildcard or CN fallback).

@@ -521,3 +521,315 @@ test('legacy brokerHopDomain option is rejected by local attachment and the Node
 
   await host.close();
 });
+
+test('object results with an omitted or undefined cacheTtlMs use the Host class TTL', async () => {
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizationCacheTtlMs: 60_000,
+    routeAuthorizationNegativeCacheTtlMs: 60_000,
+    routeAuthorizer: () => {
+      calls += 1;
+      return calls === 1
+        ? { decision: 'allow' }
+        : calls === 2
+          ? { decision: 'deny', cacheTtlMs: undefined }
+          : 'allow';
+    },
+  });
+
+  assert.equal(await host.authorizeFederatedHopPair('obj.hop', 'alpha.verser.test'), true);
+  assert.equal(await host.authorizeFederatedHopPair('obj.hop', 'alpha.verser.test'), true);
+  assert.equal(calls, 1);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 1);
+
+  assert.equal(await host.authorizeFederatedHopPair('obj-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(await host.authorizeFederatedHopPair('obj-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(calls, 2);
+  assert.equal(host.routeAuthorizer.cachedDenyCount, 1);
+
+  await host.close();
+});
+
+test('a finite cacheTtlMs override replaces the class TTL for allow and deny results', async () => {
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizationCacheTtlMs: 60_000,
+    routeAuthorizationNegativeCacheTtlMs: 60_000,
+    routeAuthorizer: () => {
+      calls += 1;
+      return calls <= 2
+        ? { decision: 'allow', cacheTtlMs: 40 }
+        : { decision: 'deny', cacheTtlMs: 40 };
+    },
+  });
+
+  assert.equal(await host.authorizeFederatedHopPair('fin.hop', 'alpha.verser.test'), true);
+  assert.equal(await host.authorizeFederatedHopPair('fin.hop', 'alpha.verser.test'), true);
+  assert.equal(calls, 1);
+  await sleep(80);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 0);
+  assert.equal(await host.authorizeFederatedHopPair('fin.hop', 'alpha.verser.test'), true);
+  assert.equal(calls, 2);
+
+  assert.equal(await host.authorizeFederatedHopPair('fin-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(await host.authorizeFederatedHopPair('fin-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(calls, 3);
+  assert.equal(host.routeAuthorizer.cachedDenyCount, 1);
+  await sleep(80);
+  assert.equal(await host.authorizeFederatedHopPair('fin-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(calls, 4);
+
+  await host.close();
+});
+
+test('cacheTtlMs 0 disables caching for only that result while resolving its decision', async () => {
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizationCacheTtlMs: 60_000,
+    routeAuthorizer: () => {
+      calls += 1;
+      return calls <= 2
+        ? { decision: 'allow', cacheTtlMs: 0 }
+        : { decision: 'deny', cacheTtlMs: 0 };
+    },
+  });
+
+  assert.equal(await host.authorizeFederatedHopPair('zero.hop', 'alpha.verser.test'), true);
+  assert.equal(await host.authorizeFederatedHopPair('zero.hop', 'alpha.verser.test'), true);
+  assert.equal(calls, 2);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 0);
+
+  assert.equal(await host.authorizeFederatedHopPair('zero-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(await host.authorizeFederatedHopPair('zero-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(calls, 4);
+  assert.equal(host.routeAuthorizer.cachedDenyCount, 0);
+
+  await host.close();
+});
+
+test('a zero-TTL object result still resolves all shared in-flight callers', async () => {
+  const gate = deferred();
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizer: () => {
+      calls += 1;
+      return gate.promise;
+    },
+  });
+
+  const first = host.authorizeFederatedHopPair('shared-zero.hop', 'alpha.verser.test');
+  const second = host.authorizeFederatedHopPair('shared-zero.hop', 'alpha.verser.test');
+  gate.resolve({ decision: 'allow', cacheTtlMs: 0 });
+  assert.equal(await first, true);
+  assert.equal(await second, true);
+  assert.equal(calls, 1);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 0);
+
+  await host.close();
+});
+
+test('POSITIVE_INFINITY results cache until revoke or lifecycle invalidation', async () => {
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizationCacheTtlMs: 30,
+    routeAuthorizationNegativeCacheTtlMs: 30,
+    routeAuthorizer: () => {
+      calls += 1;
+      if (calls === 1) {
+        return { decision: 'allow', cacheTtlMs: Number.POSITIVE_INFINITY };
+      }
+      return { decision: 'deny', cacheTtlMs: Number.POSITIVE_INFINITY };
+    },
+  });
+
+  assert.equal(await host.authorizeFederatedHopPair('inf.hop', 'alpha.verser.test'), true);
+  await sleep(80);
+  assert.equal(await host.authorizeFederatedHopPair('inf.hop', 'alpha.verser.test'), true);
+  assert.equal(calls, 1);
+
+  assert.equal(await host.authorizeFederatedHopPair('inf-deny.hop', 'alpha.verser.test'), false);
+  await sleep(80);
+  assert.equal(await host.authorizeFederatedHopPair('inf-deny.hop', 'alpha.verser.test'), false);
+  assert.equal(calls, 2);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 1);
+  assert.equal(host.routeAuthorizer.cachedDenyCount, 1);
+
+  // Explicit revoke clears the infinite allow; lifecycle invalidation
+  // clears both classes including infinite entries.
+  assert.equal(
+    host.revokeRouteAuthorization({
+      previousAdvertisedDomain: 'inf.hop',
+      nextSelectedDomain: 'alpha.verser.test',
+    }),
+    true,
+  );
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 0);
+  host.setImportedFederatedRoutes('upstream-manager', [importedRoute()]);
+  assert.equal(host.routeAuthorizer.cachedDenyCount, 0);
+
+  await host.close();
+});
+
+test('malformed decisions and invalid cacheTtlMs values fail deterministically without caching', async () => {
+  const invalidResults = [
+    'maybe',
+    '',
+    42,
+    null,
+    ['allow'],
+    {},
+    { decision: 'permit' },
+    { decision: null },
+    { decision: 'allow', cacheTtlMs: null },
+    { decision: 'allow', cacheTtlMs: '5' },
+    { decision: 'allow', cacheTtlMs: -1 },
+    { decision: 'allow', cacheTtlMs: 1.5 },
+    { decision: 'allow', cacheTtlMs: Number.NaN },
+    { decision: 'allow', cacheTtlMs: Number.NEGATIVE_INFINITY },
+    { decision: 'allow', cacheTtlMs: 2 ** 53 },
+    // Date.now() + MAX_SAFE_INTEGER is not a safe integer: rejected.
+    { decision: 'allow', cacheTtlMs: Number.MAX_SAFE_INTEGER },
+    { decision: 'deny', cacheTtlMs: Number.NEGATIVE_INFINITY },
+  ];
+  for (const value of invalidResults) {
+    let calls = 0;
+    const host = createVerserHost({
+      hostId: 'host-hub',
+      routeAuthorizer: () => {
+        calls += 1;
+        return value;
+      },
+    });
+    await assert.rejects(
+      () => host.authorizeFederatedHopPair('bad.hop', 'alpha.verser.test'),
+      (error) => {
+        assert.equal(error.code, 'protocol-error');
+        return true;
+      },
+      `expected rejection for ${JSON.stringify(value) ?? String(value)}`,
+    );
+    assert.equal(host.routeAuthorizer.cachedAllowCount, 0);
+    assert.equal(host.routeAuthorizer.cachedDenyCount, 0);
+    assert.equal(host.routeAuthorizer.pendingDecisionCount, 0);
+    await assert.rejects(
+      () => host.authorizeFederatedHopPair('bad.hop', 'alpha.verser.test'),
+      (error) => error.code === 'protocol-error',
+    );
+    assert.equal(calls, 2, 'invalid results are never cached');
+    await host.close();
+  }
+});
+
+test('single-flight shares one object decision and all sharers reject a malformed one', async () => {
+  const gate = deferred();
+  let mode = 'gate';
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizer: () => {
+      calls += 1;
+      return mode === 'gate' ? gate.promise : 'nope';
+    },
+  });
+
+  const first = host.authorizeFederatedHopPair('sf.hop', 'alpha.verser.test');
+  const second = host.authorizeFederatedHopPair('sf.hop', 'alpha.verser.test');
+  assert.equal(host.routeAuthorizer.pendingDecisionCount, 1);
+  gate.resolve({ decision: 'allow', cacheTtlMs: Number.POSITIVE_INFINITY });
+  assert.equal(await first, true);
+  assert.equal(await second, true);
+  assert.equal(calls, 1);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 1);
+
+  mode = 'invalid';
+  const rejectedA = host.authorizeFederatedHopPair('sf-bad.hop', 'alpha.verser.test');
+  const rejectedB = host.authorizeFederatedHopPair('sf-bad.hop', 'alpha.verser.test');
+  await assert.rejects(
+    () => rejectedA,
+    (error) => error.code === 'protocol-error',
+  );
+  await assert.rejects(
+    () => rejectedB,
+    (error) => error.code === 'protocol-error',
+  );
+  assert.equal(calls, 2, 'the malformed shared decision ran the callback once');
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 1, 'only the earlier allow remains');
+  assert.equal(host.routeAuthorizer.cachedDenyCount, 0);
+  assert.equal(host.routeAuthorizer.pendingDecisionCount, 0);
+
+  await host.close();
+});
+
+test('expiry arithmetic: safe absolute expiries cache and MAX_SAFE_INTEGER is rejected without caching', async () => {
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizationCacheTtlMs: 60_000,
+    routeAuthorizer: () => {
+      calls += 1;
+      if (calls === 1) {
+        return { decision: 'allow', cacheTtlMs: 31_536_000_000 };
+      }
+      return { decision: 'allow', cacheTtlMs: Number.MAX_SAFE_INTEGER };
+    },
+  });
+
+  // A large TTL whose Date.now() + ttl expiry is still a safe integer caches.
+  assert.equal(await host.authorizeFederatedHopPair('arith.hop', 'alpha.verser.test'), true);
+  assert.equal(await host.authorizeFederatedHopPair('arith.hop', 'alpha.verser.test'), true);
+  assert.equal(calls, 1);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 1);
+
+  // Number.MAX_SAFE_INTEGER makes Date.now() + ttl unsafe: rejected and not
+  // cached (the expiry is validated at normalization, not recomputed later).
+  await assert.rejects(
+    () => host.authorizeFederatedHopPair('unsafe.hop', 'alpha.verser.test'),
+    (error) => {
+      assert.equal(error.code, 'protocol-error');
+      assert.match(error.message, /safe representable expiry/);
+      return true;
+    },
+  );
+  assert.equal(calls, 2);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 1);
+  await assert.rejects(
+    () => host.authorizeFederatedHopPair('unsafe.hop', 'alpha.verser.test'),
+    (error) => error.code === 'protocol-error',
+  );
+  assert.equal(calls, 3, 'the rejected MAX_SAFE_INTEGER override is never cached');
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 1);
+
+  await host.close();
+});
+
+test('stale pending object results neither take effect nor cache', async () => {
+  const gate = deferred();
+  let calls = 0;
+  const host = createVerserHost({
+    hostId: 'host-hub',
+    routeAuthorizer: () => {
+      calls += 1;
+      return gate.promise;
+    },
+  });
+
+  const pending = host.authorizeFederatedHopPair('stale-obj.hop', 'alpha.verser.test');
+  host.removeImportedFederatedRoutes('other-upstream');
+  gate.resolve({ decision: 'allow', cacheTtlMs: Number.POSITIVE_INFINITY });
+  assert.equal(await pending, false);
+  assert.equal(host.routeAuthorizer.cachedAllowCount, 0);
+
+  const pendingDeny = host.authorizeFederatedHopPair('stale-obj-deny.hop', 'alpha.verser.test');
+  host.removeImportedFederatedRoutes('other-upstream');
+  gate.resolve({ decision: 'deny', cacheTtlMs: 60_000 });
+  assert.equal(await pendingDeny, false);
+  assert.equal(host.routeAuthorizer.cachedDenyCount, 0);
+  assert.equal(calls, 2);
+
+  await host.close();
+});

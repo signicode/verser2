@@ -684,29 +684,74 @@ export interface VerserFederatedRouteAuthorizationPair {
 export type VerserFederatedRouteAuthorizationContext = VerserFederatedRouteAuthorizationPair;
 
 /**
- * The decision returned by a federated route authorization callback.
+ * The legacy decision string returned by a federated route authorization
+ * callback.
  *
- * - `'allow'` — the hop-local pair may forward; allowed decisions are cached.
- * - `'deny'` — the hop-local pair must not forward; denied decisions are
- *   never cached.
+ * - `'allow'` — the hop-local pair may forward; cached under the Host's
+ *   positive cache TTL.
+ * - `'deny'` — the hop-local pair must not forward; cached under the Host's
+ *   negative cache TTL.
  *
  * @public
  */
 export type VerserFederatedRouteAuthorizationDecision = 'allow' | 'deny';
 
 /**
+ * An object route authorization result with an optional per-decision cache
+ * TTL override.
+ *
+ * `cacheTtlMs` semantics:
+ * - omitted or `undefined` — the existing finite Host class TTL for the
+ *   decision (`routeAuthorizationCacheTtlMs` / `routeAuthorizationNegativeCacheTtlMs`).
+ * - `0` — disables caching for this single result only.
+ * - a positive safe integer whose computed `Date.now() + ttl` expiry is
+ *   itself a safe integer — overrides the class TTL for this result; the
+ *   expiry is validated and retained once, and a sum beyond the safe-integer
+ *   range (e.g. `Number.MAX_SAFE_INTEGER`) is rejected without caching.
+ * - `Number.POSITIVE_INFINITY` — caches until explicit revoke or lifecycle
+ *   invalidation. This is the only infinite option and is callback-only; the
+ *   Host TTL options remain finite.
+ *
+ * Any other value (null, non-number, NaN, negative, fractional, unsafe
+ * integer, negative infinity) is rejected deterministically and nothing is
+ * cached.
+ *
+ * @public
+ */
+export interface VerserFederatedRouteAuthorizationResult {
+  /** The hop-local decision for the pair. */
+  readonly decision: VerserFederatedRouteAuthorizationDecision;
+  /** Optional per-decision cache TTL override in milliseconds. */
+  readonly cacheTtlMs?: number;
+}
+
+/**
+ * The full result a federated route authorization callback may return: the
+ * legacy `'allow'`/`'deny'` strings or an object result with an optional
+ * per-decision cache TTL override.
+ *
+ * @public
+ */
+export type VerserFederatedRouteAuthorizationOutcome =
+  | VerserFederatedRouteAuthorizationDecision
+  | VerserFederatedRouteAuthorizationResult;
+
+/**
  * Callback for authorizing hop-local federated route pairs before forwarding.
  *
- * Configured via the Host `routeAuthorizer` option. The Host caches only
- * allowed decisions (single-flight per normalized pair) and revokes cached
- * allows on route mutations, federation-link removal, explicit pair
- * revocation, and Host shutdown.
+ * Configured via the Host `routeAuthorizer` option. The Host caches explicit
+ * allow and deny results (single-flight per normalized pair) under the
+ * configured class TTLs, optionally overridden per decision via
+ * {@link VerserFederatedRouteAuthorizationResult.cacheTtlMs}, and revokes
+ * cached results on route mutations, federation-link removal, explicit pair
+ * revocation, and Host shutdown. Callback errors and malformed results are
+ * never cached.
  *
  * @public
  */
 export type VerserFederatedRouteAuthorizationCallback = (
   context: VerserFederatedRouteAuthorizationContext,
-) => VerserFederatedRouteAuthorizationDecision | Promise<VerserFederatedRouteAuthorizationDecision>;
+) => VerserFederatedRouteAuthorizationOutcome | Promise<VerserFederatedRouteAuthorizationOutcome>;
 
 /**
  * Buffered request data provided to an unauthorized-client handler.

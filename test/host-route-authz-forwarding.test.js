@@ -1125,3 +1125,172 @@ test('physical HTTP/2 sessions stay multiplexed: a denied decision does not pois
     await runner.close('test-complete');
   }
 });
+
+test('per-decision cacheTtlMs 0 and Infinity overrides apply across live federation forwarding', async () => {
+  let calls = 0;
+  let mode = 'zero';
+  const manager = createVerserHost({
+    hostId: 'authz-perttl-manager',
+    tls: tlsOptions(),
+    routeAuthorizationCacheTtlMs: 60_000,
+    routeAuthorizer: () => {
+      calls += 1;
+      return mode === 'zero'
+        ? { decision: 'allow', cacheTtlMs: 0 }
+        : { decision: 'allow', cacheTtlMs: Number.POSITIVE_INFINITY };
+    },
+  });
+  const runner = createVerserHost({ hostId: 'authz-perttl-runner', tls: tlsOptions() });
+  const guest = guestListenerFactory(async (request) => (await text(request)).length);
+  let broker;
+
+  try {
+    await manager.start();
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: clientTls(),
+    });
+    await runner.attachLocalGuest({
+      guestId: 'authz-perttl-guest',
+      routedDomains: ['authz-perttl.verser.test'],
+      listener: guest.listener,
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('authz-perttl-guest', 'authz-perttl.verser.test')
+          .length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'authz-perttl-broker',
+      brokerDomain: 'perttl-hop.verser.test',
+      tls: clientTls(),
+    });
+    await broker.connect();
+
+    // cacheTtlMs 0: every forwarding decision re-invokes the callback.
+    for (const path of ['/a', '/b', '/c']) {
+      const response = await broker.request({
+        targetId: 'authz-perttl-guest',
+        routeDomain: 'authz-perttl.verser.test',
+        method: 'GET',
+        path,
+      });
+      assert.equal(response.statusCode, 200);
+      await text(response.body);
+    }
+    assert.equal(calls, 3);
+    assert.equal(manager.routeAuthorizer.cachedAllowCount, 0);
+
+    // Infinity: cached past the class TTL until explicit revoke.
+    mode = 'infinite';
+    const first = await broker.request({
+      targetId: 'authz-perttl-guest',
+      routeDomain: 'authz-perttl.verser.test',
+      method: 'GET',
+      path: '/d',
+    });
+    await text(first.body);
+    const second = await broker.request({
+      targetId: 'authz-perttl-guest',
+      routeDomain: 'authz-perttl.verser.test',
+      method: 'GET',
+      path: '/e',
+    });
+    await text(second.body);
+    // 3 zero-TTL calls + 1 Infinity call; the second Infinity call is cached.
+    assert.equal(calls, 4);
+    assert.equal(manager.routeAuthorizer.cachedAllowCount, 1);
+    assert.equal(
+      manager.revokeRouteAuthorization({
+        previousAdvertisedDomain: 'perttl-hop.verser.test',
+        nextSelectedDomain: 'authz-perttl.verser.test',
+      }),
+      true,
+    );
+    assert.equal(manager.routeAuthorizer.cachedAllowCount, 0);
+    const third = await broker.request({
+      targetId: 'authz-perttl-guest',
+      routeDomain: 'authz-perttl.verser.test',
+      method: 'GET',
+      path: '/f',
+    });
+    await text(third.body);
+    assert.equal(calls, 5);
+  } finally {
+    await broker?.close('test-complete');
+    await manager.close('test-complete');
+    await runner.close('test-complete');
+  }
+});
+
+test('a malformed authorizer result rejects the Broker request deterministically and is never cached', async () => {
+  let calls = 0;
+  const manager = createVerserHost({
+    hostId: 'authz-badresult-manager',
+    tls: tlsOptions(),
+    routeAuthorizer: () => {
+      calls += 1;
+      return { decision: 'maybe' };
+    },
+  });
+  const runner = createVerserHost({ hostId: 'authz-badresult-runner', tls: tlsOptions() });
+  const guest = guestListenerFactory(async (request) => (await text(request)).length);
+  let broker;
+
+  try {
+    await manager.start();
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: clientTls(),
+    });
+    await runner.attachLocalGuest({
+      guestId: 'authz-badresult-guest',
+      routedDomains: ['authz-badresult.verser.test'],
+      listener: guest.listener,
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('authz-badresult-guest', 'authz-badresult.verser.test')
+          .length,
+        1,
+      ),
+    );
+    broker = createVerserBroker({
+      hostUrl: hostUrl(manager),
+      brokerId: 'authz-badresult-broker',
+      brokerDomain: 'badresult-hop.verser.test',
+      tls: clientTls(),
+    });
+    await broker.connect();
+
+    for (const path of ['/first', '/second']) {
+      await assert.rejects(
+        () =>
+          broker.request({
+            targetId: 'authz-badresult-guest',
+            routeDomain: 'authz-badresult.verser.test',
+            method: 'GET',
+            path,
+          }),
+        (error) => {
+          assert.equal(error.code, 'protocol-error');
+          return true;
+        },
+      );
+    }
+    // Rejected before forwarding both times; nothing was cached.
+    assert.equal(calls, 2);
+    assert.equal(guest.state.calls, 0);
+  } finally {
+    await broker?.close('test-complete');
+    await manager.close('test-complete');
+    await runner.close('test-complete');
+  }
+});

@@ -89,7 +89,9 @@ export type {
   VerserFederatedRouteAuthorizationCallback,
   VerserFederatedRouteAuthorizationContext,
   VerserFederatedRouteAuthorizationDecision,
+  VerserFederatedRouteAuthorizationOutcome,
   VerserFederatedRouteAuthorizationPair,
+  VerserFederatedRouteAuthorizationResult,
 } from '@signicode/verser-common';
 
 export { HostRouteRegistry, createHostRouteRegistry } from './lib/route-registry';
