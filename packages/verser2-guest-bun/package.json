@@ -1,6 +1,6 @@
 {
   "name": "@signicode/verser2-guest-bun",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "description": "Bun Guest and Broker APIs for Verser2 outbound Host routing.",
   "license": "MIT",
@@ -17,16 +17,16 @@
   },
   "keywords": ["verser2", "reverse-http", "http2", "guest", "broker", "bun"],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18.1"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
   },
   "dependencies": {
-    "@signicode/verser-common": "0.7.1",
-    "@signicode/verser2-guest-js-common": "0.7.1",
-    "@signicode/verser2-guest-node": "0.7.1"
+    "@signicode/verser-common": "0.8.0",
+    "@signicode/verser2-guest-js-common": "0.8.0",
+    "@signicode/verser2-guest-node": "0.8.0"
   },
   "scripts": {
     "test": "bun test ./test/adapter.test.ts",

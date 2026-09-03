@@ -1,6 +1,6 @@
 {
   "name": "@signicode/verser-common",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "description": "Shared TypeScript utilities and primitives for Verser packages.",
   "license": "MIT",
@@ -17,7 +17,7 @@
   },
   "keywords": ["verser2", "reverse-http", "http2", "guest", "broker", "protocol"],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18.1"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

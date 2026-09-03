@@ -15,7 +15,7 @@ Do not describe HTTP/3, browser, Rust, Go, Java, or Python Host behavior as impl
 
 Prerequisites:
 
-- Node.js `>=20`
+- Node.js `>=20.18.1`
 - npm
 - `uv` for Python package work under `packages/verser2-guest-python`
 

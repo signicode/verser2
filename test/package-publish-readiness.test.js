@@ -130,7 +130,7 @@ test('source workspace packages expose public npm package metadata', () => {
     assert.deepEqual(sourceManifest.bugs, {
       url: 'https://github.com/signicode/verser2/issues',
     });
-    assert.deepEqual(sourceManifest.engines, { node: '>=20' });
+    assert.deepEqual(sourceManifest.engines, { node: '>=20.18.1' });
     assert.deepEqual(sourceManifest.publishConfig, {
       registry: 'https://registry.npmjs.org/',
       access: 'public',

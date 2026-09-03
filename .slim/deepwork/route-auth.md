@@ -140,3 +140,13 @@ source; no origin or route history is introduced.
 - Test the `brokerDomain` replacement across normalized remote/local
   registration, mTLS DNS-SAN binding, every supported Broker runtime, and
   legacy-field rejection.
+
+## Release 0.8.0 preparation
+
+- Current phase: manual verification at release-preparation PR step 7.
+- Branch from refreshed `main`; integrate Dependabot PRs #58 (undici 7.29.0)
+  and #59 (cryptography 50.0.0); prepare version `0.8.0`, changelog, and full
+  package validation.
+- Open the release-preparation PR for manual verification at step 7. Tagging
+  and publishing at step 8 remain blocked until that PR is manually approved
+  and merged.

@@ -19,7 +19,7 @@ Implemented packages:
 
 ## Setup and validation commands
 
-Use npm for repository commands. Node.js `>=20` is required.
+Use npm for repository commands. Node.js `>=20.18.1` is required.
 
 ```sh
 npm install

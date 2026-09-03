@@ -6,7 +6,7 @@
 - For Conductor tracks, follow `conductor/workflow.md`: TDD first, update the track `plan.md`, validate narrowly, and commit only at phase checkpoints.
 
 ## Commands
-- Use npm only. Node requirement is `>=20`.
+- Use npm only. Node requirement is `>=20.18.1` (Undici 7.29+ engine floor).
 - Install: `npm ci` for clean installs; `npm install` when updating `package-lock.json` or workspaces.
 - Build all packages: `npm run build`.
 - Test: `npm test` (runs `npm run test:bounded`, which builds, stages packages, then runs `node --test test/*.test.js` with bounded memory settings and guarded per-test growth checks).

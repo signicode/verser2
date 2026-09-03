@@ -59,7 +59,7 @@ Root workspace:
 
 - [ ] Keep root `package.json` private if it is only a monorepo aggregator.
 - [ ] Add root `repository`, `homepage`, `bugs`, and `keywords` if npm package metadata or repo discoverability should use them.
-- [ ] Confirm Node engine requirement remains `>=20`.
+- [ ] Confirm Node engine requirement remains `>=20.18.1`.
 
 All JavaScript workspace packages:
 
