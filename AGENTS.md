@@ -25,6 +25,7 @@
 
 ## Development work
 - For code changes, tests, release packaging, Conductor tracks, and repository commands, follow [`AGENTS.development.md`](./AGENTS.development.md).
+- In PR scenarios, follow the "Pull request delivery" rule in [`AGENTS.development.md`](./AGENTS.development.md): agents must explicitly tell users PRs must be merged manually through the protected main workflow.
 
 ## Repository Map
 

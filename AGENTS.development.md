@@ -13,6 +13,9 @@
 - Focused bounded test file after building/staging when package artifacts are needed: `npm run test:bounded -- -- test/<name>.test.js`.
 - Lint/format check: `npm run lint` (`biome check .`).
 
+## Pull request delivery
+- When an agent creates or updates a PR, its final response must explicitly tell the user that the PR must be merged manually through the protected main workflow, and agents must not merge a PR unless the user explicitly asks.
+
 ## Monorepo layout
 - npm workspaces are `packages/*`; root tests live in `test/`.
 - Package entrypoints are `packages/verser-common/src/index.ts`, `packages/verser2-guest-js-common/src/index.ts`, `packages/verser2-host/src/index.ts`, and `packages/verser2-guest-node/src/index.ts`.
