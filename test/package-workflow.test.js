@@ -15,6 +15,14 @@ function assertHas(pattern, message) {
   assert.ok(pattern.test(content), message);
 }
 
+function jobSection(content, jobId) {
+  const start = content.indexOf(`\n  ${jobId}:`);
+  assert.notEqual(start, -1, `Expected job ${jobId} in the workflow.`);
+  const remainder = content.slice(start + 1);
+  const nextMatch = /\n {2}[a-z][a-z0-9-]+:/.exec(remainder);
+  return nextMatch === null ? remainder : remainder.slice(0, nextMatch.index);
+}
+
 test('package publish workflow is defined', () => {
   assert.ok(
     fs.existsSync(workflowPath),
@@ -40,7 +48,7 @@ test('workflow supports broad pull request, main push, tag, nightly, and manual 
   assert.equal(/push:[\s\S]*?paths:/.test(content), false);
 });
 
-test('workflow detects package-affecting changes before validation or SHA publishing', () => {
+test('workflow detects package-affecting changes before validation or preview publishing', () => {
   const content = loadWorkflow();
   assert.match(content, /detect-package-changes:/);
   assert.match(content, /package-affecting/);
@@ -59,7 +67,7 @@ test('workflow detects package-affecting changes before validation or SHA publis
   );
   assert.match(
     content,
-    /package-publish:[\s\S]*?needs\.detect-package-changes\.outputs\.should_publish_sha\s*==\s*'true'/,
+    /github-packages-preview:[\s\S]*?needs\.detect-package-changes\.outputs\.should_publish_sha\s*==\s*'true'/,
   );
 });
 
@@ -76,13 +84,15 @@ test('workflow configures npm for GitHub Packages registry/scope', () => {
   );
 });
 
-test('workflow reuses validation build output in publish job', () => {
+test('workflow reuses validation build output in publish jobs', () => {
   const content = loadWorkflow();
   assert.match(content, /actions\/upload-artifact@v7[\s\S]*?name:\s*package-build-output/);
   assert.match(content, /actions\/download-artifact@v4[\s\S]*?name:\s*package-build-output/);
   assert.match(content, /packages\/verser2-guest-python\/dist\/python/);
   assert.equal(
-    /package-publish:[\s\S]*?name:\s*Build and stage packages[\s\S]*?npm run build/.test(content),
+    /github-packages-preview:[\s\S]*?name:\s*Build and stage packages[\s\S]*?npm run build/.test(
+      content,
+    ),
     false,
   );
 });
@@ -117,75 +127,209 @@ test('workflow reuses existing build outputs for source tests and lint in valida
   );
 });
 
-test('workflow applies package version policy and preserves GitHub Packages publishing', () => {
+test('workflow applies package version policy and publishes previews to GitHub Packages', () => {
   assertHas(
     /npm run package:version-policy -- --version/,
     'Expected package-version-policy to be part of publish flow.',
   );
   assertHas(
     /npm publish --access public --tag .* --registry https:\/\/npm\.pkg\.github\.com/,
-    'Expected npm publish to target npm.pkg.github.com with public access.',
+    'Expected GitHub Packages preview publish to target npm.pkg.github.com with public access.',
   );
 });
 
-test('workflow supports maintainer-gated npmjs publishing', () => {
+test('GitHub Packages preview job runs only for main merges and nightly schedules, never tags', () => {
   const content = loadWorkflow();
-  assert.match(content, /npmjs-publish:/);
-  assert.match(content, /environment:\s*npmjs-release/);
-  assert.match(content, /github\.event_name\s*==\s*'workflow_dispatch'/);
-  assert.match(content, /inputs\.publish_npmjs\s*==\s*true/);
-  assert.match(content, /github\.event_name\s*==\s*'push'/);
-  assert.match(content, /github\.ref_type\s*==\s*'tag'/);
-  assert.match(content, /startsWith\(github\.ref, 'refs\/tags\/v'\)/);
-  assert.match(content, /publishKind:\s*'manual-npmjs-candidate'/);
-  assert.match(content, /id-token:\s*write/);
-  assert.match(content, /Setup Node for npmjs\.org[\s\S]*?node-version:\s*22/);
-  assert.match(content, /npm install --global npm@latest/);
-  assert.doesNotMatch(content, /secrets\.NPM_TOKEN/);
-  assert.match(content, /npmjs publishing is not allowed for SHA build versions/);
-  assert.match(content, /npm stage publish --tag .* --registry https:\/\/registry\.npmjs\.org\//);
-  assert.doesNotMatch(content, /npmjs-publish:[\s\S]*?--provenance/);
-  assert.match(content, /npmjs_dry_run is true; validated staged packages/);
+  const preview = jobSection(content, 'github-packages-preview');
+  assert.match(preview, /github\.event_name == 'schedule'/);
+  assert.match(preview, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(preview, /needs\.detect-package-changes\.outputs\.should_publish_sha == 'true'/);
+  assert.equal(
+    /refs\/tags\/v/.test(preview),
+    false,
+    'Expected the GitHub Packages preview job condition to never match tag refs.',
+  );
+  assert.equal(
+    /tag-release/.test(preview),
+    false,
+    'Expected no tag-release publish kind in the GitHub Packages preview job.',
+  );
 });
 
-test('workflow resolves publish kind for tag, merged PR SHA, and nightly publication', () => {
+test('stable and prerelease tags never publish JavaScript to GitHub Packages', () => {
   const content = loadWorkflow();
-  assert.match(content, /publish_kind=tag-release/);
-  assert.match(content, /publish_kind=merged-pr-sha/);
-  assert.match(content, /publish_kind=nightly/);
-  assert.match(content, /--publish-kind "\$\{publishKind\}"/);
-  assert.match(content, /dist_tag=\$\{summary\.distTag\}/);
-  assert.match(content, /cron:/);
-  assert.match(content, /--tag "\$\{\{ steps\.publish-metadata\.outputs\.dist_tag \}\}"/);
+  const npmjs = jobSection(content, 'npmjs-publish');
+  assert.equal(
+    /npm\.pkg\.github\.com/.test(npmjs),
+    false,
+    'Expected the npmjs publish job to never touch the GitHub Packages registry.',
+  );
+  assert.equal(
+    /package-publish:/.test(content),
+    false,
+    'Expected the old combined tag-publishing job to be gone.',
+  );
 });
 
-test('workflow publishes Python distributions through GitHub artifacts and releases', () => {
+test('tag runs fail closed unless the tag version matches every workspace, pyproject, and uv.lock version', () => {
   const content = loadWorkflow();
-  assert.match(content, /Apply publish version to Python project/);
+  const check = jobSection(content, 'tag-version-check');
+  assert.match(check, /readdirSync\('packages'/);
+  assert.match(check, /does not match tag/);
+  assert.match(check, /pyproject\.toml/);
+  assert.ok(
+    check.includes('name = "verser2-guest-python"') && check.includes('uv.lock'),
+    'Expected the tag check to verify the Python uv.lock package entry version.',
+  );
+  assert.match(check, /uv\.lock package version .* does not match tag PEP 440 version/);
+  assert.match(check, /toPythonVersion/);
+  assert.match(check, /fail closed/);
+});
+
+test('npmjs-publish condition is skip-safe for manual dispatch and gated for tags', () => {
+  const content = loadWorkflow();
+  const npmjs = jobSection(content, 'npmjs-publish');
+  const condition = npmjs.match(/\n {4}if: (.*)/)[1];
   assert.match(
-    content,
+    condition,
+    /always\(\)/,
+    'Expected explicit always() so a skipped tag check is evaluable.',
+  );
+  assert.match(
+    condition,
+    /needs\.package-validation\.result == 'success'/,
+    'Expected package-validation success to be required.',
+  );
+  assert.match(
+    condition,
+    /\(github\.event_name == 'workflow_dispatch' && inputs\.publish_npmjs == true\)/,
+    'Expected the manual dispatch branch to publish when publish_npmjs is true despite the skipped tag check.',
+  );
+  assert.match(
+    condition,
+    /\(github\.ref_type == 'tag' && needs\.tag-version-check\.result == 'success'\)/,
+    'Expected tag releases to publish only when tag-version-check succeeded.',
+  );
+  assert.equal(
+    /pull_request/.test(condition),
+    false,
+    'Expected the npmjs-publish condition to never match pull request events.',
+  );
+});
+
+test('npmjs publishing uses direct OIDC npm publish behind the single npmjs-release gate', () => {
+  const content = loadWorkflow();
+  const npmjs = jobSection(content, 'npmjs-publish');
+  assert.match(npmjs, /environment:\s*npmjs-release/);
+  assert.equal(
+    (content.match(/environment:\s*npmjs-release/g) ?? []).length,
+    1,
+    'Expected exactly one npmjs-release environment gate.',
+  );
+  assert.match(npmjs, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(npmjs, /inputs\.publish_npmjs == true/);
+  assert.match(npmjs, /id-token:\s*write/);
+  assert.match(npmjs, /node-version:\s*22/);
+  assert.match(npmjs, /npm install --global npm@latest/);
+  assert.match(npmjs, /npmjs publishing is not allowed for SHA build versions/);
+  assert.match(
+    npmjs,
+    /npm publish --access public --tag "\$\{DIST_TAG\}" --registry https:\/\/registry\.npmjs\.org\//,
+  );
+  assert.equal(
+    /npm stage publish/.test(content),
+    false,
+    'Expected no npm staging publish path under the direct publish policy.',
+  );
+  assert.doesNotMatch(npmjs, /--provenance/);
+  assert.doesNotMatch(content, /secrets\.NPM_TOKEN/);
+});
+
+test('manual dry-run invokes npm publish --dry-run while tag runs publish directly', () => {
+  const content = loadWorkflow();
+  const npmjs = jobSection(content, 'npmjs-publish');
+  assert.match(
+    npmjs,
+    /NPMJS_DRY_RUN:\s*\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.npmjs_dry_run \}\}/,
+  );
+  assert.match(
+    npmjs,
+    /npm publish --dry-run --tag "\$\{DIST_TAG\}" --registry https:\/\/registry\.npmjs\.org\//,
+  );
+  assert.match(npmjs, /npmjs_dry_run is true; running npm publish --dry-run/);
+});
+
+test('workflow resolves publish kind for merged PR SHA and nightly previews and tag releases for npmjs', () => {
+  const content = loadWorkflow();
+  const preview = jobSection(content, 'github-packages-preview');
+  assert.match(preview, /publishKind="nightly"/);
+  assert.match(preview, /publishKind="merged-pr-sha"/);
+  assert.match(preview, /publish_kind=\$\{publishKind\}/);
+  assert.match(preview, /dist_tag=\$\{summary\.distTag\}/);
+  assert.match(preview, /--tag "\$\{\{ steps\.publish-metadata\.outputs\.dist_tag \}\}"/);
+  assert.match(content, /publishKind: 'tag-release'/);
+  assert.match(content, /publishKind: 'manual-npmjs-candidate'/);
+  assert.match(content, /cron:/);
+});
+
+test('Python release assets are a separate tag-only job without any JS publish', () => {
+  const content = loadWorkflow();
+  const python = jobSection(content, 'python-release-assets');
+  assert.match(python, /needs\.tag-version-check\.result == 'success'/);
+  assert.match(python, /Apply PEP 440 tag version to Python project/);
+  assert.match(
+    python,
+    /PUBLISH_VERSION:\s*\$\{\{\s*needs\.tag-version-check\.outputs\.python_version\s*\}\}/,
+  );
+  assert.match(
+    python,
     /uv build --project packages\/verser2-guest-python --out-dir packages\/verser2-guest-python\/dist\/python/,
   );
+  assert.match(python, /preflightStagedArtifacts/);
+  assert.match(python, /Release artifact validation failed \(fail closed\)/);
   assert.match(
-    content,
-    /name:\s*verser2-guest-python-\$\{\{\s*steps\.publish-metadata\.outputs\.publish_version\s*\}\}[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.whl[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.tar\.gz/,
+    python,
+    /name:\s*verser2-guest-python-\$\{\{\s*needs\.tag-version-check\.outputs\.tag_version\s*\}\}[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.whl[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.tar\.gz/,
   );
-  assert.match(content, /python_version=\$\{policy\.toPythonVersion\(publishVersion\)\}/);
+  assert.match(python, /softprops\/action-gh-release@v2/);
   assert.match(
-    content,
-    /PUBLISH_VERSION:\s*\$\{\{\s*steps\.publish-metadata\.outputs\.python_version\s*\}\}/,
-  );
-  assert.match(content, /softprops\/action-gh-release@v2/);
-  assert.match(
-    content,
+    python,
     /files:[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.whl[\s\S]*?packages\/verser2-guest-python\/dist\/python\/\*\.tar\.gz/,
   );
-  assert.match(content, /if:\s*startsWith\(github\.ref, 'refs\/tags\/v'\)/);
+  assert.equal(
+    /npm publish/.test(python),
+    false,
+    'Expected the Python release asset job to never publish JavaScript packages.',
+  );
+});
+
+test('workflow publishes Python preview distributions through GitHub artifacts on main and nightly', () => {
+  const content = loadWorkflow();
+  const preview = jobSection(content, 'github-packages-preview');
+  assert.match(preview, /Apply publish version to Python project/);
+  assert.match(
+    preview,
+    /PUBLISH_VERSION:\s*\$\{\{\s*steps\.publish-metadata\.outputs\.python_version\s*\}\}/,
+  );
+  assert.match(preview, /python_version=\$\{policy\.toPythonVersion\(summary\.computedVersion\)\}/);
+  assert.match(
+    preview,
+    /name:\s*verser2-guest-python-\$\{\{\s*steps\.publish-metadata\.outputs\.publish_version\s*\}\}/,
+  );
 });
 
 test('workflow never publishes packages from pull request runs', () => {
   const content = loadWorkflow();
-  assert.match(content, /if:\s*\$\{\{[\s\S]*?github\.event_name\s*!=\s*'pull_request'/);
+  for (const jobId of ['github-packages-preview', 'npmjs-publish', 'python-release-assets']) {
+    const section = jobSection(content, jobId);
+    const condition = section.match(/\n {4}if: (.*)/);
+    assert.ok(condition, `Expected an explicit if condition on ${jobId}.`);
+    assert.equal(
+      /pull_request/.test(condition[1]),
+      false,
+      `Expected the ${jobId} job condition to never match pull request events.`,
+    );
+  }
   assert.match(content, /Confirm validation job never publishes packages/);
 });
 
@@ -229,7 +373,7 @@ test('workflow runs tarball automated tests during pull request validation', () 
 
 test('workflow runs tarball automated tests after publish versioning and before publishing', () => {
   assertHas(
-    /Apply publish version to staged packages[\s\S]*?npm run test:package-tarballs[\s\S]*?npm stage publish/,
-    'Expected publish flow to run tarball automated tests after version mutation and before npm stage publish.',
+    /Apply publish version to staged packages[\s\S]*?npm run test:package-tarballs[\s\S]*?npm publish --access public --tag/,
+    'Expected publish flow to run tarball automated tests after version mutation and before direct npm publish.',
   );
 });

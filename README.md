@@ -1,12 +1,37 @@
 # verser2
 
-verser2 is a reverse HTTP connectivity toolkit that lets applications route
-requests to HTTP handlers that connect **outbound** to a Host instead of
-listening for inbound traffic. It uses TLS HTTP/2 for multiplexed transport
-between three roles:
+verser2 is a **reverse HTTP connectivity** toolkit. Instead of exposing an
+inbound port and waiting for traffic, a service opens an **outbound** connection
+to a verser2 **Host**, and the Host routes requests back to it over that
+connection. Guests and Brokers dial out to the Host; the Host is the single
+place that listens.
 
-- **Host** — listens for outbound Peer connections, can connect outbound to
-  upstream Hosts, and routes requests to advertised Guest routes.
+Every remote connection is a **persistent TLS HTTP/2 session**, so many
+requests and responses multiplex over one long-lived socket. **Mutual TLS
+(mTLS) is optional** — enable it when you want the Host to authenticate each
+Guest and Broker by client certificate.
+
+## Why this shape
+
+- **No inbound ports on your services.** A Guest attaches its ordinary local
+  HTTP handler and connects out to the Host — it never calls `listen()`. The
+  Host dispatches routed requests to that handler **in-process**.
+- **Bridges isolated networks without a VPN.** Because every Peer connects
+  outbound, verser2 reaches handlers behind NAT, firewalls, and private
+  networks using only the egress path those machines already have.
+- **One connection, many requests.** TLS HTTP/2 multiplexing keeps a single
+  persistent session warm instead of opening a socket per request.
+- **Build your own public gateway.** verser2 supplies the routing substrate;
+  authentication, authorization, and routing policy stay in your application
+  through Host callbacks — registration authorization, a `routeAuthorizer`, and
+  an optional unauthorized-client handler. You assemble the gateway your product
+  needs rather than adopting someone else's defaults.
+
+## Roles
+
+- **Host** — the listening edge. Accepts outbound Guest and Broker connections,
+  routes requests to advertised Guest routes, connects outbound to upstream
+  Hosts for federation, and attaches in-process local Guests and Brokers.
 - **Guest** — connects outbound to a Host and attaches a local HTTP handler
   without calling `listen()`.
 - **Broker** — connects outbound to a Host and sends requests to advertised
@@ -109,23 +134,25 @@ validation commands.
 
 ## What verser2 is not
 
-- HTTP/3 is not implemented.
-- Browser, Rust, Go, Java, and Python Host implementations are not implemented.
-- VWS/1 WebSockets use explicit framed messages over the existing TLS HTTP/2
-  transport. Node exposes `broker.webSocket()` and `guest.attachWebSocket()`;
-  the Python Guest maps VWS leases to ASGI websocket scopes. Generic HTTP/1
-  upgrades, CONNECT/RFC8441, and L4 forwarding are unsupported.
-- Dispatcher/Agent upgrade handling remains unsupported. Bun
-  `server.upgrade()` is supported only as the VWS/1 Guest adapter; it does not
-  expose a generic HTTP/1 upgrade or a listening Bun server.
-- verser2 is not a complete public gateway. Applications remain responsible for
-  authentication, authorization, and routing policy.
-- Per-request Broker target authorization is not implemented.
-- Host-to-Host federation is route-aware; generic L4 tunneling and active
-  in-flight request migration are not implemented.
-- Federated VWS/1 WebSocket routes are supported across Hosts that implement the
-  authenticated versioned federation endpoint; generic upgrade tunneling is not.
+verser2 is a deliberately focused routing toolkit. These are scope boundaries
+that follow from the model, not gaps in it:
 
-## Status
-
-verser2 uses TLS HTTP/2 for multiplexed transport. HTTP/3 remains roadmap work.
+- **Application-owned policy.** verser2 is the substrate for a public gateway,
+  not a turnkey one. Authentication, authorization, and routing policy are your
+  application's responsibility, expressed through the Host's registration,
+  route, and client callbacks.
+- **WebSockets are VWS/1, not raw upgrades.** [VWS/1 WebSockets](./docs/websockets.md)
+  carry explicit framed messages over the existing TLS HTTP/2 transport: Node
+  exposes `broker.webSocket()` and `guest.attachWebSocket()`, and the Python
+  Guest maps VWS leases to ASGI websocket scopes. Generic HTTP/1 upgrades,
+  CONNECT/RFC8441, and L4 forwarding are out of scope, as is Agent/Dispatcher
+  upgrade handling. Bun `server.upgrade()` is supported only as the VWS/1 Guest
+  adapter, not as a generic upgrade path or a listening Bun server.
+- **Route-aware federation, not L4 tunneling.** Host-to-Host links import and
+  export routes and carry federated VWS/1 connections across Hosts that
+  implement the authenticated federation endpoint; they do not migrate active
+  in-flight requests.
+- **HTTP/2 transport today.** verser2 uses persistent TLS HTTP/2 for multiplexed
+  transport; HTTP/3 remains roadmap work.
+- **Node, Bun, and Python Guests today.** Browser, Rust, Go, and Java Guests —
+  and a Python Host — are roadmap directions rather than shipped packages.

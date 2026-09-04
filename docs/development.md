@@ -174,8 +174,8 @@ To include the package-consumer matrix wrapper tests inside `node --test`, set
 regular package-validation scripts above are preferred because they exercise the
 same package-consumer and tarball behavior directly.
 
-See [Package publishing](./package-publishing.md) for the GitHub Packages runbook
-and version/dist-tag policy.
+See [Package publishing](./package-publishing.md) for the GitHub Packages preview and
+npmjs.org publishing runbook and version/dist-tag policy.
 
 ## Documentation boundaries
 

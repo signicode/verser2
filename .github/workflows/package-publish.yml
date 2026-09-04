@@ -1,5 +1,25 @@
 name: Package publish readiness
 
+# Publishing policy:
+#   - GitHub Packages receives preview publications only: package-affecting
+#     merges to main (main-sha dist-tag) and scheduled nightly runs (nightly
+#     dist-tag). Stable/prerelease tags never publish JavaScript to GitHub
+#     Packages.
+#   - npmjs.org JavaScript publication is direct OIDC `npm publish` (no
+#     staging), gated by the single `npmjs-release` environment. It runs for
+#     `v*` tag pushes and for manual workflow_dispatch runs; manual dry-run
+#     invocations execute `npm publish --dry-run`.
+#   - Tag runs fail closed when the tag version differs from any workspace
+#     package.json version, the Python project metadata, or the Python
+#     uv.lock package entry (PEP 440 form via the canonical conversion).
+#   - npmjs-publish is skip-safe: manual dispatch publishes when
+#     publish_npmjs is true even though the tag-only check is skipped, and
+#     tag releases publish only when tag-version-check succeeded.
+#   - Python release assets are produced by a separate tag-only job that
+#     validates artifacts and attaches a PEP440 tag-versioned wheel and
+#     source distribution to the GitHub Release, without any GitHub Packages
+#     JavaScript publish.
+
 on:
   pull_request:
     branches:
@@ -18,7 +38,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_npmjs:
-        description: 'Publish staged JavaScript packages to npmjs.org after validation and environment approval.'
+        description: 'Directly publish JavaScript packages to npmjs.org with OIDC after validation and environment approval.'
         type: boolean
         required: true
         default: false
@@ -27,7 +47,7 @@ on:
         type: string
         required: true
       npmjs_dry_run:
-        description: 'Validate npmjs staging inputs without creating npm package stages.'
+        description: 'Run npm publish --dry-run against the validated staged packages instead of publishing.'
         type: boolean
         required: true
         default: true
@@ -180,13 +200,96 @@ jobs:
         run: |
           echo "Pull requests and validation-only runs stop after build, staging, packing, and tests."
 
-  package-publish:
-    name: Publish to GitHub Packages
+  tag-version-check:
+    name: Fail closed unless the tag version matches all package metadata
+    runs-on: ubuntu-latest
+    needs: package-validation
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') }}
+    permissions:
+      contents: read
+    outputs:
+      tag_version: ${{ steps.consistency.outputs.publish_version }}
+      python_version: ${{ steps.consistency.outputs.python_version }}
+      dist_tag: ${{ steps.consistency.outputs.dist_tag }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Enforce tag version consistency
+        id: consistency
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          node <<'NODE' > "$GITHUB_OUTPUT"
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const policy = require('./scripts/package-version-policy');
+
+          const refName = process.env.GITHUB_REF_NAME;
+          const tagVersion = refName.startsWith('v') ? refName.slice(1) : refName;
+          const problems = [];
+
+          for (const entry of fs.readdirSync('packages', { withFileTypes: true })) {
+            if (!entry.isDirectory()) {
+              continue;
+            }
+            const manifestPath = path.join('packages', entry.name, 'package.json');
+            if (!fs.existsSync(manifestPath)) {
+              continue;
+            }
+            const version = JSON.parse(fs.readFileSync(manifestPath, 'utf8')).version;
+            if (version !== tagVersion) {
+              problems.push(`${manifestPath} version ${version} does not match tag ${tagVersion}`);
+            }
+          }
+
+          const pyproject = fs.readFileSync(
+            path.join('packages', 'verser2-guest-python', 'pyproject.toml'),
+            'utf8',
+          );
+          const pythonMeta = pyproject.match(/^version = "(.+)"$/m)?.[1];
+          const expectedPythonVersion = policy.toPythonVersion(tagVersion);
+          if (pythonMeta !== expectedPythonVersion) {
+            problems.push(
+              `packages/verser2-guest-python/pyproject.toml version ${pythonMeta} does not match tag PEP 440 version ${expectedPythonVersion}`,
+            );
+          }
+
+          const uvLock = fs.readFileSync(
+            path.join('packages', 'verser2-guest-python', 'uv.lock'),
+            'utf8',
+          );
+          const uvLockMeta = uvLock.match(
+            /\[\[package\]\]\nname = "verser2-guest-python"\nversion = "(.+)"\n/,
+          )?.[1];
+          if (uvLockMeta !== expectedPythonVersion) {
+            problems.push(
+              `packages/verser2-guest-python/uv.lock package version ${uvLockMeta} does not match tag PEP 440 version ${expectedPythonVersion}`,
+            );
+          }
+
+          if (problems.length > 0) {
+            throw new Error(
+              `Tag version consistency check failed (fail closed):\n${problems.join('\n')}`,
+            );
+          }
+
+          const summary = policy.getPolicySummary({
+            version: tagVersion,
+            publishKind: 'tag-release',
+          });
+          console.log(`publish_version=${tagVersion}`);
+          console.log(`python_version=${expectedPythonVersion}`);
+          console.log(`dist_tag=${summary.distTag}`);
+          NODE
+
+  github-packages-preview:
+    name: Publish GitHub Packages preview for main merges and nightlies
     runs-on: ubuntu-latest
     needs: [detect-package-changes, package-validation]
-    if: ${{ github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || needs.detect-package-changes.outputs.should_publish_sha == 'true') }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect-package-changes.outputs.should_publish_sha == 'true') }}
     permissions:
-      contents: write
+      contents: read
       packages: write
 
     steps:
@@ -213,23 +316,17 @@ jobs:
           name: package-build-output
           path: .
 
-      - name: Resolve publish version and dist-tag
+      - name: Resolve preview version and dist-tag
         id: publish-metadata
+        env:
+          GITHUB_SHA: ${{ github.sha }}
         run: |
-          # Determine publish kind based on trigger
-          publishKind=""
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            publishKind="tag-release"
-            echo "publish_kind=tag-release"
-          elif [ "${{ github.event_name }}" = "schedule" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ]; then
             publishKind="nightly"
-            echo "publish_kind=nightly"
-          elif [ "${{ needs.detect-package-changes.outputs.should_publish_sha == 'true' }}" = "true" ]; then
+          else
             publishKind="merged-pr-sha"
-            echo "publish_kind=merged-pr-sha"
           fi
-
-          echo '--publish-kind "${publishKind}"'
+          echo "publish_kind=${publishKind}"
           export PUBLISH_KIND="${publishKind}"
 
           node <<'NODE' > "$GITHUB_OUTPUT"
@@ -237,41 +334,27 @@ jobs:
           const path = require('node:path');
           const policy = require('./scripts/package-version-policy');
 
-          const refType = process.env.GITHUB_REF_TYPE;
-          const refName = process.env.GITHUB_REF_NAME;
           const sha = process.env.GITHUB_SHA;
-          const publishKind = process.env.PUBLISH_KIND || '';
+          const publishKind = process.env.PUBLISH_KIND;
           const nightlyDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-
-          let sourceVersion;
-          if (refType === 'tag') {
-            sourceVersion = refName.startsWith('v') ? refName.slice(1) : refName;
-          } else {
-            sourceVersion = JSON.parse(
-              fs.readFileSync(
-                path.join(process.cwd(), 'packages', 'verser-common', 'package.json'),
-                'utf8',
-              ),
-            ).version;
-          }
+          const sourceVersion = JSON.parse(
+            fs.readFileSync(
+              path.join(process.cwd(), 'packages', 'verser-common', 'package.json'),
+              'utf8',
+            ),
+          ).version;
 
           const summary = policy.getPolicySummary({
             version: sourceVersion,
-            publishKind: publishKind || undefined,
+            publishKind,
             sha,
             nightlyDate,
           });
 
-          const publishVersion = summary.computedVersion;
-          console.log(`publish_version=${publishVersion}`);
-          console.log(`python_version=${policy.toPythonVersion(publishVersion)}`);
+          console.log(`publish_version=${summary.computedVersion}`);
+          console.log(`python_version=${policy.toPythonVersion(summary.computedVersion)}`);
           console.log(`dist_tag=${summary.distTag}`);
           NODE
-
-        env:
-          GITHUB_REF_TYPE: ${{ github.ref_type }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-          GITHUB_SHA: ${{ github.sha }}
 
       - name: Apply publish version to staged packages
         run: |
@@ -322,14 +405,6 @@ jobs:
             packages/verser2-guest-python/dist/python/*.tar.gz
           if-no-files-found: error
 
-      - name: Attach Python distribution to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            packages/verser2-guest-python/dist/python/*.whl
-            packages/verser2-guest-python/dist/python/*.tar.gz
-
       - name: Validate GitHub Packages installation
         if: github.event_name == 'push'
         env:
@@ -340,10 +415,15 @@ jobs:
           npm run test:package-consumers -- --source=github
 
   npmjs-publish:
-    name: Publish to npmjs.org
+    name: Publish JavaScript packages to npmjs.org
     runs-on: ubuntu-latest
-    needs: [detect-package-changes, package-validation]
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_npmjs == true) || (github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')) }}
+    needs: [package-validation, tag-version-check]
+    # Skip-safe policy expression: always() evaluates this condition even when
+    # the tag-only check job is skipped; package-validation must have
+    # succeeded; manual dispatch publishes when publish_npmjs is true despite
+    # the skipped tag check; tag releases publish only when the fail-closed
+    # tag-version-check succeeded.
+    if: ${{ always() && needs.package-validation.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.publish_npmjs == true) || (github.ref_type == 'tag' && needs.tag-version-check.result == 'success')) }}
     environment: npmjs-release
     permissions:
       contents: read
@@ -364,9 +444,6 @@ jobs:
       - name: Install npm trusted publishing capable CLI
         run: npm install --global npm@latest
 
-      - name: Setup Python uv
-        uses: astral-sh/setup-uv@v7
-
       - name: Install dependencies
         run: npm ci
 
@@ -380,25 +457,25 @@ jobs:
         id: npmjs-metadata
         env:
           NPMJS_VERSION: ${{ inputs.npmjs_version }}
+          TAG_VERSION: ${{ needs.tag-version-check.outputs.tag_version }}
           GITHUB_REF_TYPE: ${{ github.ref_type }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           node <<'NODE' > "$GITHUB_OUTPUT"
           const policy = require('./scripts/package-version-policy');
-          const inputVersion = process.env.NPMJS_VERSION;
-          const refType = process.env.GITHUB_REF_TYPE;
-          const refName = process.env.GITHUB_REF_NAME;
-          const version = inputVersion || (refType === 'tag' && refName.startsWith('v') ? refName.slice(1) : '');
-          const summary = policy.getPolicySummary({
-            version,
-            publishKind: 'manual-npmjs-candidate',
-          });
 
-          if (!summary.npmJsPublishAllowed) {
-            throw new Error('npmjs publishing is not allowed for this candidate');
-          }
-          if (summary.computedVersion.includes('-sha.')) {
+          const isTagRelease = process.env.GITHUB_REF_TYPE === 'tag';
+          const version = isTagRelease ? process.env.TAG_VERSION : process.env.NPMJS_VERSION;
+
+          if (!version || version.includes('-sha.')) {
             throw new Error('npmjs publishing is not allowed for SHA build versions');
+          }
+
+          const summary = isTagRelease
+            ? policy.getPolicySummary({ version, publishKind: 'tag-release' })
+            : policy.getPolicySummary({ version, publishKind: 'manual-npmjs-candidate' });
+
+          if (!isTagRelease && !summary.npmJsPublishAllowed) {
+            throw new Error('npmjs publishing is not allowed for this candidate');
           }
 
           console.log(`publish_version=${summary.computedVersion}`);
@@ -415,14 +492,92 @@ jobs:
           npm run test:package-consumers -- --source=tarball
           npm run test:package-tarballs
 
-      - name: Stage packages on npmjs.org
+      - name: Publish packages to npmjs.org with OIDC
+        env:
+          NPMJS_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.npmjs_dry_run }}
+          DIST_TAG: ${{ steps.npmjs-metadata.outputs.dist_tag }}
         run: |
-          if [ "${{ inputs.npmjs_dry_run }}" = "true" ]; then
-            echo "npmjs_dry_run is true; validated staged packages without creating npm package stages."
-            exit 0
-          fi
-
           for packageDirectory in dist/packages/*;
           do
-            (cd "$packageDirectory" && npm stage publish --tag "${{ steps.npmjs-metadata.outputs.dist_tag }}" --registry https://registry.npmjs.org/)
+            if [ "$NPMJS_DRY_RUN" = "true" ]; then
+              echo "npmjs_dry_run is true; running npm publish --dry-run for ${packageDirectory}."
+              (cd "$packageDirectory" && npm publish --dry-run --tag "${DIST_TAG}" --registry https://registry.npmjs.org/)
+            else
+              (cd "$packageDirectory" && npm publish --access public --tag "${DIST_TAG}" --registry https://registry.npmjs.org/)
+            fi
           done
+
+  python-release-assets:
+    name: Publish Python release assets for tags
+    runs-on: ubuntu-latest
+    needs: [package-validation, tag-version-check]
+    if: ${{ needs.tag-version-check.result == 'success' }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Setup Node for artifact validation
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Setup Python uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Download validated package build output
+        uses: actions/download-artifact@v4
+        with:
+          name: package-build-output
+          path: .
+
+      - name: Apply PEP 440 tag version to Python project
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pyprojectPath = 'packages/verser2-guest-python/pyproject.toml';
+          const version = process.env.PUBLISH_VERSION;
+          const pyproject = fs.readFileSync(pyprojectPath, 'utf8');
+          fs.writeFileSync(
+            pyprojectPath,
+            pyproject.replace(/^version = ".*"$/m, `version = "${version}"`),
+            'utf8',
+          );
+          NODE
+        env:
+          PUBLISH_VERSION: ${{ needs.tag-version-check.outputs.python_version }}
+
+      - name: Build versioned Python distribution
+        run: |
+          rm -rf packages/verser2-guest-python/dist/python
+          uv build --project packages/verser2-guest-python --out-dir packages/verser2-guest-python/dist/python
+
+      - name: Validate complete staged and Python distribution artifacts
+        run: |
+          node <<'NODE'
+          const { preflightStagedArtifacts } = require('./scripts/staged-artifacts.js');
+          const missing = preflightStagedArtifacts(process.cwd());
+          if (missing.length > 0) {
+            throw new Error(
+              `Release artifact validation failed (fail closed):\n${missing.map((item) => `  - ${item}`).join('\n')}`,
+            );
+          }
+          NODE
+
+      - name: Upload Python distribution artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: verser2-guest-python-${{ needs.tag-version-check.outputs.tag_version }}
+          path: |
+            packages/verser2-guest-python/dist/python/*.whl
+            packages/verser2-guest-python/dist/python/*.tar.gz
+          if-no-files-found: error
+
+      - name: Attach Python distribution to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            packages/verser2-guest-python/dist/python/*.whl
+            packages/verser2-guest-python/dist/python/*.tar.gz

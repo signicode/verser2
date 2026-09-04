@@ -13,11 +13,11 @@ This checklist captures the current repository state and the work to complete be
 - License detected by GitHub: MIT.
 - Branch protection/ruleset: `Protect main` is active for the default branch, blocks deletion and non-fast-forward updates, requires pull requests, one approving review, resolved review threads, last-push approval, and required `Package publish readiness` and `Secret Scan` checks.
 - GitHub security features: Dependabot alerts and security updates are enabled; secret scanning and push protection are enabled; non-provider patterns and validity checks are unavailable or disabled.
-- Existing workflow: `.github/workflows/package-publish.yml` validates packages on selected pull requests and publishes to GitHub Packages on `main` and `v*` tags.
+- Existing workflow: `.github/workflows/package-publish.yml` validates package-affecting PRs, publishes GitHub Packages previews for protected-`main` merges and nightly runs, and handles `v*` tags with direct JS publishing to npmjs.org.
 
 ## Publish decision gates
 
-- [x] Decide whether open sourcing means source visibility only, GitHub Packages publishing, npmjs.org publishing, PyPI publishing, or all of these. Current repository-file support covers public source readiness, GitHub Packages previews/releases, and maintainer-gated npmjs.org publishing; PyPI remains out of scope.
+- [x] Decide whether open sourcing means source visibility only, GitHub Packages publishing, npmjs.org publishing, PyPI publishing, or all of these. Protected-`main` package-affecting merges and nightly runs publish GitHub Packages previews; `v*` tags direct-publish JavaScript packages to npmjs.org after `npmjs-release` gate and attach Python assets to GitHub Releases, while PyPI remains out of scope.
 - [x] Decide whether `conductor/`, `opencode.jsonc`, and `.slim/` should stay public, move to private tooling, or be documented as internal project-management/tooling artifacts. `opencode.jsonc` is removed from the current tree; `conductor/` remains public with older archived plans summarized as outcomes; `.slim/` remains public.
 - [x] Decide whether package publication remains under `@signicode` and whether public package names are final. Repository metadata and workflows keep the `@signicode` scope.
 - [x] Confirm every roadmap claim is still accurate; do not imply HTTP/3, browser, Rust, Go, Java, or Python Host implementations are shipped.
@@ -85,13 +85,13 @@ Per-package notes:
 
 Current `.github/workflows/package-publish.yml` behavior:
 
-- Pull requests to `main` run only when configured source/package/test/workflow paths change.
+- Pull requests to `main` run validation without path filters so docs, governance, workflow, package metadata, and source changes receive checks.
 - The validation job runs source tests and lint via `npm run test:bounded:staged` followed by `npm run lint`, reusing the job's own build/staging output (the runner preflights staged artifacts before skipping build/stage) and streaming timestamped live output.
-- Pushes to `main` run validation and publish SHA-derived versions to GitHub Packages with the `next` dist-tag.
-- Tags matching `v*` run validation and publish tag-derived versions to GitHub Packages with the policy-selected dist-tag.
+- Package-affecting pushes to `main` publish SHA-derived GitHub Packages previews with the non-channel `main-sha` dist-tag; scheduled nightly runs publish nightly GitHub Packages previews with the `nightly` dist-tag. Previews never move `latest` or `next`.
+- Tags matching `v*` never publish JavaScript to GitHub Packages. A `tag-version-check` job fails closed unless the tag version equals every workspace `package.json`, the Python project metadata, and the Python `uv.lock` package entry (PEP 440 canonical form); after the single `npmjs-release` environment gate, `npmjs-publish` direct-publishes to npmjs.org with OIDC `npm publish`, and a separate tag-only `python-release-assets` job validates artifacts and attaches the PEP 440 wheel/source distribution to the GitHub Release. The already-published `v0.8.0` GitHub Packages content is historical/grandfathered only.
 - Pull requests never publish.
-- Publishing uses `secrets.GITHUB_TOKEN`, `packages: write`, and `npm publish --access public --registry https://npm.pkg.github.com`.
-- Python distributions are uploaded as workflow artifacts and attached to GitHub Releases for `v*` tags; no PyPI publish exists.
+- GitHub Packages preview publishing uses `secrets.GITHUB_TOKEN`, `packages: write`, and `npm publish --access public --registry https://npm.pkg.github.com`; npmjs.org publishing uses npm trusted publishing (OIDC, `id-token: write`) with no `NPM_TOKEN`.
+- Python distributions are uploaded as workflow artifacts and attached to GitHub Releases for `v*` tags through the tag-only release-assets job; no PyPI publish exists.
 
 Checklist:
 

@@ -1,9 +1,17 @@
 # @signicode/verser2-host
 
-Host package for verser2. The Host listens for outbound Peer (Guest and Broker)
-connections over TLS HTTP/2 and routes requests to advertised Guest routes. It
-can also attach in-process local Guests and local Brokers directly to the Host,
-and can connect outbound to upstream Hosts for route-aware federation.
+The listening edge of verser2. A Host accepts **outbound** Guest and Broker
+connections over persistent TLS HTTP/2, with optional mutual TLS (mTLS), and
+routes requests to advertised Guest routes. It connects outbound to upstream
+Hosts for route-aware federation, attaches in-process local Guests and local
+Brokers, and exposes the callbacks — registration authorization, a
+`routeAuthorizer`, and an optional unauthorized-client handler — through which
+your application supplies its own authentication, authorization, and routing
+policy.
+
+**Audience:** applications that operate the verser2 endpoint and define gateway
+policy. Pair it with a Guest/Broker package (`@signicode/verser2-guest-node`,
+`@signicode/verser2-guest-bun`, or `@signicode/verser2-guest-python`).
 
 ## Public API
 
