@@ -24,7 +24,15 @@ function createReleaseSandbox() {
   fs.mkdirSync(path.join(root, 'packages', 'verser-common'), { recursive: true });
   fs.writeFileSync(
     path.join(root, 'packages', 'verser-common', 'package.json'),
-    `${JSON.stringify({ name: '@signicode/verser-common', version: '0.0.0' }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        name: '@signicode/verser-common',
+        version: '0.0.0',
+        keywords: ['verser2', 'reverse-http', 'http2', 'guest', 'broker', 'protocol'],
+      },
+      null,
+      2,
+    )}\n`,
   );
   fs.mkdirSync(path.join(root, 'packages', 'verser2-guest-python'), { recursive: true });
   fs.writeFileSync(
@@ -131,6 +139,30 @@ function assertTagVersionConsistency(root, tagVersion) {
     'uv.lock package entry must carry the canonical PEP 440 tag version',
   );
 }
+
+test('prepare-release writes six-item keywords arrays on one line', () => {
+  const root = createReleaseSandbox();
+  try {
+    runPrepareRelease(root, '1.2.3');
+    const manifestPath = path.join(root, 'packages', 'verser-common', 'package.json');
+    const content = fs.readFileSync(manifestPath, 'utf8');
+
+    assert.match(
+      content,
+      /^ {2}"keywords": \["verser2", "reverse-http", "http2", "guest", "broker", "protocol"\]$/m,
+    );
+    assert.deepEqual(JSON.parse(content).keywords, [
+      'verser2',
+      'reverse-http',
+      'http2',
+      'guest',
+      'broker',
+      'protocol',
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 for (const [label, version] of [
   ['stable', '1.2.3'],
