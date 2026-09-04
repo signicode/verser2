@@ -68,15 +68,19 @@ function writeJson(filePath, value) {
 
 function writePackageJson(filePath, value) {
   let content = `${JSON.stringify(value, null, 2)}\n`;
-  const filesArrayPattern = /\x20\x20"files": \[\n((?:\x20{4}"[^"]+",?\n)+)\x20\x20\]/;
-  content = content.replace(filesArrayPattern, (_match, filesBlock) => {
-    const files = filesBlock
-      .trim()
-      .split('\n')
-      .map((line) => line.trim().replace(/,$/, ''));
+  for (const field of ['files', 'keywords']) {
+    const arrayPattern = new RegExp(
+      `\\x20\\x20"${field}": \\[\\n((?:\\x20{4}"[^"]+",?\\n)+)\\x20\\x20\\]`,
+    );
+    content = content.replace(arrayPattern, (_match, valuesBlock) => {
+      const values = valuesBlock
+        .trim()
+        .split('\n')
+        .map((line) => line.trim().replace(/,$/, ''));
 
-    return `  "files": [${files.join(', ')}]`;
-  });
+      return `  "${field}": [${values.join(', ')}]`;
+    });
+  }
   fs.writeFileSync(filePath, content, 'utf8');
 }
 
