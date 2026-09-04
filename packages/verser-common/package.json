@@ -15,14 +15,7 @@
   "bugs": {
     "url": "https://github.com/signicode/verser2/issues"
   },
-  "keywords": [
-    "verser2",
-    "reverse-http",
-    "http2",
-    "guest",
-    "broker",
-    "protocol"
-  ],
+  "keywords": ["verser2", "reverse-http", "http2", "guest", "broker", "protocol"],
   "engines": {
     "node": ">=20.18.1"
   },
