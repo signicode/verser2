@@ -1,6 +1,6 @@
 {
   "name": "@signicode/verser2-host",
-  "version": "0.8.1",
+  "version": "0.8.2-next.0",
   "private": true,
   "description": "TLS HTTP/2 Host for routing Broker requests to outbound Verser2 Guests.",
   "license": "MIT",
@@ -15,7 +15,14 @@
   "bugs": {
     "url": "https://github.com/signicode/verser2/issues"
   },
-  "keywords": ["verser2", "reverse-http", "http2", "guest", "broker", "host"],
+  "keywords": [
+    "verser2",
+    "reverse-http",
+    "http2",
+    "guest",
+    "broker",
+    "host"
+  ],
   "engines": {
     "node": ">=20.18.1"
   },
@@ -24,7 +31,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@signicode/verser-common": "0.8.1"
+    "@signicode/verser-common": "0.8.2-next.0"
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs --target es2019 --platform node --sourcemap --clean --external @signicode/verser-common && dts-bundle-generator --project tsconfig.json --out-file dist/index.d.ts src/index.ts && node ../../scripts/copy-package-license.js ."
