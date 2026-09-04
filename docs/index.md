@@ -1,7 +1,13 @@
 # Verser2 documentation
 
-Verser2 lets applications route HTTP requests to Guest-side handlers that
-connect outbound to a Host instead of listening for inbound traffic.
+Verser2 is a reverse HTTP connectivity toolkit. Services open an **outbound**
+connection to a Host instead of listening for inbound traffic, and the Host
+routes requests back to them over that connection. Remote peers share a
+persistent TLS HTTP/2 session with optional mutual TLS (mTLS), routed requests
+are dispatched to local handlers **in-process**, and the design bridges
+isolated networks without a VPN. Authentication, authorization, and routing
+policy stay in your application through Host callbacks, so you build the public
+gateway your product needs.
 
 ## Roles
 

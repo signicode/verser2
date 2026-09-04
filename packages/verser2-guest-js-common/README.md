@@ -1,8 +1,12 @@
 # @signicode/verser2-guest-js-common
 
-Shared JavaScript foundations for verser2 Guest adapters. This package provides
-runtime-neutral helpers and the abstract dispatcher base class used by Node and
-Bun Guest implementations.
+Runtime-neutral JavaScript building blocks for verser2 Guest adapters: header
+and route helpers, Broker request creation, shared types, and the abstract
+fetch/dispatcher base class that Node and Bun Guests extend.
+
+**Audience:** maintainers of verser2 JavaScript Guest adapters. Applications use
+`@signicode/verser2-guest-node` or `@signicode/verser2-guest-bun` instead of this
+package directly.
 
 ## Public API
 

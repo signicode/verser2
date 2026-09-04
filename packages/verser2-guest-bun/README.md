@@ -1,9 +1,13 @@
 # @signicode/verser2-guest-bun
 
-Bun Guest package and Bun-facing Broker wrapper for verser2. Reuses the
+Serve a Bun Fetch-style handler through verser2 without opening a Bun listener.
+This package adapts local handlers to Bun/`fetch` semantics and reuses the
 `@signicode/verser2-guest-node` transport for Host connection, route
-advertisement, Broker requests, and lease lifecycle while adapting local
-handlers to Bun/Fetch-style handler semantics.
+advertisement, Broker requests, and lease lifecycle; it also exports a
+Bun-facing Broker wrapper.
+
+**Audience:** Bun services acting as verser2 Guests, and Bun applications that
+call Guests as Brokers. Requires a Host (`@signicode/verser2-host`).
 
 ## Public API
 

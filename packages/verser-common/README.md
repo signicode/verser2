@@ -1,6 +1,12 @@
 # @signicode/verser-common
 
-Shared protocol, type, and utility exports for verser2 packages.
+The shared protocol, type, and utility layer every verser2 package builds on:
+envelope formats, route and registration helpers, error codes, and
+TLS/certificate utilities.
+
+**Audience:** authors of verser2 Host, Guest, and Broker adapters. Applications
+normally consume this package transitively through `@signicode/verser2-host` or
+`@signicode/verser2-guest-node` rather than importing it directly.
 
 ## Public API
 

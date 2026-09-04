@@ -1,7 +1,14 @@
 # @signicode/verser2-guest-node
 
-Node Guest and Broker package for verser2. Connects outbound to a verser2 Host
-over TLS HTTP/2 and provides request routing without opening inbound ports.
+Run a Node HTTP handler behind NAT or a firewall without opening an inbound
+port. This package connects **outbound** to a verser2 Host over persistent TLS
+HTTP/2 (with optional mTLS), dispatches routed requests to your local
+`http.Server` handler in-process, and gives Brokers several ways to send
+requests — direct `request()`, an `http.Agent`, an Undici `Dispatcher`, a
+pre-wired `fetch`, and VWS/1 framed WebSockets.
+
+**Audience:** Node.js services acting as verser2 Guests, and Node applications
+that call those Guests as Brokers. Requires a Host (`@signicode/verser2-host`).
 
 ## Public API
 

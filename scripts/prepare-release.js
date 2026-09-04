@@ -2,7 +2,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { isValidSemver } = require('./package-version-policy.js');
+// Canonical version-policy conversion: JS workspace manifests keep the SemVer
+// version, while Python metadata is written in PEP 440 form so tag-based
+// release preparation stays consistent with the workflow's fail-closed
+// tag-version check.
+const { isValidSemver, toPythonVersion } = require('./package-version-policy.js');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -198,6 +202,7 @@ function updatePythonUvLock(version) {
 function main() {
   const options = parseArgs(process.argv.slice(2));
   const { version, json: jsonOutput } = options;
+  const pythonVersion = toPythonVersion(version);
 
   const internalNames = collectInternalNames();
   const changedFiles = [];
@@ -218,12 +223,12 @@ function main() {
     }
   }
 
-  // 2. Update pyproject.toml
-  if (updatePyprojectToml(version)) {
+  // 2. Update pyproject.toml and uv.lock with the canonical PEP 440 form.
+  if (updatePyprojectToml(pythonVersion)) {
     changedFiles.push(path.join(ROOT, 'packages', 'verser2-guest-python', 'pyproject.toml'));
   }
 
-  if (updatePythonUvLock(version)) {
+  if (updatePythonUvLock(pythonVersion)) {
     changedFiles.push(path.join(ROOT, 'packages', 'verser2-guest-python', 'uv.lock'));
   }
 

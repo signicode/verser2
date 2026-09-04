@@ -1,10 +1,16 @@
 # @signicode/verser2-guest-python
 
-Python package for verser2 providing Guest and Broker implementations.
+Expose a Python ASGI app — including FastAPI and Starlette — through verser2
+without opening an inbound port. The Guest connects **outbound** to an existing
+verser2 Host over persistent TLS HTTP/2 (with optional mTLS) and dispatches
+routed requests to the ASGI 3 app in-process; the async Broker sends requests to
+advertised Guest routes. It is recognized by the repository's npm workspace
+tooling through `package.json` and by Python packaging tooling through
+`pyproject.toml`.
 
-This package connects outbound to an existing verser2 Host over TLS HTTP/2.
-It is recognized by the repository's npm workspace tooling through
-`package.json` and by Python packaging tooling through `pyproject.toml`.
+**Audience:** Python services acting as verser2 ASGI Guests, and async Python
+applications that call Guests as Brokers. Requires a Host
+(`@signicode/verser2-host`); a Python Host is not provided.
 
 ## Public API
 

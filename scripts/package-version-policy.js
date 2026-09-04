@@ -9,7 +9,12 @@ const PRERELEASE_TAG = 'next';
 const MAIN_SHA_TAG = 'main-sha';
 const NIGHTLY_TAG = 'nightly';
 const MANUAL_NPMJS_REGISTRY = 'npmjs';
+const TARGET_REGISTRY_NPMJS = 'npmjs';
+const TARGET_REGISTRY_GITHUB_PACKAGES = 'github-packages';
 const NPMJS_PUBLISH_ALLOWED = true;
+const RELEASE_CHANNEL_STABLE = 'stable';
+const RELEASE_CHANNEL_PRERELEASE = 'prerelease';
+const NEXT_PRERELEASE_LABEL = 'next';
 
 const semverRegex =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -151,6 +156,43 @@ function determineDistTag(version) {
   }
 
   return hasPrerelease(version) ? PRERELEASE_TAG : STABLE_TAG;
+}
+
+function hasBuildMetadata(input) {
+  return input.includes('+');
+}
+
+// Canonical release-channel classification for tag routing: a stable tag
+// publishes JavaScript to npmjs.org with `latest`, while any valid SemVer
+// prerelease tag publishes to GitHub Packages with `next` only.
+function classifyReleaseChannel(version) {
+  if (!isValidSemver(version)) {
+    throw new Error(`Invalid semver version: ${version}`);
+  }
+
+  return hasPrerelease(version) ? RELEASE_CHANNEL_PRERELEASE : RELEASE_CHANNEL_STABLE;
+}
+
+// Canonical post-release development bump: 1.2.3 -> 1.2.4-next.0. Prerelease
+// and build-metadata inputs are rejected because only a stable release tag
+// derives the next prerelease version.
+function deriveNextPrereleaseVersion(version) {
+  if (!isValidSemver(version)) {
+    throw new Error(`Invalid semver version: ${version}`);
+  }
+
+  if (hasBuildMetadata(version)) {
+    throw new Error(
+      `Cannot derive the next prerelease version from build-metadata input: ${version}`,
+    );
+  }
+
+  if (hasPrerelease(version)) {
+    throw new Error(`Cannot derive the next prerelease version from prerelease input: ${version}`);
+  }
+
+  const [major, minor, patch] = getBaseVersion(version).split('.').map(Number);
+  return `${major}.${minor}.${patch + 1}-${NEXT_PRERELEASE_LABEL}.0`;
 }
 
 function getBaseVersion(version) {
@@ -332,11 +374,17 @@ function rewriteInternalDependencies(manifest, internalPackageNames, version) {
 
 function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate }) {
   if (publishKind === 'tag-release') {
+    const releaseChannel = classifyReleaseChannel(version);
+    const npmJsPublishAllowed = releaseChannel === RELEASE_CHANNEL_STABLE;
     return {
       inputVersion: version,
+      releaseChannel,
       distTag: determineDistTag(version),
       computedVersion: version,
-      npmJsPublishAllowed: false,
+      npmJsPublishAllowed,
+      targetRegistry: npmJsPublishAllowed ? TARGET_REGISTRY_NPMJS : TARGET_REGISTRY_GITHUB_PACKAGES,
+      nextVersion:
+        releaseChannel === RELEASE_CHANNEL_STABLE ? deriveNextPrereleaseVersion(version) : null,
       pythonVersion: toPythonVersion(version),
     };
   }
@@ -345,9 +393,12 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
     const mainVersion = deriveMainBuildVersion(version, sha);
     return {
       inputVersion: version,
+      releaseChannel: classifyReleaseChannel(mainVersion),
       distTag: MAIN_SHA_TAG,
       computedVersion: mainVersion,
       npmJsPublishAllowed: false,
+      targetRegistry: TARGET_REGISTRY_GITHUB_PACKAGES,
+      nextVersion: null,
       pythonVersion: toPythonVersion(mainVersion),
     };
   }
@@ -356,9 +407,12 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
     const nightlyVersion = deriveNightlyVersion(version, sha, nightlyDate);
     return {
       inputVersion: version,
+      releaseChannel: classifyReleaseChannel(nightlyVersion),
       distTag: NIGHTLY_TAG,
       computedVersion: nightlyVersion,
       npmJsPublishAllowed: false,
+      targetRegistry: TARGET_REGISTRY_GITHUB_PACKAGES,
+      nextVersion: null,
       pythonVersion: toPythonVersion(nightlyVersion),
     };
   }
@@ -366,9 +420,12 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
   if (publishKind === 'manual-npmjs-candidate') {
     return {
       inputVersion: version,
+      releaseChannel: classifyReleaseChannel(version),
       distTag: determineDistTag(version),
       computedVersion: version,
       npmJsPublishAllowed: NPMJS_PUBLISH_ALLOWED,
+      targetRegistry: TARGET_REGISTRY_NPMJS,
+      nextVersion: null,
       registry: MANUAL_NPMJS_REGISTRY,
       pythonVersion: toPythonVersion(version),
     };
@@ -376,9 +433,12 @@ function getPolicySummary({ version, sha, mainBuild, publishKind, nightlyDate })
 
   const summary = {
     inputVersion: version,
+    releaseChannel: classifyReleaseChannel(version),
     distTag: determineDistTag(version),
     computedVersion: version,
     npmJsPublishAllowed: false,
+    targetRegistry: TARGET_REGISTRY_GITHUB_PACKAGES,
+    nextVersion: null,
     pythonVersion: toPythonVersion(version),
   };
 
@@ -459,6 +519,9 @@ module.exports = {
   determineDistTag,
   deriveMainBuildVersion,
   deriveNightlyVersion,
+  deriveNextPrereleaseVersion,
+  classifyReleaseChannel,
+  hasBuildMetadata,
   getDefaultDateString,
   normalizeShortSha,
   getPolicySummary,
@@ -477,7 +540,12 @@ module.exports = {
   MAIN_SHA_TAG,
   NIGHTLY_TAG,
   MANUAL_NPMJS_REGISTRY,
+  TARGET_REGISTRY_NPMJS,
+  TARGET_REGISTRY_GITHUB_PACKAGES,
   NPMJS_PUBLISH_ALLOWED,
+  RELEASE_CHANNEL_STABLE,
+  RELEASE_CHANNEL_PRERELEASE,
+  NEXT_PRERELEASE_LABEL,
   usage,
 };
 
