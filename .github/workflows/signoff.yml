@@ -41,6 +41,9 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           BASE_REF: origin/${{ github.base_ref }}
           HEAD_REF: HEAD
-          DCO_EXEMPT_USERS: MichalCz,dependabot[bot]
+          # github-actions[bot] is exempt because the post-release version-bump
+          # job in package-publish.yml commits under that identity, and its
+          # automated commit otherwise fails the required DCO check.
+          DCO_EXEMPT_USERS: MichalCz,dependabot[bot],github-actions[bot]
           DCO_TEAM_EXEMPT: ${{ steps.team.outputs.exempt }}
         run: node scripts/check-pr-signoffs.js

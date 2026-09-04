@@ -56,6 +56,10 @@ test('publish kinds resolve deterministic versions and channel-safe dist-tags', 
   });
   assert.equal(stableRelease.computedVersion, '1.2.3');
   assert.equal(stableRelease.distTag, 'latest');
+  assert.equal(stableRelease.releaseChannel, 'stable');
+  assert.equal(stableRelease.targetRegistry, 'npmjs');
+  assert.equal(stableRelease.npmJsPublishAllowed, true);
+  assert.equal(stableRelease.nextVersion, '1.2.4-next.0');
 
   const prerelease = policy.getPolicySummary({
     version: '1.2.3-rc.1',
@@ -63,6 +67,10 @@ test('publish kinds resolve deterministic versions and channel-safe dist-tags', 
   });
   assert.equal(prerelease.computedVersion, '1.2.3-rc.1');
   assert.equal(prerelease.distTag, 'next');
+  assert.equal(prerelease.releaseChannel, 'prerelease');
+  assert.equal(prerelease.targetRegistry, 'github-packages');
+  assert.equal(prerelease.npmJsPublishAllowed, false);
+  assert.equal(prerelease.nextVersion, null);
 
   const shaBuild = policy.getPolicySummary({
     version: '1.2.3-next.0',
@@ -71,6 +79,8 @@ test('publish kinds resolve deterministic versions and channel-safe dist-tags', 
   });
   assert.equal(shaBuild.computedVersion, '1.2.3-sha.abcdef123456');
   assert.equal(shaBuild.distTag, 'main-sha');
+  assert.equal(shaBuild.targetRegistry, 'github-packages');
+  assert.equal(shaBuild.npmJsPublishAllowed, false);
   assert.notEqual(shaBuild.distTag, 'latest');
   assert.notEqual(shaBuild.distTag, 'next');
 
@@ -82,8 +92,46 @@ test('publish kinds resolve deterministic versions and channel-safe dist-tags', 
   });
   assert.equal(nightly.computedVersion, '1.2.3-nightly.20260616.fedcba987654');
   assert.equal(nightly.distTag, 'nightly');
+  assert.equal(nightly.targetRegistry, 'github-packages');
+  assert.equal(nightly.npmJsPublishAllowed, false);
   assert.notEqual(nightly.distTag, 'latest');
   assert.notEqual(nightly.distTag, 'next');
+});
+
+test('release channel classification routes stable and prerelease versions', () => {
+  assert.equal(policy.classifyReleaseChannel('1.2.3'), 'stable');
+  assert.equal(policy.classifyReleaseChannel('0.0.0'), 'stable');
+  assert.equal(policy.classifyReleaseChannel('1.2.3-rc.1'), 'prerelease');
+  assert.equal(policy.classifyReleaseChannel('1.2.3-next.0'), 'prerelease');
+  assert.equal(policy.classifyReleaseChannel('1.2.3+build.5'), 'stable');
+  assert.throws(() => policy.classifyReleaseChannel('1.2'), /Invalid semver version/);
+});
+
+test('deriveNextPrereleaseVersion bumps the patch with the next.0 prerelease', () => {
+  assert.equal(policy.deriveNextPrereleaseVersion('1.2.3'), '1.2.4-next.0');
+  assert.equal(policy.deriveNextPrereleaseVersion('0.0.0'), '0.0.1-next.0');
+  assert.equal(policy.deriveNextPrereleaseVersion('1.2.99'), '1.2.100-next.0');
+  assert.equal(policy.deriveNextPrereleaseVersion('0.8.0'), '0.8.1-next.0');
+});
+
+test('deriveNextPrereleaseVersion rejects prerelease, build-metadata, and invalid inputs', () => {
+  assert.throws(
+    () => policy.deriveNextPrereleaseVersion('1.2.3-rc.1'),
+    /Cannot derive the next prerelease version from prerelease input/,
+  );
+  assert.throws(
+    () => policy.deriveNextPrereleaseVersion('1.2.3-next.0'),
+    /Cannot derive the next prerelease version from prerelease input/,
+  );
+  assert.throws(
+    () => policy.deriveNextPrereleaseVersion('1.2.3+build.5'),
+    /Cannot derive the next prerelease version from build-metadata input/,
+  );
+  assert.throws(
+    () => policy.deriveNextPrereleaseVersion('1.2.3-rc.1+build.5'),
+    /Cannot derive the next prerelease version from (build-metadata|prerelease) input/,
+  );
+  assert.throws(() => policy.deriveNextPrereleaseVersion('1.2'), /Invalid semver version/);
 });
 
 test('manual npmjs candidates are intentionally allowed with safe dist-tags', () => {
@@ -96,6 +144,8 @@ test('manual npmjs candidates are intentionally allowed with safe dist-tags', ()
   assert.equal(npmCandidate.npmJsPublishAllowed, true);
   assert.equal(npmCandidate.distTag, 'latest');
   assert.equal(npmCandidate.registry, 'npmjs');
+  assert.equal(npmCandidate.targetRegistry, 'npmjs');
+  assert.equal(npmCandidate.releaseChannel, 'stable');
 
   const prereleaseCandidate = policy.getPolicySummary({
     version: '1.2.3-rc.1',
@@ -104,6 +154,8 @@ test('manual npmjs candidates are intentionally allowed with safe dist-tags', ()
   assert.equal(prereleaseCandidate.npmJsPublishAllowed, true);
   assert.equal(prereleaseCandidate.distTag, 'next');
   assert.equal(prereleaseCandidate.registry, 'npmjs');
+  assert.equal(prereleaseCandidate.targetRegistry, 'npmjs');
+  assert.equal(prereleaseCandidate.releaseChannel, 'prerelease');
 });
 
 test('main-build version strips prerelease and appends sha', () => {
@@ -215,6 +267,33 @@ test('CLI --json returns deterministic version and tag', () => {
   assert.equal(payload.inputVersion, '1.2.3-next.0');
   assert.equal(payload.computedVersion, '1.2.3-next.0');
   assert.equal(payload.npmJsPublishAllowed, false);
+  assert.equal(payload.releaseChannel, 'prerelease');
+  assert.equal(payload.targetRegistry, 'github-packages');
+});
+
+test('CLI --json classifies tag releases and derives the next prerelease for stable tags', () => {
+  const command = process.execPath;
+  const stableOutput = execFileSync(
+    command,
+    [scriptPath, '--version', '1.2.3', '--publish-kind', 'tag-release', '--json'],
+    { encoding: 'utf8' },
+  );
+  const stablePayload = JSON.parse(stableOutput);
+  assert.equal(stablePayload.releaseChannel, 'stable');
+  assert.equal(stablePayload.targetRegistry, 'npmjs');
+  assert.equal(stablePayload.npmJsPublishAllowed, true);
+  assert.equal(stablePayload.nextVersion, '1.2.4-next.0');
+
+  const prereleaseOutput = execFileSync(
+    command,
+    [scriptPath, '--version', '1.2.3-rc.1', '--publish-kind', 'tag-release', '--json'],
+    { encoding: 'utf8' },
+  );
+  const prereleasePayload = JSON.parse(prereleaseOutput);
+  assert.equal(prereleasePayload.releaseChannel, 'prerelease');
+  assert.equal(prereleasePayload.targetRegistry, 'github-packages');
+  assert.equal(prereleasePayload.npmJsPublishAllowed, false);
+  assert.equal(prereleasePayload.nextVersion, null);
 });
 
 test('CLI --json supports merged PR SHA and nightly publish kinds', () => {

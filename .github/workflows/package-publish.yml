@@ -1,24 +1,38 @@
 name: Package publish readiness
 
 # Publishing policy:
-#   - GitHub Packages receives preview publications only: package-affecting
-#     merges to main (main-sha dist-tag) and scheduled nightly runs (nightly
-#     dist-tag). Stable/prerelease tags never publish JavaScript to GitHub
-#     Packages.
-#   - npmjs.org JavaScript publication is direct OIDC `npm publish` (no
-#     staging), gated by the single `npmjs-release` environment. It runs for
-#     `v*` tag pushes and for manual workflow_dispatch runs; manual dry-run
-#     invocations execute `npm publish --dry-run`.
+#   - GitHub Packages receives JavaScript publications from three paths:
+#     package-affecting merges to main (main-sha dist-tag), scheduled nightly
+#     runs (nightly dist-tag), and prerelease `v*` tags (SemVer versions with a
+#     prerelease identifier, published with the `next` dist-tag and never to
+#     npmjs.org). Stable tags never publish JavaScript to GitHub Packages.
+#   - npmjs.org JavaScript publication runs only for stable `vX.Y.Z` tag pushes
+#     (dist-tag `latest`) and manual workflow_dispatch runs. It is direct OIDC
+#     `npm publish` (no staging), gated by the single `npmjs-release`
+#     environment. Manual dry-run invocations execute `npm publish --dry-run`.
 #   - Tag runs fail closed when the tag version differs from any workspace
 #     package.json version, the Python project metadata, or the Python
 #     uv.lock package entry (PEP 440 form via the canonical conversion).
+#     The same check classifies the tag as stable or prerelease through the
+#     canonical policy helper and derives the next development prerelease
+#     (1.2.3 -> 1.2.4-next.0) for stable tags.
 #   - npmjs-publish is skip-safe: manual dispatch publishes when
 #     publish_npmjs is true even though the tag-only check is skipped, and
-#     tag releases publish only when tag-version-check succeeded.
+#     stable tag releases publish only when tag-version-check succeeded.
+#   - Registry publishes are rerun-safe: when the exact package version already
+#     exists in the target registry the publish step skips that package instead
+#     of failing blindly; tag metadata conflicts still fail closed in
+#     tag-version-check before anything is published.
 #   - Python release assets are produced by a separate tag-only job that
 #     validates artifacts and attaches a PEP440 tag-versioned wheel and
-#     source distribution to the GitHub Release, without any GitHub Packages
-#     JavaScript publish.
+#     source distribution to the GitHub Release for both stable and
+#     prerelease tags, without any GitHub Packages JavaScript publish.
+#   - After a stable tag release completes (both the npmjs.org publish and the
+#     Python release asset jobs succeed), a dedicated job creates or reuses a
+#     normal pull request against protected `main` that bumps source version
+#     metadata to the next development prerelease with
+#     `npm run package:prepare-release`. The workflow never pushes directly to
+#     `main` and never force-pushes; prerelease tags get no post-release PR.
 
 on:
   pull_request:
@@ -201,7 +215,7 @@ jobs:
           echo "Pull requests and validation-only runs stop after build, staging, packing, and tests."
 
   tag-version-check:
-    name: Fail closed unless the tag version matches all package metadata
+    name: Classify the tag channel and fail closed unless the tag version matches all package metadata
     runs-on: ubuntu-latest
     needs: package-validation
     if: ${{ github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v') }}
@@ -211,6 +225,8 @@ jobs:
       tag_version: ${{ steps.consistency.outputs.publish_version }}
       python_version: ${{ steps.consistency.outputs.python_version }}
       dist_tag: ${{ steps.consistency.outputs.dist_tag }}
+      release_channel: ${{ steps.consistency.outputs.release_channel }}
+      next_version: ${{ steps.consistency.outputs.next_version }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v6
@@ -281,6 +297,8 @@ jobs:
           console.log(`publish_version=${tagVersion}`);
           console.log(`python_version=${expectedPythonVersion}`);
           console.log(`dist_tag=${summary.distTag}`);
+          console.log(`release_channel=${summary.releaseChannel}`);
+          console.log(`next_version=${summary.nextVersion ?? ''}`);
           NODE
 
   github-packages-preview:
@@ -390,10 +408,16 @@ jobs:
       - name: Publish staged packages to GitHub Packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_VERSION: ${{ steps.publish-metadata.outputs.publish_version }}
         run: |
           for packageDirectory in dist/packages/*;
           do
-            (cd "$packageDirectory" && npm publish --access public --tag "${{ steps.publish-metadata.outputs.dist_tag }}" --registry https://npm.pkg.github.com)
+            packageName=$(node -pe 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).name' "${packageDirectory}/package.json")
+            if npm view "${packageName}@${PUBLISH_VERSION}" version --registry https://npm.pkg.github.com >/dev/null 2>&1; then
+              echo "${packageName}@${PUBLISH_VERSION} already exists in GitHub Packages; skipping this package (rerun-safe)."
+            else
+              (cd "$packageDirectory" && npm publish --access public --tag "${{ steps.publish-metadata.outputs.dist_tag }}" --registry https://npm.pkg.github.com)
+            fi
           done
 
       - name: Upload Python distribution artifact
@@ -421,9 +445,10 @@ jobs:
     # Skip-safe policy expression: always() evaluates this condition even when
     # the tag-only check job is skipped; package-validation must have
     # succeeded; manual dispatch publishes when publish_npmjs is true despite
-    # the skipped tag check; tag releases publish only when the fail-closed
-    # tag-version-check succeeded.
-    if: ${{ always() && needs.package-validation.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.publish_npmjs == true) || (github.ref_type == 'tag' && needs.tag-version-check.result == 'success')) }}
+    # the skipped tag check; stable tag releases publish only when the
+    # fail-closed tag-version-check succeeded and classified the tag as
+    # stable. Prerelease tags route to GitHub Packages instead.
+    if: ${{ always() && needs.package-validation.result == 'success' && ((github.event_name == 'workflow_dispatch' && inputs.publish_npmjs == true) || (github.ref_type == 'tag' && needs.tag-version-check.result == 'success' && needs.tag-version-check.outputs.release_channel == 'stable')) }}
     environment: npmjs-release
     permissions:
       contents: read
@@ -474,8 +499,12 @@ jobs:
             ? policy.getPolicySummary({ version, publishKind: 'tag-release' })
             : policy.getPolicySummary({ version, publishKind: 'manual-npmjs-candidate' });
 
-          if (!isTagRelease && !summary.npmJsPublishAllowed) {
-            throw new Error('npmjs publishing is not allowed for this candidate');
+          if (!summary.npmJsPublishAllowed) {
+            throw new Error('npmjs publishing is not allowed for this version under the release policy');
+          }
+
+          if (isTagRelease && summary.releaseChannel !== policy.RELEASE_CHANNEL_STABLE) {
+            throw new Error('prerelease tags publish JavaScript to GitHub Packages only, never npmjs.org');
           }
 
           console.log(`publish_version=${summary.computedVersion}`);
@@ -496,14 +525,80 @@ jobs:
         env:
           NPMJS_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.npmjs_dry_run }}
           DIST_TAG: ${{ steps.npmjs-metadata.outputs.dist_tag }}
+          PUBLISH_VERSION: ${{ steps.npmjs-metadata.outputs.publish_version }}
         run: |
           for packageDirectory in dist/packages/*;
           do
+            packageName=$(node -pe 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).name' "${packageDirectory}/package.json")
             if [ "$NPMJS_DRY_RUN" = "true" ]; then
               echo "npmjs_dry_run is true; running npm publish --dry-run for ${packageDirectory}."
               (cd "$packageDirectory" && npm publish --dry-run --tag "${DIST_TAG}" --registry https://registry.npmjs.org/)
+            elif npm view "${packageName}@${PUBLISH_VERSION}" version --registry https://registry.npmjs.org/ >/dev/null 2>&1; then
+              echo "${packageName}@${PUBLISH_VERSION} already exists on npmjs.org; skipping this package (rerun-safe)."
             else
               (cd "$packageDirectory" && npm publish --access public --tag "${DIST_TAG}" --registry https://registry.npmjs.org/)
+            fi
+          done
+
+  github-packages-tag-prerelease:
+    name: Publish prerelease tag packages to GitHub Packages
+    runs-on: ubuntu-latest
+    needs: [package-validation, tag-version-check]
+    # Prerelease tags (vX.Y.Z-<anything>) publish JavaScript only to GitHub
+    # Packages with the `next` dist-tag and never to npmjs.org. Stable tags and
+    # every non-tag event skip this job.
+    if: ${{ github.ref_type == 'tag' && needs.package-validation.result == 'success' && needs.tag-version-check.result == 'success' && needs.tag-version-check.outputs.release_channel == 'prerelease' }}
+    concurrency:
+      group: github-packages-tag-prerelease-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Setup Node for GitHub Packages
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: '@signicode'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download validated package build output
+        uses: actions/download-artifact@v4
+        with:
+          name: package-build-output
+          path: .
+
+      - name: Apply prerelease tag version to staged packages
+        run: |
+          npm run package:version-policy -- --version "${{ needs.tag-version-check.outputs.tag_version }}" --apply-staged
+
+      - name: Validate versioned staged and tarball consumers
+        run: |
+          npm run test:package-consumers -- --source=staging
+          npm run test:package-consumers -- --source=tarball
+          npm run test:package-tarballs
+
+      - name: Publish prerelease packages to GitHub Packages with next dist-tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_VERSION: ${{ needs.tag-version-check.outputs.tag_version }}
+          DIST_TAG: ${{ needs.tag-version-check.outputs.dist_tag }}
+        run: |
+          for packageDirectory in dist/packages/*;
+          do
+            packageName=$(node -pe 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).name' "${packageDirectory}/package.json")
+            if npm view "${packageName}@${PUBLISH_VERSION}" version --registry https://npm.pkg.github.com >/dev/null 2>&1; then
+              echo "${packageName}@${PUBLISH_VERSION} already exists in GitHub Packages; skipping this package (rerun-safe)."
+            else
+              (cd "$packageDirectory" && npm publish --access public --tag "${DIST_TAG}" --registry https://npm.pkg.github.com)
             fi
           done
 
@@ -581,3 +676,135 @@ jobs:
           files: |
             packages/verser2-guest-python/dist/python/*.whl
             packages/verser2-guest-python/dist/python/*.tar.gz
+
+  post-release-next-pr:
+    name: Open post-release next-version PR for stable tags
+    runs-on: ubuntu-latest
+    needs: [tag-version-check, npmjs-publish, python-release-assets]
+    # Stable tags only, and only after BOTH the npmjs.org publish and the
+    # Python release asset jobs succeeded. Prerelease tags never produce a
+    # post-release PR. This job must never push directly to main: every
+    # main-branch change goes through the normal protected pull-request flow.
+    if: ${{ needs.tag-version-check.result == 'success' && needs.tag-version-check.outputs.release_channel == 'stable' && needs.npmjs-publish.result == 'success' && needs.python-release-assets.result == 'success' }}
+    concurrency:
+      group: post-release-next-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout tag source with full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create or reuse the post-release version bump PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          TAG_SHA: ${{ github.sha }}
+          NEXT_VERSION: ${{ needs.tag-version-check.outputs.next_version }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$NEXT_VERSION" ]; then
+            echo "tag-version-check produced no next_version for ${RELEASE_TAG}; failing closed." >&2
+            exit 1
+          fi
+
+          # Deterministic, non-main branch keyed by the release tag.
+          BRANCH="release/post-${RELEASE_TAG}"
+          case "$BRANCH" in
+            main|refs/heads/main)
+              echo "Post-release work must never target main directly." >&2
+              exit 1
+              ;;
+          esac
+
+          # Branch only from current origin/main, and only after verifying the
+          # stable tag commit is an ancestor of origin/main.
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "Tag commit ${TAG_SHA} is not an ancestor of origin/main; refusing to branch." >&2
+            exit 1
+          fi
+
+          MAIN_VERSION=$(git show origin/main:packages/verser-common/package.json | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')
+          if [ "$MAIN_VERSION" = "$NEXT_VERSION" ]; then
+            echo "origin/main already carries version ${NEXT_VERSION}; no post-release bump needed."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Reuse this job's own deterministic branch if a prior partial run
+          # pushed it; otherwise branch from current origin/main. Plain pushes
+          # only — never a force push.
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Reusing existing ${BRANCH} branch from a prior run."
+            git fetch origin "$BRANCH"
+            git switch --track "$BRANCH"
+          else
+            git switch --create "$BRANCH" origin/main
+          fi
+
+          # Fail closed unless the COMPLETE committed branch diff relative to
+          # origin/main touches only the approved source-version metadata paths
+          # (workspace package.json files, package-lock.json, and the Python
+          # pyproject.toml/uv.lock). A freshly created branch has an empty diff,
+          # so this constrains a pre-existing branch reused from a prior partial
+          # run or an unexpected push before package:prepare-release mutates
+          # anything. --no-renames keeps a rename visible as a delete of the
+          # disallowed source path so it cannot slip past the allowlist. This is
+          # separate from, and in addition to, the staged-diff allowlist below.
+          for branchFile in $(git diff --name-only --no-renames origin/main...HEAD); do
+            case "$branchFile" in
+              packages/*/package.json|package-lock.json|packages/verser2-guest-python/pyproject.toml|packages/verser2-guest-python/uv.lock)
+                ;;
+              *)
+                echo "Refusing to prepare a release: branch ${BRANCH} differs from origin/main by non-metadata file: ${branchFile}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          # Rerun-safe: reuse an already-open post-release PR before creating work.
+          if [ "$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open --json number --limit 1)" != "[]" ]; then
+            echo "An open ${BRANCH} pull request already exists; reusing it."
+            exit 0
+          fi
+
+          npm run package:prepare-release -- --version "$NEXT_VERSION"
+
+          # Commit only source version metadata: workspace package.json files,
+          # package-lock.json, and the Python pyproject.toml/uv.lock. Never any
+          # dist or build output.
+          git add packages/*/package.json package-lock.json packages/verser2-guest-python/pyproject.toml packages/verser2-guest-python/uv.lock
+
+          for stagedFile in $(git diff --cached --name-only); do
+            case "$stagedFile" in
+              packages/*/package.json|package-lock.json|packages/verser2-guest-python/pyproject.toml|packages/verser2-guest-python/uv.lock)
+                ;;
+              *)
+                echo "Refusing to commit non-metadata file: ${stagedFile}" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          if git diff --cached --quiet; then
+            echo "No metadata changes to commit for ${NEXT_VERSION} on ${BRANCH}."
+          else
+            git commit -m "chore(release): prepare v${NEXT_VERSION} development versions"
+          fi
+
+          git push --set-upstream origin "$BRANCH"
+
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore(release): bump development versions to ${NEXT_VERSION} after ${RELEASE_TAG}" \
+            --body "Automated post-release bump from the \`${RELEASE_TAG}\` release workflow. It ran \`npm run package:prepare-release -- --version ${NEXT_VERSION}\` after npmjs.org publication and Python release assets succeeded, and changes source version metadata only (workspace package.json files, package-lock.json, pyproject.toml, uv.lock). Review and merge through the normal protected main flow."
