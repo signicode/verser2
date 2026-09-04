@@ -1,6 +1,6 @@
 {
   "name": "@signicode/verser2-guest-node",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Node Guest, Broker, Agent, Dispatcher, and fetch helpers for Verser2.",
   "license": "MIT",
@@ -24,8 +24,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@signicode/verser-common": "0.8.0",
-    "@signicode/verser2-guest-js-common": "0.8.0",
+    "@signicode/verser-common": "0.8.1",
+    "@signicode/verser2-guest-js-common": "0.8.1",
     "undici": "^7.29.0"
   },
   "scripts": {

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.1 - Release publishing policy
+
+- Stable `vX.Y.Z` tags publish JavaScript packages directly to npmjs.org with trusted OIDC and `latest`; prerelease tags publish JavaScript packages only to GitHub Packages with `next`.
+- Both tag kinds attach Python wheel and source-distribution assets to their GitHub Release, and stable releases open a protected-main post-release PR for the next development prerelease.
+- Tag version consistency, rerun-safe publishing, and post-release branch guards fail closed when release metadata is unsafe.
+
 ## v0.8.0 - Hop-local federation route authorization
 
 - Hosts can configure `routeAuthorizer` to allow or deny resolved adjacent
