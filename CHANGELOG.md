@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.2
+
+- Refreshes compatible dependencies: Undici 7.30.0, h2 4.4.1 with the CVE-2026-71554 security fix, and related cryptography, hpack, cffi, and development lock updates.
+
 ## v0.8.1 - Release publishing policy
 
 - Stable `vX.Y.Z` tags publish JavaScript packages directly to npmjs.org with trusted OIDC and `latest`; prerelease tags publish JavaScript packages only to GitHub Packages with `next`.
