@@ -11,6 +11,7 @@ import type {
   VerserFederatedRouteAuthorizationCallback,
   VerserFederatedRouteAuthorizationPair,
   VerserHeaderPair,
+  VerserHostId,
   VerserHostTlsOptions,
   VerserRegistrationRequest,
   VerserRouteLifecycleEvent,
@@ -125,7 +126,24 @@ export type VerserLocalGuestRequestListener = (
     readonly headers: VerserSerializedHeaderMap;
   },
   response: VerserLocalGuestResponse,
+  context?: VerserLocalGuestDispatchContext,
 ) => void;
+
+/**
+ * Per-request context supplied only when the Host dispatches a federated
+ * inbound request to an attached local Guest.
+ *
+ * @public
+ */
+export interface VerserLocalGuestDispatchContext {
+  /** Federation provenance for this inbound dispatch. */
+  readonly federation: {
+    /** Canonical ID of the already-authorized inbound federation Host. */
+    readonly hostId: VerserHostId;
+    /** Opaque application value returned while authorizing that federation link. */
+    readonly authorizationContext?: unknown;
+  };
+}
 
 /**
  * Minimal Node-compatible response surface used by local Host-side Guests.

@@ -159,7 +159,8 @@ export interface VerserHostFederationAuthorizationContext {
  * @public
  */
 export type VerserHostFederationAuthorizationAction =
-  | { readonly action: 'allow' }
+  /** `authorizationContext`, when supplied, is retained opaquely for this inbound link. */
+  | { readonly action: 'allow'; readonly authorizationContext?: unknown }
   | { readonly action: 'close'; readonly reason?: string };
 
 /**

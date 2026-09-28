@@ -94,9 +94,13 @@ const host = createVerserHost({
 ```
 
 The callback returns `{ action: 'allow' }` to accept the Host link or
-`{ action: 'close', reason }` to reject it. mTLS trust is transport evidence;
-the application callback still decides whether the declared Host identity and
-certificate context are allowed.
+`{ action: 'close', reason }` to reject it. An allow result may also include an
+opaque `authorizationContext` value. The Host keeps that exact value only for
+the admitted inbound link and supplies it to a directly attached local Guest
+as `context.federation.authorizationContext`, alongside the canonical inbound
+Host ID. It is never serialized or passed on outbound federation paths. mTLS
+trust is transport evidence; the application callback still decides whether the
+declared Host identity and certificate context are allowed.
 
 ## Federated route authorization callback
 

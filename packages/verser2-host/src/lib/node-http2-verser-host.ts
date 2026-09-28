@@ -126,7 +126,7 @@ interface UpstreamLink {
   closing: boolean;
 }
 
-interface InboundFederationLink {
+interface InboundFederationLink extends federation.ResolvedInboundFederationLink {
   readonly hostId: string;
   readonly session: http2.Http2Session;
   readonly routeStream?: http2.ServerHttp2Stream;
@@ -1275,8 +1275,8 @@ export class NodeHttp2VerserHost implements VerserHost {
       });
     }
 
-    const authorized = await this.authorizeHostFederation(stream, handshake);
-    if (!authorized) {
+    const authorization = await this.authorizeHostFederation(stream, handshake);
+    if (!authorization.authorized) {
       return;
     }
     if (this.inboundFederationHosts.has(handshake.hostId)) {
@@ -1289,7 +1289,13 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (session === undefined) {
       throw createVerserError('protocol-error', 'Host federation stream has no HTTP/2 session');
     }
-    this.inboundFederationHosts.set(handshake.hostId, { hostId: handshake.hostId, session });
+    this.inboundFederationHosts.set(handshake.hostId, {
+      hostId: handshake.hostId,
+      session,
+      ...(authorization.authorizationContext === undefined
+        ? {}
+        : { authorizationContext: authorization.authorizationContext }),
+    });
     session.once('close', () => this.removeInboundFederationHost(handshake.hostId));
 
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.registered, peerId: handshake.hostId });
@@ -1416,7 +1422,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
 
     stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
-    void this.handleFederatedIncomingRequestStream(stream, hostId);
+    void this.handleFederatedIncomingRequestStream(stream, hostId, link);
   }
 
   private async handleUpstreamRequestStream(
@@ -1434,6 +1440,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async handleFederatedIncomingRequestStream(
     stream: federation.FederationRequestStream,
     peerHostId: string,
+    inboundLink?: federation.ResolvedInboundFederationLink,
   ): Promise<void> {
     const localHostId = this.getFederationHostId();
     return federation.handleFederatedIncomingRequestStream(
@@ -1442,6 +1449,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       localHostId,
       (request) => this.routeLocalRequest(request),
       (event) => this.emitLifecycle(event),
+      inboundLink,
     );
   }
 
@@ -1547,10 +1555,10 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async authorizeHostFederation(
     stream: http2.ServerHttp2Stream,
     handshake: VerserHostFederationHandshake,
-  ): Promise<boolean> {
+  ): Promise<{ authorized: boolean; authorizationContext?: unknown }> {
     const callback = this.options.tls?.clientAuth?.authorizeFederation;
     if (callback === undefined) {
-      return true;
+      return { authorized: true };
     }
 
     const session = stream.session;
@@ -1570,7 +1578,11 @@ export class NodeHttp2VerserHost implements VerserHost {
     });
 
     if (action.action === 'allow') {
-      return true;
+      return {
+        authorized: true,
+        authorizationContext:
+          'authorizationContext' in action ? action.authorizationContext : undefined,
+      };
     }
 
     const reason = action.reason ?? 'Host federation rejected by policy';
@@ -1583,7 +1595,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       stream.end(JSON.stringify({ status: 'closed', reason }));
     }
     session.close();
-    return false;
+    return { authorized: false };
   }
 
   private removeInboundFederationHost(hostId: string): void {

@@ -65,6 +65,101 @@ test.before(async () => {
   }
 });
 
+test('inbound federation authorization context reaches only the direct local Guest listener', async () => {
+  const authorizationContext = { tenant: 'runner', marker: Symbol('opaque') };
+  const seenContexts = [];
+  const listenerArgCounts = [];
+  const manager = createVerserHost({
+    hostId: 'context-manager',
+    tls: tlsOptions({
+      authorizeFederation() {
+        return { action: 'allow', authorizationContext };
+      },
+    }),
+  });
+  await manager.start();
+  let raw;
+  let localGuest;
+  let localBroker;
+  try {
+    localGuest = await manager.attachLocalGuest({
+      guestId: 'context-guest',
+      routedDomains: ['context.test'],
+      listener(request, response, ...listenerArgs) {
+        listenerArgCounts.push(2 + listenerArgs.length);
+        seenContexts.push(listenerArgs[0]);
+        response.end('ok');
+      },
+    });
+    localBroker = await manager.attachLocalBroker({ brokerId: 'context-broker' });
+    const ordinaryResponse = await localBroker.request({
+      targetId: 'context-guest',
+      routeDomain: 'context.test',
+      method: 'GET',
+      path: '/ordinary',
+    });
+    assert.equal(await text(ordinaryResponse.body), 'ok');
+    assert.equal(listenerArgCounts.at(-1), 2);
+    assert.equal(seenContexts.at(-1), undefined);
+
+    raw = await connectRawClient(manager.address.port);
+    const handshake = raw.request({ ':method': 'POST', ':path': '/verser/host/federation' });
+    handshake.end(
+      JSON.stringify({
+        hostId: 'context-runner',
+        protocolVersion: 1,
+        importRoutes: true,
+        exportRoutes: true,
+      }),
+    );
+    assert.equal(Number((await once(handshake, 'response'))[':status']), 200);
+    handshake.resume();
+
+    const dispatch = raw.request({
+      ':method': 'POST',
+      ':path': '/verser/host/federation/dispatch-request',
+      'x-verser-host-id': 'context-runner',
+    });
+    assert.equal(Number((await once(dispatch, 'response'))[':status']), 200);
+    dispatch.end(
+      common.encodeVerserEnvelope({
+        type: 'request',
+        metadata: {
+          requestId: 'context-request',
+          sourceId: 'context-source',
+          targetId: 'context-guest',
+          routeDomain: 'context.test',
+          method: 'GET',
+          path: '/federated',
+          headers: {},
+        },
+      }),
+    );
+    const response = await common.readLeaseResponseMetadataFromStream(dispatch, {
+      requestId: 'context-request',
+      targetId: 'context-guest',
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(await text(dispatch), 'ok');
+    assert.equal(listenerArgCounts.at(-1), 3);
+    assert.equal(seenContexts.at(-1).federation.hostId, 'context-runner');
+    assert.equal(seenContexts.at(-1).federation.authorizationContext, authorizationContext);
+
+    await raw.close();
+    raw = undefined;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      manager.getFederatedRouteCandidates().some((route) => route.source === 'upstream'),
+      false,
+    );
+  } finally {
+    raw?.destroy();
+    await localBroker?.close();
+    await localGuest?.close();
+    await manager.close();
+  }
+});
+
 // ================ Federation Upstream Abort Propagation (deferred) ================
 // Mid-stream Broker abort propagation through federation — the AbortSignal
 // reason carries a structured stream-failure error through to the local
