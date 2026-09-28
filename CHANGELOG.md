@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.1
+
+- Adds an opt-in upstream reverse request-stream pool for concurrent federation
+  requests, with bounded idle-stream replenishment while long-lived responses
+  remain active and configurable acquisition queue limits.
+- Validates pool values and cleans up queued acquisitions on cancellation,
+  timeout, upstream close, and reconnect; omitting `upstreamPool` preserves the
+  legacy one-stream behavior.
+
 ## v0.9.0
 
 - Hosts can retain opaque context returned by successful inbound federation

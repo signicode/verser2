@@ -121,6 +121,10 @@ interface UpstreamLink {
   readonly session: http2.ClientHttp2Session;
   readonly routeStream: http2.ClientHttp2Stream;
   requestStream: http2.ClientHttp2Stream;
+  readonly upstreamPool?: NormalizedUpstreamPool;
+  requestStreams: Set<http2.ClientHttp2Stream>;
+  activeRequestStreams: Set<http2.ClientHttp2Stream>;
+  openingRequestStreams?: Promise<void>;
   vwsStream?: http2.ClientHttp2Stream;
   vwsBusy: boolean;
   closing: boolean;
@@ -134,12 +138,25 @@ interface InboundFederationLink extends federation.ResolvedInboundFederationLink
   readonly vwsStream?: http2.ServerHttp2Stream;
   readonly vwsBusy?: boolean;
   readonly requestBusy?: boolean;
+  readonly requestStreams?: Set<http2.ServerHttp2Stream>;
+  readonly requestBusyStreams?: Set<http2.ServerHttp2Stream>;
+  readonly requestPool?: NormalizedUpstreamPool;
 }
 
 interface FederatedRequestStreamWaiter {
-  readonly timeout: NodeJS.Timeout;
+  timeout?: NodeJS.Timeout;
+  settled?: boolean;
   readonly resolve: (stream: http2.ServerHttp2Stream) => void;
   readonly reject: (error: VerserError) => void;
+  readonly signal?: AbortSignal;
+  readonly onAbort?: () => void;
+}
+
+interface NormalizedUpstreamPool {
+  readonly minWaitingStreams: number;
+  readonly maxOpenStreams: number;
+  readonly leaseAcquireTimeoutMs: number;
+  readonly maxQueuedAcquires: number;
 }
 
 interface FederatedVwsPoolWaiter {
@@ -148,6 +165,36 @@ interface FederatedVwsPoolWaiter {
   readonly reject: (error: VerserError) => void;
   readonly signal?: AbortSignal;
   readonly onAbort?: () => void;
+}
+
+function validateUpstreamPool(
+  pool: VerserHostUpstreamOptions['upstreamPool'],
+): NormalizedUpstreamPool | undefined {
+  if (pool === undefined) return undefined;
+  const normalized: NormalizedUpstreamPool = {
+    minWaitingStreams: pool.minWaitingStreams ?? 4,
+    maxOpenStreams: pool.maxOpenStreams ?? 16,
+    leaseAcquireTimeoutMs: pool.leaseAcquireTimeoutMs ?? 5000,
+    maxQueuedAcquires: pool.maxQueuedAcquires ?? 128,
+  };
+  for (const [name, value] of Object.entries(normalized)) {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0) {
+      throw createVerserError('invalid-registration', `Invalid upstreamPool.${name}`);
+    }
+  }
+  if (normalized.minWaitingStreams > normalized.maxOpenStreams) {
+    throw createVerserError(
+      'invalid-registration',
+      'upstreamPool.maxOpenStreams must be at least minWaitingStreams',
+    );
+  }
+  if (normalized.maxOpenStreams === 0) {
+    throw createVerserError(
+      'invalid-registration',
+      'upstreamPool.maxOpenStreams must be greater than zero',
+    );
+  }
+  return normalized;
 }
 
 /**
@@ -298,8 +345,8 @@ export class NodeHttp2VerserHost implements VerserHost {
         this.leasePool.tryAcquireLease(guestId, requestId, timeoutMs),
       acquireLease: (guestId, requestId, timeoutMs) =>
         this.leasePool.acquireLease(guestId, requestId, timeoutMs),
-      tryAcquireFederatedRequestStream: (hostId, timeoutMs) =>
-        this.tryAcquireFederatedRequestStream(hostId, timeoutMs),
+      tryAcquireFederatedRequestStream: (hostId, timeoutMs, signal) =>
+        this.tryAcquireFederatedRequestStream(hostId, timeoutMs, signal),
       routeAuthorizerEnabled: () => this.routeAuthorizer !== undefined,
       authorizeFederatedHop: (previousAdvertisedDomain, nextSelectedDomain) =>
         this.authorizeFederatedHopPair(previousAdvertisedDomain, nextSelectedDomain),
@@ -590,6 +637,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   public async connectUpstream(
     options: VerserHostUpstreamOptions,
   ): Promise<VerserHostUpstreamHandle> {
+    const upstreamPool = validateUpstreamPool(options.upstreamPool);
     const localHostId = this.getFederationHostId();
     const upstreamId = createPeerId(options.upstreamId);
     if (this.upstreamLinks.has(upstreamId) || this.pendingUpstreamConnections.has(upstreamId)) {
@@ -608,13 +656,21 @@ export class NodeHttp2VerserHost implements VerserHost {
       });
       const remoteHostId = await this.sendUpstreamHandshake(session, upstreamId, localHostId);
       const routeStream = await this.openUpstreamRouteStream(session, upstreamId, localHostId);
-      const requestStream = await this.openUpstreamRequestStream(session, upstreamId, localHostId);
+      const requestStream = await this.openUpstreamRequestStream(
+        session,
+        upstreamId,
+        localHostId,
+        upstreamPool,
+      );
       link = {
         upstreamId,
         remoteHostId,
         session,
         routeStream,
         requestStream,
+        upstreamPool,
+        requestStreams: new Set([requestStream]),
+        activeRequestStreams: new Set(),
         vwsBusy: false,
         closing: false,
       };
@@ -622,6 +678,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       session.once('close', () => this.handleUpstreamSessionClose(upstreamId));
       routeStream.once('close', () => this.handleUpstreamRouteStreamClose(upstreamId));
       void this.handleUpstreamRequestStream(requestStream, upstreamId);
+      if (upstreamPool !== undefined) {
+        await this.maintainUpstreamRequestPool(link as UpstreamLink);
+      }
       void this.establishUpstreamVwsPool(link as UpstreamLink);
       session.on('error', (error) => {
         this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
@@ -1362,8 +1421,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     session: http2.ClientHttp2Session,
     upstreamId: string,
     localHostId: VerserHostId,
+    upstreamPool?: NormalizedUpstreamPool,
   ): Promise<http2.ClientHttp2Stream> {
-    return federation.openUpstreamRequestStream(session, upstreamId, localHostId);
+    return federation.openUpstreamRequestStream(session, upstreamId, localHostId, upstreamPool);
   }
 
   private async openUpstreamDispatchRequestStream(
@@ -1392,17 +1452,72 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
     }
 
-    this.inboundFederationHosts.set(hostId, { ...link, requestStream: stream, requestBusy: false });
+    const policyHeader = headers['x-verser-upstream-pool'];
+    let requestPool = link.requestPool;
+    if (policyHeader === undefined && requestPool === undefined) {
+      this.inboundFederationHosts.set(hostId, {
+        ...link,
+        requestStream: stream,
+        requestBusy: false,
+      });
+      stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
+      this.resolveNextFederatedRequestStreamWaiter(hostId);
+      stream.on('close', () => {
+        const current = this.inboundFederationHosts.get(hostId);
+        if (current?.requestStream === stream) {
+          this.inboundFederationHosts.set(hostId, {
+            ...current,
+            requestStream: undefined,
+            requestBusy: false,
+          });
+        }
+      });
+      return;
+    }
+    if (policyHeader !== undefined) {
+      let parsed: NormalizedUpstreamPool | undefined;
+      try {
+        parsed = validateUpstreamPool(JSON.parse(String(policyHeader)));
+      } catch (error) {
+        throw createVerserError('protocol-error', 'Invalid upstream pool policy', {
+          cause: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (requestPool !== undefined && JSON.stringify(requestPool) !== JSON.stringify(parsed)) {
+        throw createVerserError('protocol-error', 'Conflicting upstream pool policy');
+      }
+      requestPool = parsed;
+    }
+    const requestStreams =
+      requestPool === undefined
+        ? link.requestStreams
+        : (link.requestStreams ?? new Set<http2.ServerHttp2Stream>());
+    const requestBusyStreams =
+      requestPool === undefined
+        ? link.requestBusyStreams
+        : (link.requestBusyStreams ?? new Set<http2.ServerHttp2Stream>());
+    requestStreams?.add(stream);
+    this.inboundFederationHosts.set(hostId, {
+      ...link,
+      requestStream: stream,
+      requestStreams,
+      requestBusyStreams,
+      requestPool,
+      requestBusy: false,
+    });
     stream.respond({ ':status': 200, 'content-type': 'application/octet-stream' });
     this.resolveNextFederatedRequestStreamWaiter(hostId);
     stream.on('close', () => {
       const current = this.inboundFederationHosts.get(hostId);
-      if (current?.requestStream === stream) {
+      if (current !== undefined) {
+        current.requestStreams?.delete(stream);
+        current.requestBusyStreams?.delete(stream);
         this.inboundFederationHosts.set(hostId, {
           ...current,
-          requestStream: undefined,
+          requestStream: current.requestStream === stream ? undefined : current.requestStream,
           requestBusy: false,
         });
+        this.resolveNextFederatedRequestStreamWaiter(hostId);
       }
     });
   }
@@ -1429,11 +1544,57 @@ export class NodeHttp2VerserHost implements VerserHost {
     stream: http2.ClientHttp2Stream,
     upstreamId: string,
   ): Promise<void> {
-    await this.handleFederatedIncomingRequestStream(stream, upstreamId);
-    if (stream.closed) {
-      void this.replenishUpstreamRequestStream(upstreamId, stream);
-    } else {
-      stream.once('close', () => void this.replenishUpstreamRequestStream(upstreamId, stream));
+    const link = this.upstreamLinks.get(upstreamId);
+    if (link?.upstreamPool !== undefined) {
+      stream.once('readable', () => {
+        link.activeRequestStreams.add(stream);
+        void this.maintainUpstreamRequestPool(link);
+      });
+    }
+    try {
+      await this.handleFederatedIncomingRequestStream(stream, upstreamId);
+    } finally {
+      if (stream.closed) {
+        void this.replenishUpstreamRequestStream(upstreamId, stream);
+      } else {
+        stream.once('close', () => void this.replenishUpstreamRequestStream(upstreamId, stream));
+      }
+    }
+  }
+
+  private async maintainUpstreamRequestPool(link: UpstreamLink): Promise<void> {
+    const pool = link.upstreamPool;
+    if (pool === undefined) return;
+    if (link.openingRequestStreams !== undefined) return link.openingRequestStreams;
+    const opening = (async (): Promise<void> => {
+      while (
+        !link.closing &&
+        !link.session.closed &&
+        !link.session.destroyed &&
+        link.requestStreams.size < pool.maxOpenStreams &&
+        link.requestStreams.size - link.activeRequestStreams.size < pool.minWaitingStreams
+      ) {
+        try {
+          const stream = await this.openUpstreamRequestStream(
+            link.session,
+            link.upstreamId,
+            this.getFederationHostId(),
+            pool,
+          );
+          link.requestStreams.add(stream);
+          void this.handleUpstreamRequestStream(stream, link.upstreamId);
+        } catch (error) {
+          this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.error, error: toVerserError(error) });
+          this.handleUpstreamRouteStreamClose(link.upstreamId);
+          return;
+        }
+      }
+    })();
+    link.openingRequestStreams = opening;
+    try {
+      await opening;
+    } finally {
+      if (link.openingRequestStreams === opening) link.openingRequestStreams = undefined;
     }
   }
 
@@ -1461,10 +1622,18 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (
       link === undefined ||
       link.closing ||
-      link.requestStream !== completedStream ||
+      (link.upstreamPool === undefined && link.requestStream !== completedStream) ||
+      (link.upstreamPool !== undefined && !link.requestStreams.has(completedStream)) ||
       link.session.closed ||
       link.session.destroyed
     ) {
+      return;
+    }
+
+    if (link.upstreamPool !== undefined) {
+      link.requestStreams.delete(completedStream);
+      link.activeRequestStreams.delete(completedStream);
+      await this.maintainUpstreamRequestPool(link);
       return;
     }
 
@@ -1619,7 +1788,12 @@ export class NodeHttp2VerserHost implements VerserHost {
     const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
     this.federatedRequestStreamWaiters.delete(hostId);
     for (const waiter of waiters) {
-      clearTimeout(waiter.timeout);
+      if (waiter.settled) continue;
+      waiter.settled = true;
+      if (waiter.timeout !== undefined) clearTimeout(waiter.timeout);
+      if (waiter.signal !== undefined && waiter.onAbort !== undefined) {
+        waiter.signal.removeEventListener('abort', waiter.onAbort);
+      }
       waiter.reject(createVerserError('upstream-unavailable', message, { hostId }));
     }
   }
@@ -1672,6 +1846,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     if (!link.requestStream.closed) {
       link.requestStream.close(http2.constants.NGHTTP2_NO_ERROR);
+    }
+    for (const stream of link.requestStreams) {
+      if (!stream.closed) stream.close(http2.constants.NGHTTP2_NO_ERROR);
     }
     link.session.destroy();
     await new Promise<void>((resolve) => {
@@ -1848,9 +2025,10 @@ export class NodeHttp2VerserHost implements VerserHost {
   private async tryAcquireFederatedRequestStream(
     hostId: string,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<federation.AcquiredFederatedRequestStream | undefined> {
     try {
-      return await this.acquireFederatedRequestStream(hostId, timeoutMs);
+      return await this.acquireFederatedRequestStream(hostId, timeoutMs, signal);
     } catch (error) {
       const verserError = toVerserError(error);
       if (verserError.code === 'upstream-unavailable') {
@@ -1863,8 +2041,99 @@ export class NodeHttp2VerserHost implements VerserHost {
   private acquireFederatedRequestStream(
     hostId: string,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<federation.AcquiredFederatedRequestStream> {
     const link = this.inboundFederationHosts.get(hostId);
+    const requestPool = link?.requestPool;
+    const requestStreams = link?.requestStreams;
+    const requestBusyStreams = link?.requestBusyStreams;
+    if (requestPool !== undefined && requestStreams !== undefined) {
+      const idle = [...requestStreams].find(
+        (stream) => !requestBusyStreams?.has(stream) && !stream.closed && !stream.destroyed,
+      );
+      if (idle !== undefined) {
+        requestBusyStreams?.add(idle);
+        return Promise.resolve({ stream: idle, via: 'inbound-federation', hostId });
+      }
+      const waiters = this.federatedRequestStreamWaiters.get(hostId) ?? [];
+      if (waiters.length >= requestPool.maxQueuedAcquires) {
+        return Promise.reject(
+          createVerserError('upstream-unavailable', 'Federated request stream queue is full', {
+            hostId,
+          }),
+        );
+      }
+      const effectiveTimeout = Math.min(timeoutMs, requestPool.leaseAcquireTimeoutMs);
+      return new Promise<federation.AcquiredFederatedRequestStream>((resolve, reject) => {
+        // The callbacks close over the waiter so cleanup can remove its exact queue entry.
+        // biome-ignore lint/style/useConst: waiter is initialized after its callbacks
+        let waiter: FederatedRequestStreamWaiter | undefined;
+        const remove = (): void => {
+          if (waiter === undefined) return;
+          const current = this.federatedRequestStreamWaiters.get(hostId) ?? [];
+          const remaining = current.filter((candidate) => candidate !== waiter);
+          if (remaining.length === 0) this.federatedRequestStreamWaiters.delete(hostId);
+          else this.federatedRequestStreamWaiters.set(hostId, remaining);
+        };
+        const fail = (error: VerserError): void => {
+          if (waiter === undefined || waiter.settled) return;
+          waiter.settled = true;
+          remove();
+          if (waiter.timeout !== undefined) clearTimeout(waiter.timeout);
+          if (signal !== undefined && waiter.onAbort !== undefined) {
+            signal.removeEventListener('abort', waiter.onAbort);
+          }
+          reject(error);
+        };
+        const onAbort = (): void =>
+          fail(
+            createVerserError(
+              'upstream-unavailable',
+              'Federated request stream acquisition cancelled',
+              { hostId },
+            ),
+          );
+        const timeout = setTimeout(
+          () =>
+            fail(
+              createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
+                hostId,
+              }),
+            ),
+          effectiveTimeout,
+        );
+        const resolvePooled = (stream: http2.ServerHttp2Stream): void => {
+          if (waiter === undefined || waiter.settled) return;
+          waiter.settled = true;
+          remove();
+          clearTimeout(timeout);
+          if (signal !== undefined) signal.removeEventListener('abort', onAbort);
+          if (stream.closed) {
+            reject(
+              createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
+                hostId,
+              }),
+            );
+          } else {
+            resolve({ stream, via: 'inbound-federation', hostId });
+          }
+        };
+        waiter = { timeout, resolve: resolvePooled, reject, signal, onAbort };
+        if (signal?.aborted) {
+          fail(
+            createVerserError(
+              'upstream-unavailable',
+              'Federated request stream acquisition cancelled',
+              { hostId },
+            ),
+          );
+          return;
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+        waiters.push(waiter);
+        this.federatedRequestStreamWaiters.set(hostId, waiters);
+      });
+    }
     if (link?.requestStream !== undefined && !link.requestStream.closed && !link.requestBusy) {
       this.inboundFederationHosts.set(hostId, { ...link, requestBusy: true });
       return Promise.resolve({ stream: link.requestStream, via: 'inbound-federation', hostId });
@@ -1944,8 +2213,26 @@ export class NodeHttp2VerserHost implements VerserHost {
       this.federatedRequestStreamWaiters.set(hostId, waiters);
     }
     const link = this.inboundFederationHosts.get(hostId);
+    if (link?.requestPool !== undefined && link.requestStreams !== undefined) {
+      const stream = [...link.requestStreams].find(
+        (candidate) =>
+          !link.requestBusyStreams?.has(candidate) && !candidate.closed && !candidate.destroyed,
+      );
+      if (stream === undefined) {
+        waiters.unshift(waiter);
+        this.federatedRequestStreamWaiters.set(hostId, waiters);
+        return;
+      }
+      link.requestBusyStreams?.add(stream);
+      if (waiter.timeout !== undefined) clearTimeout(waiter.timeout);
+      if (waiter.signal !== undefined && waiter.onAbort !== undefined) {
+        waiter.signal.removeEventListener('abort', waiter.onAbort);
+      }
+      waiter.resolve(stream);
+      return;
+    }
     if (link?.requestStream === undefined || link.requestStream.closed || link.requestBusy) {
-      clearTimeout(waiter.timeout);
+      if (waiter.timeout !== undefined) clearTimeout(waiter.timeout);
       waiter.reject(
         createVerserError('upstream-unavailable', 'Federated request stream unavailable', {
           hostId,
@@ -1954,7 +2241,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       );
       return;
     }
-    clearTimeout(waiter.timeout);
+    if (waiter.timeout !== undefined) clearTimeout(waiter.timeout);
     this.inboundFederationHosts.set(hostId, { ...link, requestBusy: true });
     waiter.resolve(link.requestStream);
   }

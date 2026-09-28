@@ -41,6 +41,101 @@ function hostUrl(host) {
   return `https://localhost:${host.address.port}`;
 }
 
+async function openRawReverseFixture(manager, options = {}) {
+  const hostId = options.hostId ?? 'raw-pool-runner';
+  const targetId = options.targetId ?? 'raw-pool-guest';
+  const domain = options.domain ?? 'raw-pool.verser.test';
+  const raw = await connectRawClient(manager.address.port);
+  const handshake = raw.request({ ':method': 'POST', ':path': '/verser/host/federation' });
+  handshake.end(
+    JSON.stringify({
+      hostId,
+      protocolVersion: 1,
+      importRoutes: true,
+      exportRoutes: true,
+    }),
+  );
+  assert.equal(Number((await once(handshake, 'response'))[':status']), 200);
+  handshake.resume();
+  manager.setImportedFederatedRoutes(hostId, [
+    {
+      targetId,
+      domain,
+      originHostId: `host-${hostId}`,
+      nextHopHostId: hostId,
+      hopCount: 1,
+      viaHostIds: [`host-${hostId}`],
+      source: 'upstream',
+    },
+  ]);
+  const broker = options.remoteBroker
+    ? createVerserBroker({
+        hostUrl: hostUrl(manager),
+        brokerId: `broker-${hostId}`,
+        tls: { ca: trusted.certificate },
+      })
+    : await manager.attachLocalBroker({ brokerId: `broker-${hostId}` });
+  if (options.remoteBroker) {
+    await broker.connect();
+    await broker.waitForRoute(domain);
+  }
+  let requestNumber = 0;
+  const openRequest = async () => {
+    const stream = raw.request({
+      ':method': 'POST',
+      ':path': '/verser/host/federation/request',
+      'x-verser-host-id': hostId,
+      ...(options.pool === undefined
+        ? {}
+        : { 'x-verser-upstream-pool': JSON.stringify(options.pool) }),
+    });
+    assert.equal(Number((await once(stream, 'response'))[':status']), 200);
+    const metadata = await common.readLeaseRequestMetadataFromStream(stream, {
+      guestId: hostId,
+      leaseId: `raw-pool-${requestNumber++}`,
+    });
+    return { metadata, stream };
+  };
+  return { raw, broker, openRequest, targetId, domain };
+}
+
+function brokerRequest(fixture, path, options = {}) {
+  return fixture.broker.request({
+    targetId: fixture.targetId,
+    routeDomain: fixture.domain,
+    method: 'GET',
+    path,
+    ...options,
+  });
+}
+
+function completeRawRequest(request, body = 'ok') {
+  request.stream.write(
+    common.encodeVerserEnvelope({
+      type: 'response',
+      metadata: { requestId: request.metadata.requestId, statusCode: 200, headers: {} },
+    }),
+  );
+  request.stream.end(body);
+}
+
+test('upstreamPool rejects invalid values before opening a session', async () => {
+  const host = createVerserHost({ hostId: 'pool-invalid', tls: tlsOptions() });
+  await assert.rejects(
+    host.connectUpstream({
+      upstreamId: 'invalid',
+      url: 'https://127.0.0.1:1',
+      upstreamPool: {
+        minWaitingStreams: 2,
+        maxOpenStreams: 1,
+        leaseAcquireTimeoutMs: 10,
+        maxQueuedAcquires: 1,
+      },
+    }),
+    /maxOpenStreams|upstreamPool/i,
+  );
+});
+
 // Warm up TLS/HTTP2/federation infrastructure so individual tests don't pay
 // the one-time initialization cost of TLS contexts, HTTP/2 sessions, and
 // federation link state.
@@ -62,6 +157,345 @@ test.before(async () => {
     // setImmediate, timers) completes before the first guarded test measures
     // its baseline.
     await new Promise((resolve) => setImmediate(() => setImmediate(resolve)));
+  }
+});
+
+test('upstreamPool accepts partial configuration and applies defaults', async () => {
+  const upstream = createVerserHost({ hostId: 'pool-default-upstream', tls: tlsOptions() });
+  const downstream = createVerserHost({ hostId: 'pool-default-downstream', tls: tlsOptions() });
+  await upstream.start();
+  try {
+    const handle = await downstream.connectUpstream({
+      upstreamId: 'pool-default-upstream',
+      url: hostUrl(upstream),
+      tls: { ca: trusted.certificate },
+      upstreamPool: { minWaitingStreams: 1 },
+    });
+    assert.equal(downstream.getUpstreams()[0].connected, true);
+    await handle.close('pool-default-test');
+    await assert.rejects(
+      () =>
+        downstream.connectUpstream({
+          upstreamId: 'pool-default-overflow',
+          url: hostUrl(upstream),
+          tls: { ca: trusted.certificate },
+          upstreamPool: { minWaitingStreams: 17 },
+        }),
+      /maxOpenStreams|upstreamPool/i,
+    );
+  } finally {
+    await downstream.close();
+    await upstream.close();
+  }
+});
+
+test('upstreamPool rejects a zero-stream pool as impossible', async () => {
+  const upstream = createVerserHost({ hostId: 'pool-zero-upstream', tls: tlsOptions() });
+  const downstream = createVerserHost({ hostId: 'pool-zero-downstream', tls: tlsOptions() });
+  await upstream.start();
+  try {
+    await assert.rejects(
+      () =>
+        downstream.connectUpstream({
+          upstreamId: 'pool-zero-upstream',
+          url: hostUrl(upstream),
+          tls: { ca: trusted.certificate },
+          upstreamPool: { minWaitingStreams: 0, maxOpenStreams: 0 },
+        }),
+      /minWaitingStreams|maxOpenStreams|upstreamPool/i,
+    );
+    assert.deepEqual(downstream.getUpstreams(), []);
+  } finally {
+    await downstream.close();
+    await upstream.close();
+  }
+});
+
+test('pooled upstream replenishes while a long-lived response remains active', async () => {
+  const manager = createVerserHost({ hostId: 'pool-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'pool-runner', tls: tlsOptions() });
+  let releaseHeld;
+  let entered;
+  const enteredPromise = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise((resolve) => {
+    releaseHeld = resolve;
+  });
+  let broker;
+  try {
+    await manager.start();
+    await runner.connectUpstream({
+      upstreamId: 'pool-manager',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+      upstreamPool: { minWaitingStreams: 1, maxOpenStreams: 2 },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'pool-guest',
+      routedDomains: ['pool.verser.test'],
+      listener: async (request, response) => {
+        entered(request.url);
+        if (request.url === '/a') await held;
+        response.end(request.url.slice(1));
+      },
+    });
+    broker = await manager.attachLocalBroker({ brokerId: 'pool-broker' });
+    await broker.waitForRoute('pool.verser.test');
+
+    const responseA = broker.request({
+      targetId: 'pool-guest',
+      routeDomain: 'pool.verser.test',
+      method: 'GET',
+      path: '/a',
+    });
+    await enteredPromise;
+    const responseB = await broker.request({
+      targetId: 'pool-guest',
+      routeDomain: 'pool.verser.test',
+      method: 'GET',
+      path: '/b',
+    });
+    assert.equal(await text(responseB.body), 'b');
+    const responseC = await broker.request({
+      targetId: 'pool-guest',
+      routeDomain: 'pool.verser.test',
+      method: 'GET',
+      path: '/c',
+    });
+    assert.equal(await text(responseC.body), 'c');
+    releaseHeld();
+    const responseAResult = await responseA;
+    assert.equal(await text(responseAResult.body), 'a');
+  } finally {
+    releaseHeld?.();
+    await broker?.close();
+    await runner.close();
+    await manager.close();
+  }
+});
+
+test('omitted upstreamPool preserves one-stream legacy dispatch until replacement', async () => {
+  const manager = createVerserHost({ hostId: 'legacy-pool-manager', tls: tlsOptions() });
+  let fixture;
+  await manager.start();
+  try {
+    fixture = await openRawReverseFixture(manager, {
+      hostId: 'legacy-pool-runner',
+      targetId: 'legacy-pool-guest',
+      domain: 'legacy-pool.verser.test',
+    });
+    const firstRequest = brokerRequest(fixture, '/first');
+    const firstResult = firstRequest.catch((error) => error);
+    const firstLease = await fixture.openRequest();
+    let secondSettled = false;
+    const secondRequest = brokerRequest(fixture, '/second').finally(() => {
+      secondSettled = true;
+    });
+    const secondResult = secondRequest.catch((error) => error);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(secondSettled, false, 'legacy mode must not dispatch a second request');
+    firstLease.stream.close();
+    const replacement = await fixture.openRequest();
+    completeRawRequest(replacement, 'replacement');
+    const secondResponse = await secondResult;
+    assert.notEqual(secondResponse instanceof Error, true);
+    assert.equal(await text(secondResponse.body), 'replacement');
+    const firstError = await firstResult;
+    assert.match(firstError.message, /closed|disconnect|metadata|upstream|lease/i);
+  } finally {
+    await fixture?.broker.close();
+    fixture?.raw.destroy();
+    await manager.close();
+  }
+});
+
+test('configured raw reverse pool enforces queue cap and removes timed-out waiters', async () => {
+  const manager = createVerserHost({ hostId: 'pool-cap-manager', tls: tlsOptions() });
+  let fixture;
+  const pool = {
+    minWaitingStreams: 0,
+    maxOpenStreams: 1,
+    leaseAcquireTimeoutMs: 25,
+    maxQueuedAcquires: 1,
+  };
+  await manager.start();
+  try {
+    fixture = await openRawReverseFixture(manager, {
+      hostId: 'pool-cap-runner',
+      targetId: 'pool-cap-guest',
+      domain: 'pool-cap.verser.test',
+      pool,
+    });
+    const active = brokerRequest(fixture, '/active');
+    const activeResult = active.catch((error) => error);
+    const activeLease = await fixture.openRequest();
+    const queued = brokerRequest(fixture, '/queued');
+    await assert.rejects(() => brokerRequest(fixture, '/over-cap'), /queue|unavailable/i);
+    await assert.rejects(queued, /unavailable|timeout/i);
+
+    const replacementPromise = fixture.openRequest();
+    const fresh = brokerRequest(fixture, '/fresh');
+    const freshLease = await replacementPromise;
+    completeRawRequest(freshLease, 'fresh');
+    const freshResponse = await fresh;
+    assert.equal(await text(freshResponse.body), 'fresh');
+    activeLease.stream.close();
+    const activeError = await activeResult;
+    assert.match(activeError.message, /closed|disconnect|metadata|upstream|lease/i);
+  } finally {
+    await fixture?.broker.close();
+    fixture?.raw.destroy();
+    await manager.close();
+  }
+});
+
+test('aborted pooled waiters are removed before a fresh request acquires a replacement', async () => {
+  const manager = createVerserHost({ hostId: 'pool-cancel-manager', tls: tlsOptions() });
+  let fixture;
+  const pool = {
+    minWaitingStreams: 0,
+    maxOpenStreams: 1,
+    leaseAcquireTimeoutMs: 1000,
+    maxQueuedAcquires: 2,
+  };
+  await manager.start();
+  try {
+    fixture = await openRawReverseFixture(manager, {
+      hostId: 'pool-cancel-runner',
+      targetId: 'pool-cancel-guest',
+      domain: 'pool-cancel.verser.test',
+      pool,
+    });
+    const active = brokerRequest(fixture, '/active');
+    const activeResult = active.catch((error) => error);
+    const activeLease = await fixture.openRequest();
+    const alreadyAborted = new AbortController();
+    alreadyAborted.abort();
+    const alreadyAbortedStart = Date.now();
+    await assert.rejects(
+      () =>
+        brokerRequest(fixture, '/already-aborted', {
+          signal: alreadyAborted.signal,
+          leaseAcquireTimeoutMs: 1000,
+        }),
+      /abort|cancel|unavailable/i,
+    );
+    assert.ok(
+      Date.now() - alreadyAbortedStart < 500,
+      'already-aborted request must reject promptly',
+    );
+
+    const subsequentlyAborted = new AbortController();
+    const subsequentlyAbortedStart = Date.now();
+    const queued = brokerRequest(fixture, '/subsequently-aborted', {
+      signal: subsequentlyAborted.signal,
+      leaseAcquireTimeoutMs: 1000,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    subsequentlyAborted.abort();
+    await assert.rejects(queued, /abort|cancel|unavailable/i);
+    assert.ok(
+      Date.now() - subsequentlyAbortedStart < 500,
+      'subsequently-aborted request must reject before policy timeout',
+    );
+
+    const replacementPromise = fixture.openRequest();
+    const fresh = brokerRequest(fixture, '/fresh');
+    const freshLease = await replacementPromise;
+    completeRawRequest(freshLease, 'fresh');
+    const freshResponse = await fresh;
+    assert.equal(await text(freshResponse.body), 'fresh');
+    activeLease.stream.close();
+    const activeError = await activeResult;
+    assert.match(activeError.message, /closed|disconnect|metadata|upstream|lease/i);
+  } finally {
+    await fixture?.broker.close();
+    fixture?.raw.destroy();
+    await manager.close();
+  }
+});
+
+test('closing a pooled upstream fails active and queued requests before reconnecting', async () => {
+  const manager = createVerserHost({ hostId: 'reconnect-manager', tls: tlsOptions() });
+  const runner = createVerserHost({ hostId: 'reconnect-runner', tls: tlsOptions() });
+  let broker;
+  let handle;
+  let releaseActive;
+  let activeEntered;
+  const activeEnteredPromise = new Promise((resolve) => {
+    activeEntered = resolve;
+  });
+  const activeRelease = new Promise((resolve) => {
+    releaseActive = resolve;
+  });
+  await manager.start();
+  try {
+    handle = await runner.connectUpstream({
+      upstreamId: 'reconnect-upstream',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+      upstreamPool: { minWaitingStreams: 0, maxOpenStreams: 1, maxQueuedAcquires: 1 },
+    });
+    await runner.attachLocalGuest({
+      guestId: 'reconnect-guest',
+      routedDomains: ['reconnect.verser.test'],
+      listener: async (request, response) => {
+        if (request.url === '/active') {
+          activeEntered();
+          await activeRelease;
+        }
+        response.end('fresh');
+      },
+    });
+    broker = await manager.attachLocalBroker({ brokerId: 'reconnect-broker' });
+    await broker.waitForRoute('reconnect.verser.test');
+    const active = broker.request({
+      targetId: 'reconnect-guest',
+      routeDomain: 'reconnect.verser.test',
+      method: 'GET',
+      path: '/active',
+    });
+    const activeResult = active.catch((error) => error);
+    await activeEnteredPromise;
+    const queued = broker.request({
+      targetId: 'reconnect-guest',
+      routeDomain: 'reconnect.verser.test',
+      method: 'GET',
+      path: '/queued',
+    });
+    const queuedResult = queued.catch((error) => error);
+    await new Promise((resolve) => setImmediate(resolve));
+    await handle.close('reconnect-test');
+    const [activeError, queuedError] = await Promise.all([activeResult, queuedResult]);
+    assert.match(activeError.message, /closed|disconnect|metadata|upstream|lease/i);
+    assert.match(queuedError.message, /closed|disconnect|metadata|upstream|lease/i);
+
+    handle = await runner.connectUpstream({
+      upstreamId: 'reconnect-upstream',
+      url: hostUrl(manager),
+      tls: { ca: trusted.certificate },
+      upstreamPool: { minWaitingStreams: 0, maxOpenStreams: 1, maxQueuedAcquires: 1 },
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('reconnect-guest', 'reconnect.verser.test').length,
+        1,
+      ),
+    );
+    const fresh = await broker.request({
+      targetId: 'reconnect-guest',
+      routeDomain: 'reconnect.verser.test',
+      method: 'GET',
+      path: '/fresh',
+    });
+    assert.equal(await text(fresh.body), 'fresh');
+  } finally {
+    releaseActive?.();
+    await broker?.close();
+    await handle?.close('test-complete');
+    await runner.close();
+    await manager.close();
   }
 });
 

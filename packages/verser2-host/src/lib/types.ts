@@ -214,6 +214,12 @@ export interface VerserHostUpstreamOptions {
   readonly upstreamId: string;
   readonly url: string;
   readonly tls?: VerserClientTlsOptions;
+  readonly upstreamPool?: {
+    readonly minWaitingStreams?: number;
+    readonly maxOpenStreams?: number;
+    readonly leaseAcquireTimeoutMs?: number;
+    readonly maxQueuedAcquires?: number;
+  };
 }
 
 /**
@@ -249,6 +255,8 @@ export interface VerserLocalBrokerRequest {
   readonly path: string;
   readonly headers?: Record<string, string>;
   readonly body?: readonly Buffer[] | Readable;
+  /** Optional cancellation signal for the in-process Broker request. */
+  readonly signal?: AbortSignal;
   /**
    * Timeout in milliseconds while waiting for an HTTP/2 Guest lease.
    * Defaults to the same 5000 ms used by remote Broker requests.
