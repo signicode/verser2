@@ -322,6 +322,7 @@ export interface BrokerRoutingCallbacks {
   tryAcquireFederatedRequestStream(
     hostId: string,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<AcquiredFederatedRequestStream | undefined>;
 
   /** Returns whether the Host has a hop-local `routeAuthorizer` configured. */
@@ -772,6 +773,11 @@ async function tryRouteH2BrokerRequestToFederatedHost(
   const candidates = Array.from(callbacks.getRouteCandidates(targetId)).filter(
     (candidate) => candidate.source === 'upstream',
   );
+  const acquisitionController = new AbortController();
+  const abortAcquisition = (): void => acquisitionController.abort();
+  stream.once('aborted', abortAcquisition);
+  stream.once('close', abortAcquisition);
+  stream.once('error', abortAcquisition);
   if (
     requestedDomain === undefined &&
     new Set(candidates.map((candidate) => normalizeRequestedDomain(candidate.domain))).size > 1
@@ -821,11 +827,15 @@ async function tryRouteH2BrokerRequestToFederatedHost(
     const acquired = await callbacks.tryAcquireFederatedRequestStream(
       candidate.nextHopHostId,
       parseLeaseAcquireTimeoutMs(headers),
+      acquisitionController.signal,
     );
     if (acquired === undefined) {
       continue;
     }
 
+    stream.off('aborted', abortAcquisition);
+    stream.off('close', abortAcquisition);
+    stream.off('error', abortAcquisition);
     await routeH2BrokerRequestOverFederationStream(
       stream,
       headers,
@@ -837,6 +847,10 @@ async function tryRouteH2BrokerRequestToFederatedHost(
     );
     return true;
   }
+
+  stream.off('aborted', abortAcquisition);
+  stream.off('close', abortAcquisition);
+  stream.off('error', abortAcquisition);
 
   if (hadDeniedCandidate) {
     throw createVerserError(
@@ -898,6 +912,7 @@ export async function routeLocalBrokerRequest(
       path: request.path,
       headers: flattenVerserHeaders(headers),
       body,
+      signal: request.signal,
       leaseAcquireTimeoutMs: parseLeaseAcquireTimeoutMs({
         'x-verser-lease-acquire-timeout-ms': request.leaseAcquireTimeoutMs,
       }),
@@ -1216,6 +1231,7 @@ async function tryRouteLocalRequestToFederatedHost(
     const acquired = await callbacks.tryAcquireFederatedRequestStream(
       candidate.nextHopHostId,
       request.leaseAcquireTimeoutMs,
+      request.signal,
     );
     if (acquired === undefined) {
       continue;

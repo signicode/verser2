@@ -73,6 +73,34 @@ await upstream.close('planned-maintenance');
 Host identity comes from the upstream federation handshake and is used in route
 loop prevention.
 
+### Optional upstream reverse request-stream pool
+
+`connectUpstream()` preserves the legacy behavior when `upstreamPool` is omitted:
+the downstream Host uses one reverse federation request stream. To allow several
+concurrent reverse requests, supply the opt-in pool configuration:
+
+```ts
+await runner.connectUpstream({
+  upstreamId: 'manager',
+  url: 'https://manager.internal:8443',
+  tls: { caFile: '/etc/verser/manager-ca.crt' },
+  upstreamPool: {
+    minWaitingStreams: 4,
+    maxOpenStreams: 16,
+    leaseAcquireTimeoutMs: 5000,
+    maxQueuedAcquires: 128,
+  },
+});
+```
+
+Every `upstreamPool` property is optional and uses the value shown above by
+default. Values must be finite, non-negative integers. The Host rejects a pool
+where `minWaitingStreams` is greater than `maxOpenStreams`, and rejects a
+`maxOpenStreams` value of zero. Idle reverse request streams are replenished
+while long-lived responses remain active, up to `maxOpenStreams`. Active
+requests are not migrated or terminated, and this option does not pool the
+one-shot downstream-Host-to-upstream dispatch path described below.
+
 ## Broker reaching a downstream Guest
 
 ```ts
@@ -165,9 +193,11 @@ const response = await broker.request({
 });
 ```
 
-The downstream Host opens a one-shot federated request stream over its existing
-upstream link for the selected imported candidate. Existing inbound federation
-request streams continue to handle upstream-to-downstream requests.
+Without `upstreamPool`, the downstream Host opens a one-shot federated request
+stream over its existing upstream link for the selected imported candidate.
+With the opt-in pool, reverse request streams are retained for reuse. Existing
+inbound federation request streams continue to handle upstream-to-downstream
+requests.
 
 Node and Bun-facing Brokers can also follow native `307`/`308` redirects across
 advertised imported routes. For example, a manager route can return

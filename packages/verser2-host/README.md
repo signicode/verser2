@@ -104,11 +104,28 @@ const upstream: VerserHostUpstreamHandle = await host.connectUpstream({
   upstreamId: 'manager',
   url: 'https://manager.internal:8443',
   tls: { caFile: '/etc/verser/manager-ca.crt' },
+  // Optional: omit to preserve the legacy one-stream behavior.
+  upstreamPool: {
+    minWaitingStreams: 4,
+    maxOpenStreams: 16,
+    leaseAcquireTimeoutMs: 5000,
+    maxQueuedAcquires: 128,
+  },
 });
 
 console.log(host.getUpstreams());
 await upstream.close('planned-maintenance');
 ```
+
+`upstreamPool` is opt-in; when omitted, the Host keeps one reverse federation
+request stream. Each pool property is optional and defaults to
+`minWaitingStreams: 4`, `maxOpenStreams: 16`, `leaseAcquireTimeoutMs: 5000`, and
+`maxQueuedAcquires: 128`. Values must be finite, non-negative integers;
+`minWaitingStreams > maxOpenStreams` and `maxOpenStreams: 0` are rejected. Idle
+reverse request streams are replenished while long-lived responses remain
+active, subject to `maxOpenStreams`. Active requests are not migrated or
+terminated, and the pool does not apply to one-shot downstream-to-upstream
+dispatch.
 
 ### Local Host peers
 
