@@ -173,6 +173,16 @@ test('upstreamPool accepts partial configuration and applies defaults', async ()
     });
     assert.equal(downstream.getUpstreams()[0].connected, true);
     await handle.close('pool-default-test');
+    await assert.rejects(
+      () =>
+        downstream.connectUpstream({
+          upstreamId: 'pool-default-overflow',
+          url: hostUrl(upstream),
+          tls: { ca: trusted.certificate },
+          upstreamPool: { minWaitingStreams: 17 },
+        }),
+      /maxOpenStreams|upstreamPool/i,
+    );
   } finally {
     await downstream.close();
     await upstream.close();

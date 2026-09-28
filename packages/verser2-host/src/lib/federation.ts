@@ -40,7 +40,11 @@ import {
 } from '@signicode/verser-common';
 
 import type { LocalDispatchRequest } from './local-peers';
-import type { VerserHostLifecycleEvent, VerserLocalBrokerResponse } from './types';
+import type {
+  VerserHostLifecycleEvent,
+  VerserHostUpstreamOptions,
+  VerserLocalBrokerResponse,
+} from './types';
 import { toVerserError } from './utils';
 
 // ---------------------------------------------------------------------------
@@ -283,12 +287,7 @@ export async function openUpstreamRequestStream(
   session: http2.ClientHttp2Session,
   upstreamId: string,
   localHostId: VerserHostId,
-  pool?: {
-    readonly minWaitingStreams: number;
-    readonly maxOpenStreams: number;
-    readonly leaseAcquireTimeoutMs: number;
-    readonly maxQueuedAcquires: number;
-  },
+  pool?: VerserHostUpstreamOptions['upstreamPool'],
 ): Promise<http2.ClientHttp2Stream> {
   const stream = session.request({
     ':method': 'POST',
