@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.0
+
+- Hosts can retain opaque context returned by successful inbound federation
+  authorization and provide it to directly attached local Guest handlers for
+  that exact federation link. This context is not propagated into wire or
+  request metadata; it describes the immediate federation link, not the
+  originating Broker or multi-hop identity.
+- Adds deterministic bounded VWS test coverage and improves test cleanup
+  reliability for sockets and in-memory transports.
+
 ## v0.8.2
 
 - Refreshes compatible dependencies: Undici 7.30.0, h2 4.4.1 with the CVE-2026-71554 security fix, and related cryptography, hpack, cffi, and development lock updates.
