@@ -63,6 +63,17 @@ export interface AcquiredFederatedRequestStream {
   readonly hostId: string;
 }
 
+/**
+ * Federation link state already resolved and authorized by the Host's inbound
+ * stream boundary. This is intentionally not an outbound-link shape.
+ *
+ * @internal
+ */
+export interface ResolvedInboundFederationLink {
+  readonly hostId: VerserHostId;
+  readonly authorizationContext?: unknown;
+}
+
 // ---------------------------------------------------------------------------
 // Handshake/timeout utilities
 // ---------------------------------------------------------------------------
@@ -664,6 +675,7 @@ export async function handleFederatedIncomingRequestStream(
   localHostId: VerserHostId,
   routeFn: (request: LocalDispatchRequest) => Promise<VerserLocalBrokerResponse>,
   emitLifecycle: (event: VerserHostLifecycleEvent) => void,
+  inboundLink?: ResolvedInboundFederationLink,
 ): Promise<void> {
   let requestId: string | undefined;
   let targetId: string | undefined;
@@ -719,6 +731,18 @@ export async function handleFederatedIncomingRequestStream(
       body: stream,
       leaseAcquireTimeoutMs: UPSTREAM_HANDSHAKE_TIMEOUT_MS,
       signal: controller.signal,
+      ...(inboundLink === undefined
+        ? {}
+        : {
+            context: {
+              federation: {
+                hostId: inboundLink.hostId,
+                ...(inboundLink.authorizationContext === undefined
+                  ? {}
+                  : { authorizationContext: inboundLink.authorizationContext }),
+              },
+            },
+          }),
     });
     stream.write(
       encodeVerserEnvelope({

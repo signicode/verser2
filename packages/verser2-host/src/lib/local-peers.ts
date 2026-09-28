@@ -17,6 +17,7 @@ import {
 import type {
   VerserLocalBrokerRequest,
   VerserLocalBrokerResponse,
+  VerserLocalGuestDispatchContext,
   VerserLocalGuestOptions,
   VerserLocalGuestRequestListener,
 } from './types';
@@ -49,6 +50,11 @@ export interface LocalDispatchRequest {
   readonly body: Readable;
   readonly leaseAcquireTimeoutMs: number;
   readonly signal?: AbortSignal;
+  /**
+   * Federation provenance for a local Guest dispatch. Absent for Broker and
+   * outbound federation paths.
+   */
+  readonly context?: VerserLocalGuestDispatchContext;
   /**
    * Hop-local previous-hop domain for requests arriving through a federation
    * link (the incoming resolved route/open domain). Present only in a
@@ -540,7 +546,11 @@ export function dispatchLocalGuestRequest(
     });
 
     try {
-      listener(localRequest, localResponse);
+      if (request.context === undefined) {
+        listener(localRequest, localResponse);
+      } else {
+        listener(localRequest, localResponse, request.context);
+      }
     } catch (error) {
       const verserError = createLocalHandlerError(request, error);
       if (localResponse.headersStarted) {
