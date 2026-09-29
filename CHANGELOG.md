@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.2
+
+- Hosts accept multiple independently authenticated Broker HTTP/2 sessions under
+  one Broker ID, including different trusted client certificates. Requests and
+  route updates are isolated, and closing a registration control stream closes
+  only its session.
+- Cancelled Broker WebSocket opens stop forwarding after deferred authorization,
+  preserving Guest and federation ID uniqueness.
+
 ## v0.9.1
 
 - Adds an opt-in upstream reverse request-stream pool for concurrent federation
