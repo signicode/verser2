@@ -228,6 +228,9 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly peers = new Map<VerserPeerId, RegisteredPeer>();
 
+  /** Invalidates asynchronous admissions that overlap Host shutdown. */
+  private lifecycleGeneration = 0;
+
   private readonly sessions = new Set<http2.ServerHttp2Session>();
 
   private unauthorizedClientHandler?: unauthorizedClient.UnauthorizedClientGate;
@@ -494,6 +497,7 @@ export class NodeHttp2VerserHost implements VerserHost {
    * {@inheritDoc VerserHost.close}
    */
   public async close(reason = 'host-close'): Promise<void> {
+    this.lifecycleGeneration += 1;
     this.stopDegradedRouteCleanupTimer();
     // Host shutdown invalidates every cached hop-local allow.
     this.invalidateRouteAuthorizations();
@@ -709,6 +713,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   }
 
   public async attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle> {
+    const admissionGeneration = this.lifecycleGeneration;
     const peerId = createPeerId(options.guestId);
     if (this.peers.has(peerId)) {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
@@ -719,6 +724,10 @@ export class NodeHttp2VerserHost implements VerserHost {
       role: 'guest',
       routedDomains: [...(options.routedDomains ?? [])],
     });
+    this.assertAdmissionGeneration(admissionGeneration, peerId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
 
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'guest' });
     this.peers.set(peerId, {
@@ -891,6 +900,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   public async attachLocalBroker(
     options: VerserLocalBrokerOptions,
   ): Promise<VerserLocalBrokerHandle> {
+    const admissionGeneration = this.lifecycleGeneration;
     const peerId = createPeerId(options.brokerId);
     if (this.peers.has(peerId)) {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
@@ -925,6 +935,10 @@ export class NodeHttp2VerserHost implements VerserHost {
       routedDomains: [],
       ...(brokerDomain === undefined ? {} : { brokerDomain }),
     });
+    this.assertAdmissionGeneration(admissionGeneration, peerId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
 
     const localBroker = createLocalBrokerState(this.getRoutedDomains());
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'broker' });
@@ -1104,6 +1118,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     stream: http2.ServerHttp2Stream,
     registration: VerserHostRegistrationRequest,
   ): Promise<void> {
+    const admissionGeneration = this.lifecycleGeneration;
     const peerId = createPeerId(registration.peerId);
     if (this.peers.has(peerId)) {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
@@ -1120,6 +1135,19 @@ export class NodeHttp2VerserHost implements VerserHost {
     const authorized = await this.authorizeRegistration(stream, session, peerId, registration);
     if (!authorized) {
       return;
+    }
+    if (admissionGeneration !== this.lifecycleGeneration) {
+      // Shutdown already invalidated this session; do not publish a peer or
+      // emit a late registration/error event from its authorization result.
+      return;
+    }
+    // Authorization is asynchronous. Revalidate both admission uniqueness
+    // and session liveness before publishing any peer state or routes.
+    if (session.closed || stream.closed || stream.destroyed) {
+      return;
+    }
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
     }
 
     let brokerDomain: string | undefined;
@@ -1272,6 +1300,16 @@ export class NodeHttp2VerserHost implements VerserHost {
     stream.end(JSON.stringify(response));
     this.advertiseRoutes();
     this.advertiseFederatedRoutes();
+  }
+
+  private assertAdmissionGeneration(generation: number, peerId: VerserPeerId): void {
+    if (generation !== this.lifecycleGeneration) {
+      throw createVerserError(
+        'disconnected-target',
+        'Host shutdown invalidated the pending peer registration',
+        { peerId },
+      );
+    }
   }
 
   private async authorizeRegistration(

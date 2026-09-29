@@ -278,6 +278,47 @@ function resolveRemoteBrokerDomain(
   return brokerDomain;
 }
 
+/** Checks attribution and liveness for this exact remote Broker request. */
+function isRemoteBrokerRequestLive(
+  stream: http2.ServerHttp2Stream,
+  headers: http2.IncomingHttpHeaders,
+  callbacks: BrokerRoutingCallbacks,
+): boolean {
+  const sourceId = String(headers['x-verser-source-id'] ?? '');
+  const source = sourceId.length > 0 ? callbacks.getPeer(sourceId) : undefined;
+  const session = stream.session;
+  return (
+    !closedRemoteBrokerRequests.has(stream) &&
+    !stream.closed &&
+    !stream.destroyed &&
+    !stream.aborted &&
+    session !== undefined &&
+    !session.closed &&
+    source !== undefined &&
+    source.role === 'broker' &&
+    source.transport === 'h2' &&
+    source.session === session
+  );
+}
+
+const closedRemoteBrokerRequests = new WeakSet<http2.ServerHttp2Stream>();
+
+/** Ensures every HTTP request stream belongs to a Broker admitted on itself. */
+function assertRemoteBrokerSession(
+  stream: http2.ServerHttp2Stream,
+  headers: http2.IncomingHttpHeaders,
+  callbacks: BrokerRoutingCallbacks,
+): void {
+  if (!isRemoteBrokerRequestLive(stream, headers, callbacks)) {
+    const sourceId = String(headers['x-verser-source-id'] ?? '');
+    throw createVerserError(
+      'authorization-denied',
+      'Request source is not a Broker registered on this HTTP/2 session',
+      { sourceId },
+    );
+  }
+}
+
 /** Minimal peer info needed by the routing functions. */
 export interface PeerInfo {
   readonly role: string;
@@ -676,6 +717,14 @@ export async function routeBrokerRequest(
   headers: http2.IncomingHttpHeaders,
   callbacks: BrokerRoutingCallbacks,
 ): Promise<void> {
+  // Ingress attribution is required independently of federation policy and
+  // must precede target lookup, lease acquisition, or local dispatch.
+  assertRemoteBrokerSession(stream, headers, callbacks);
+  const markRequestClosed = (): void => {
+    closedRemoteBrokerRequests.add(stream);
+  };
+  stream.once('aborted', markRequestClosed);
+  stream.once('close', markRequestClosed);
   const targetId = String(headers['x-verser-target-id'] ?? '');
   const requestId = String(headers['x-verser-request-id'] ?? `req-${Date.now()}`);
   const target = callbacks.getPeer(targetId);
@@ -717,15 +766,26 @@ export async function routeBrokerRequest(
     parseLeaseAcquireTimeoutMs(headers),
   );
   if (lease !== undefined) {
+    if (!isRemoteBrokerRequestLive(stream, headers, callbacks)) {
+      if (!lease.stream.closed) lease.stream.close(http2.constants.NGHTTP2_CANCEL);
+      return;
+    }
     await routeBrokerRequestOverLease(stream, headers, lease, requestId, targetId, routeDomain);
     return;
   }
 
+  if (!isRemoteBrokerRequestLive(stream, headers, callbacks)) {
+    return;
+  }
   const queuedLease = await callbacks.acquireLease(
     createPeerId(targetId),
     requestId,
     parseLeaseAcquireTimeoutMs(headers),
   );
+  if (!isRemoteBrokerRequestLive(stream, headers, callbacks)) {
+    if (!queuedLease.stream.closed) queuedLease.stream.close(http2.constants.NGHTTP2_CANCEL);
+    return;
+  }
   await routeBrokerRequestOverLease(stream, headers, queuedLease, requestId, targetId, routeDomain);
 }
 
@@ -814,6 +874,12 @@ async function tryRouteH2BrokerRequestToFederatedHost(
       targetId,
       candidate.domain,
     );
+    if (!isRemoteBrokerRequestLive(stream, headers, callbacks)) {
+      stream.off('aborted', abortAcquisition);
+      stream.off('close', abortAcquisition);
+      stream.off('error', abortAcquisition);
+      return true;
+    }
     if (hop === 'denied' || hop === 'route-lost') {
       hadDeniedCandidate = hadDeniedCandidate || hop === 'denied';
       continue;
@@ -829,6 +895,15 @@ async function tryRouteH2BrokerRequestToFederatedHost(
       parseLeaseAcquireTimeoutMs(headers),
       acquisitionController.signal,
     );
+    if (!isRemoteBrokerRequestLive(stream, headers, callbacks)) {
+      if (acquired !== undefined && !acquired.stream.closed) {
+        acquired.stream.close(http2.constants.NGHTTP2_CANCEL);
+      }
+      stream.off('aborted', abortAcquisition);
+      stream.off('close', abortAcquisition);
+      stream.off('error', abortAcquisition);
+      return true;
+    }
     if (acquired === undefined) {
       continue;
     }

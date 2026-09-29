@@ -1171,6 +1171,7 @@ test('HTTP/2 Broker abort cancels an in-flight local Guest dispatch', async () =
   await host.start();
   const h2Broker = await connectClient(host.address.port);
   let localGuest;
+  let brokerControl;
 
   try {
     const localRequestError = new Promise((resolve) => {
@@ -1185,6 +1186,27 @@ test('HTTP/2 Broker abort cancels an in-flight local Guest dispatch', async () =
       });
     });
     localGuest = await localGuest;
+
+    brokerControl = h2Broker.request({ ':method': 'POST', ':path': '/verser/register' });
+    brokerControl.setEncoding('utf8');
+    const registration = new Promise((resolve, reject) => {
+      let pending = '';
+      const timeout = setTimeout(() => reject(new Error('Broker registration timed out')), 2000);
+      brokerControl.on('data', (chunk) => {
+        pending += chunk;
+        const newline = pending.indexOf('\n');
+        if (newline !== -1) {
+          clearTimeout(timeout);
+          resolve(JSON.parse(pending.slice(0, newline)));
+        }
+      });
+      brokerControl.once('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+    brokerControl.end(JSON.stringify({ peerId: 'h2-broker-abort-local-1', role: 'broker' }));
+    assert.equal((await registration).status, 'registered');
 
     const stream = h2Broker.request({
       ':method': 'POST',
@@ -1208,6 +1230,11 @@ test('HTTP/2 Broker abort cancels an in-flight local Guest dispatch', async () =
     assert.equal(error.code, 'disconnected-target');
   } finally {
     if (localGuest !== undefined) await localGuest.close('test-complete');
+    if (brokerControl !== undefined && !brokerControl.closed) {
+      const controlClosed = once(brokerControl, 'close');
+      brokerControl.close();
+      await controlClosed;
+    }
     h2Broker.close();
     await host.close('test-complete');
   }

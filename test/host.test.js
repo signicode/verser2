@@ -102,18 +102,50 @@ function openBrokerRegistration(session, payload) {
         lineBreak = pending.indexOf('\n');
       }
     });
+    stream.on('end', () => {
+      if (pending.length > 0) {
+        try {
+          lines.push(JSON.parse(pending));
+        } catch {
+          // Preserve parse failures for the test reader rather than hiding them.
+          lines.push({ parseError: pending });
+        }
+      }
+    });
     stream.on('error', reject);
     stream.end(JSON.stringify(payload));
 
     const readNext = async () => {
       while (lines.length === 0) {
-        await once(stream, 'data');
+        await Promise.race([once(stream, 'data'), once(stream, 'end')]);
       }
       return lines.shift();
     };
 
     resolve({ stream, readNext });
   });
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function withTimeout(promise, label) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${label} timed out`)), 3000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 test('Host starts and stops a TLS HTTP/2 server', async () => {
@@ -366,6 +398,7 @@ test('Host rejects target-only requests when the Guest has no active route', asy
     const response = await requestJsonWithHeaders(broker, {
       ':method': 'POST',
       ':path': '/verser/request',
+      'x-verser-source-id': 'broker-lease-timeout',
       'x-verser-target-id': 'guest-lease-timeout',
       'x-verser-request-id': 'req-lease-timeout',
       'x-verser-lease-acquire-timeout-ms': '10',
@@ -376,6 +409,359 @@ test('Host rejects target-only requests when the Guest has no active route', asy
   } finally {
     guest.close();
     broker.close();
+    await host.close('test-complete');
+  }
+});
+
+test('Host rejects remote Broker HTTP ingress from an unregistered session before local Guest dispatch', async () => {
+  const host = createHost({ port: 0 });
+  let calls = 0;
+  let broker;
+  let unregistered;
+  let localGuest;
+
+  await host.start();
+  try {
+    localGuest = await host.attachLocalGuest({
+      guestId: 'request-session-guest',
+      routedDomains: ['request-session.local.test'],
+      listener: (_request, response) => {
+        calls += 1;
+        response.end('ok');
+      },
+    });
+    broker = await connectClient(host.address.port);
+    unregistered = await connectClient(host.address.port);
+    const control = await openBrokerRegistration(broker, {
+      peerId: 'request-session-broker',
+      role: 'broker',
+    });
+    assert.equal(
+      (await withTimeout(control.readNext(), 'Broker registration')).status,
+      'registered',
+    );
+
+    const request = unregistered.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-source-id': 'request-session-broker',
+      'x-verser-target-id': 'request-session-guest',
+      'x-verser-request-id': 'request-session-spoof',
+      'x-verser-method': 'GET',
+      'x-verser-path': '/',
+      'x-verser-headers': JSON.stringify({ host: 'request-session.local.test' }),
+    });
+    const requestResult = withTimeout(
+      new Promise((resolve, reject) => {
+        request.once('response', (headers) => {
+          let body = '';
+          request.setEncoding('utf8');
+          request.on('data', (chunk) => {
+            body += chunk;
+          });
+          request.once('end', () => resolve({ status: headers[':status'], body }));
+        });
+        request.once('error', reject);
+        request.end();
+      }),
+      'Unregistered request',
+    );
+    const response = await requestResult;
+
+    assert.equal(response.status, 502, `unexpected response body: ${response.body}`);
+    assert.equal(JSON.parse(response.body).error.code, 'authorization-denied');
+    assert.equal(calls, 0);
+  } finally {
+    unregistered?.destroy();
+    broker?.destroy();
+    await localGuest?.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('Host does not admit two concurrent remote registrations for the same peer ID', async () => {
+  const gates = [];
+  const entered = deferred();
+  const host = createHost({
+    port: 0,
+    tls: {
+      clientAuth: {
+        authorizeRegistration() {
+          const gate = deferred();
+          gates.push(gate);
+          if (gates.length === 2) entered.resolve();
+          return gate.promise;
+        },
+      },
+    },
+  });
+  let first;
+  let second;
+
+  await host.start();
+  try {
+    first = await connectClient(host.address.port);
+    second = await connectClient(host.address.port);
+    const firstRegistration = await openBrokerRegistration(first, {
+      peerId: 'concurrent-registration-broker',
+      role: 'broker',
+    });
+    const secondRegistration = await openBrokerRegistration(second, {
+      peerId: 'concurrent-registration-broker',
+      role: 'broker',
+    });
+    await withTimeout(entered.promise, 'Both authorization callbacks');
+    for (const gate of gates) gate.resolve({ action: 'allow' });
+
+    const outcomes = await withTimeout(
+      Promise.all([firstRegistration.readNext(), secondRegistration.readNext()]),
+      'Concurrent registration responses',
+    );
+    assert.equal(outcomes.filter((outcome) => outcome.status === 'registered').length, 1);
+    assert.equal(
+      outcomes.filter((outcome) => outcome.error?.code === 'invalid-registration').length,
+      1,
+    );
+  } finally {
+    first?.destroy();
+    second?.destroy();
+    for (const gate of gates) gate.resolve({ action: 'allow' });
+    await host.close('test-complete');
+  }
+});
+
+test('Host does not publish a remote identity after its pending registration session closes', async () => {
+  const authorization = deferred();
+  const entered = deferred();
+  const host = createHost({
+    port: 0,
+    tls: {
+      clientAuth: {
+        authorizeRegistration() {
+          entered.resolve();
+          return authorization.promise;
+        },
+      },
+    },
+  });
+  let stale;
+  let replacement;
+
+  await host.start();
+  try {
+    stale = await connectClient(host.address.port);
+    const staleRegistration = await openBrokerRegistration(stale, {
+      peerId: 'closed-pending-broker',
+      role: 'broker',
+    });
+    await withTimeout(entered.promise, 'Authorization callback');
+    stale.destroy();
+    await withTimeout(once(stale, 'close'), 'Pending session close');
+    authorization.resolve({ action: 'allow' });
+    // Drain the rejected/closed registration stream before reusing its ID.
+    await Promise.race([
+      staleRegistration.readNext().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 100)),
+    ]);
+
+    replacement = await connectClient(host.address.port);
+    const replacementRegistration = await openBrokerRegistration(replacement, {
+      peerId: 'closed-pending-broker',
+      role: 'broker',
+    });
+    assert.equal(
+      (await withTimeout(replacementRegistration.readNext(), 'Replacement registration')).status,
+      'registered',
+    );
+  } finally {
+    authorization.resolve({ action: 'allow' });
+    stale?.destroy();
+    replacement?.destroy();
+    await host.close('test-complete');
+  }
+});
+
+test('Host does not dispatch a queued Broker request after its request stream closes', async () => {
+  const host = createHost({ port: 0 });
+  let guest;
+  let broker;
+  let brokerControl;
+  let request;
+  let lease;
+  let guestBytes = 0;
+
+  await host.start();
+  try {
+    guest = await connectClient(host.address.port);
+    broker = await connectClient(host.address.port);
+    assert.equal(
+      (
+        await requestJson(guest, {
+          peerId: 'closed-request-lease-guest',
+          role: 'guest',
+          routedDomains: ['closed-request-lease.local.test'],
+        })
+      ).status,
+      'registered',
+    );
+    brokerControl = await openBrokerRegistration(broker, {
+      peerId: 'closed-request-lease-broker',
+      role: 'broker',
+    });
+    assert.equal(
+      (await withTimeout(brokerControl.readNext(), 'Broker registration')).status,
+      'registered',
+    );
+
+    request = broker.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-source-id': 'closed-request-lease-broker',
+      'x-verser-target-id': 'closed-request-lease-guest',
+      'x-verser-request-id': 'closed-request-lease-request',
+      'x-verser-method': 'GET',
+      'x-verser-path': '/',
+      'x-verser-headers': JSON.stringify({ host: 'closed-request-lease.local.test' }),
+    });
+    request.on('error', () => {});
+    request.end();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    request.close(http2.constants.NGHTTP2_CANCEL);
+
+    const leaseStream = guest.request({
+      ':method': 'POST',
+      ':path': '/verser/guest/lease',
+      'x-verser-peer-id': 'closed-request-lease-guest',
+      'x-verser-lease-id': 'closed-request-lease-id',
+    });
+    lease = { stream: leaseStream };
+    leaseStream.on('error', () => {});
+    leaseStream.on('data', (chunk) => {
+      guestBytes += chunk.length;
+    });
+    const leaseClosed = withTimeout(once(leaseStream, 'close'), 'Unused acquired lease close');
+    leaseStream.end();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.equal(guestBytes, 0, 'closed Broker request was written to a later Guest lease');
+    assert.equal(lease.stream.closed, true, 'unused acquired lease should be released');
+    await leaseClosed;
+  } finally {
+    request?.close(http2.constants.NGHTTP2_CANCEL);
+    lease?.stream.close();
+    broker?.destroy();
+    guest?.destroy();
+    await host.close('test-complete');
+  }
+});
+
+test('Host rejects local registrations authorized across shutdown and restart', async () => {
+  const gates = new Map();
+  const entered = deferred();
+  const host = createHost({
+    port: 0,
+    tls: {
+      clientAuth: {
+        authorizeRegistration(context) {
+          const gate = deferred();
+          gates.set(context.peerId, gate);
+          if (gates.size === 2) entered.resolve();
+          return gate.promise;
+        },
+      },
+    },
+  });
+  const lifecycle = [];
+  host.onLifecycle((event) => lifecycle.push(event));
+
+  await host.start();
+  const guestRegistration = host.attachLocalGuest({
+    guestId: 'shutdown-pending-local-guest',
+    routedDomains: ['shutdown-pending.local.test'],
+    listener: (_request, response) => response.end('unexpected'),
+  });
+  const brokerRegistration = host.attachLocalBroker({ brokerId: 'shutdown-pending-local-broker' });
+  try {
+    await withTimeout(entered.promise, 'Local authorization callbacks');
+    await host.close('close-pending-registrations');
+    await host.start();
+    for (const gate of gates.values()) gate.resolve({ action: 'allow' });
+
+    await assert.rejects(guestRegistration, /Host closed|admission.*invalidated|shutdown/i);
+    await assert.rejects(brokerRegistration, /Host closed|admission.*invalidated|shutdown/i);
+    assert.deepEqual(host.getRoutedDomains(), []);
+    assert.equal(
+      lifecycle.filter(
+        (event) => event.name === 'registered' && event.peerId.startsWith('shutdown-pending-'),
+      ).length,
+      0,
+    );
+  } finally {
+    for (const gate of gates.values()) gate.resolve({ action: 'allow' });
+    await host.close('test-complete');
+  }
+});
+
+test('Host does not publish a remote registration authorized across shutdown and restart', async () => {
+  const authorization = deferred();
+  const entered = deferred();
+  let authorizationCalls = 0;
+  const host = createHost({
+    port: 0,
+    tls: {
+      clientAuth: {
+        authorizeRegistration() {
+          authorizationCalls += 1;
+          if (authorizationCalls === 1) {
+            entered.resolve();
+            return authorization.promise;
+          }
+          return { action: 'allow' };
+        },
+      },
+    },
+  });
+  const lifecycle = [];
+  host.onLifecycle((event) => lifecycle.push(event));
+  let stale;
+  let replacement;
+
+  await host.start();
+  try {
+    stale = await connectClient(host.address.port);
+    const staleRegistration = await openBrokerRegistration(stale, {
+      peerId: 'shutdown-pending-remote-broker',
+      role: 'broker',
+    });
+    await withTimeout(entered.promise, 'Remote authorization callback');
+    await host.close('close-pending-remote-registration');
+    await host.start();
+    authorization.resolve({ action: 'allow' });
+    await Promise.race([
+      staleRegistration.readNext().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 100)),
+    ]);
+
+    replacement = await connectClient(host.address.port);
+    const replacementRegistration = await openBrokerRegistration(replacement, {
+      peerId: 'shutdown-pending-remote-broker',
+      role: 'broker',
+    });
+    assert.equal(
+      (await withTimeout(replacementRegistration.readNext(), 'Replacement Broker registration'))
+        .status,
+      'registered',
+    );
+    assert.equal(
+      lifecycle.filter(
+        (event) => event.name === 'registered' && event.peerId === 'shutdown-pending-remote-broker',
+      ).length,
+      1,
+    );
+  } finally {
+    authorization.resolve({ action: 'allow' });
+    stale?.destroy();
+    replacement?.destroy();
     await host.close('test-complete');
   }
 });
