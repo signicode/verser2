@@ -195,6 +195,17 @@ broker = create_verser_broker(
 await broker.connect()
 ```
 
+Remote Broker sessions normally use distinct `brokerId` values. A Host can
+allow multiple independent remote Broker HTTP/2 sessions to share an ID only
+when each session independently passes authorization and presents the same
+authenticated, nonempty client-certificate fingerprint with an exact match in
+normalized registration fields and `broker` role. There is no fixed session
+count cap. Missing or unverified certificates do not qualify; certificate
+rotation requires sessions using the old certificate to depart before the new
+certificate can reuse the ID. Each active session receives route updates. See
+[Routes](./routes.md#peer-ids-and-broker-sessions) and
+[Certificates](./certificates.md#broker-certificate-identity).
+
 The Python Broker supports request helpers (`request`, `get`, `post`, `put`,
 `patch`, `delete`) and returns `VerserBrokerResponse` objects.
 

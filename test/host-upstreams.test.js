@@ -702,6 +702,7 @@ test('Federated raw response metadata is canonicalized before local Broker deliv
   await manager.start();
   const raw = await connectRawClient(manager.address.port);
   let rawBroker;
+  let rawBrokerControl;
   let broker;
   const federationResponseHeaders = [];
   const openRequest = async (respond) => {
@@ -799,6 +800,31 @@ test('Federated raw response metadata is canonicalized before local Broker deliv
       ),
     );
     rawBroker = await connectRawClient(manager.address.port);
+    rawBrokerControl = rawBroker.request({ ':method': 'POST', ':path': '/verser/register' });
+    rawBrokerControl.setEncoding('utf8');
+    const brokerRegistration = new Promise((resolve, reject) => {
+      let pending = '';
+      const timeout = setTimeout(
+        () => reject(new Error('raw Broker registration timed out')),
+        3000,
+      );
+      rawBrokerControl.on('data', (chunk) => {
+        pending += chunk;
+        const newline = pending.indexOf('\n');
+        if (newline !== -1) {
+          clearTimeout(timeout);
+          resolve(JSON.parse(pending.slice(0, newline)));
+        }
+      });
+      rawBrokerControl.once('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+    rawBrokerControl.end(
+      JSON.stringify({ peerId: 'federation-raw-terminal-broker', role: 'broker' }),
+    );
+    assert.equal((await brokerRegistration).status, 'registered');
     const brokerStream = rawBroker.request({
       ':method': 'POST',
       ':path': '/verser/request',
@@ -810,6 +836,7 @@ test('Federated raw response metadata is canonicalized before local Broker deliv
       'x-verser-path': '/terminal',
       'x-verser-headers': '{}',
     });
+    brokerStream.end();
     const finalHeaders = await once(brokerStream, 'response');
     assert.equal(finalHeaders[':status'], 219);
     assert.equal(finalHeaders['x-federated-terminal'], 'pair');
@@ -937,6 +964,7 @@ test('Federated raw response metadata is canonicalized before local Broker deliv
       (error) => error.code === 'protocol-error',
     );
   } finally {
+    rawBrokerControl?.close();
     rawBroker?.close();
     if (broker !== undefined) await broker.close('test-complete');
     raw.close();

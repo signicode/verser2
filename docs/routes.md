@@ -210,7 +210,18 @@ Matching precedence within the local routes table is:
 3. `*` wildcard path
 4. `fetch()` fallback handler (if provided)
 
-## Duplicate peer IDs
+## Peer IDs and Broker sessions
 
-The Host rejects registration attempts with duplicate peer IDs. Each Guest and
-Broker must have a unique `guestId` / `brokerId`.
+Guest IDs, federation IDs, and local Broker IDs remain unique on a Host. A
+remote Broker may have more than one independent HTTP/2 session using the same
+`brokerId` only when every session presents the same authenticated, nonempty
+leaf-certificate SHA-256 fingerprint and has the exact same normalized
+registration and role (`broker`). Every session is authorized independently;
+there is no arbitrary Broker-session cap. The duplicate allowance does not
+apply when a certificate is missing or unverified. Certificate rotation changes
+the fingerprint, so sessions using the old certificate must depart before a
+session using the new certificate can reuse that ID. Route updates are delivered
+to every active Broker session.
+
+This session identity behavior is not a substitute for application
+authentication, authorization, or routing policy.

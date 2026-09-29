@@ -226,6 +226,22 @@ This mode is a Host protocol gate, not transport-level strict mTLS:
   `unauthorizedClientMaxResponseBodyBytes`, `unauthorizedClientRequestTimeoutMs`,
   and `unauthorizedClientHandlerTimeoutMs`.
 
+### Broker certificate identity
+
+When a Host accepts multiple remote Broker sessions under one `brokerId`, each
+session must independently pass registration authorization and present the same
+authenticated, nonempty leaf-certificate SHA-256 fingerprint. The normalized
+Broker registration and role must also match exactly. Missing or unverified
+certificates do not qualify for this duplicate-session allowance. Rotation changes
+the fingerprint; old sessions must depart before the new certificate can use
+the same ID.
+
+When remote mTLS is enabled, a Broker's optional `brokerDomain` must match an
+exact DNS Subject Alternative Name on its client certificate after
+normalization. Wildcard SANs and Common Name fallback do not qualify. This
+registration check does not make verser2 a general-purpose authentication or
+authorization gateway; applications remain responsible for their own policy.
+
 ### Upstream Host link TLS
 
 Host-to-Host upstream links use the Node client TLS option shape through

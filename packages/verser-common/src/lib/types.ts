@@ -1,8 +1,11 @@
 /**
  * A unique identifier for a Peer (Guest or Broker) in the Verser protocol.
  *
- * Peer IDs are supplied by the application at registration time and must be unique
- * per Host. They appear in routed request/response envelopes as `sourceId` and `targetId`.
+ * IDs are supplied by the application at registration time and appear in routed
+ * request/response envelopes as `sourceId` and `targetId`. Guest and local Broker
+ * IDs are unique per Host. A remote Broker ID can identify multiple sessions only
+ * under the Host's authenticated certificate and exact-registration duplicate
+ * session rules; it does not merge those independent sessions.
  *
  * @public
  */
@@ -531,7 +534,7 @@ export interface LeaseRequestMetadataReadOptions extends VerserEnvelopeParserOpt
  * @public
  */
 export interface VerserRegistrationRequest {
-  /** Application-chosen unique identifier for this Peer. */
+  /** Application-chosen peer identifier; duplicate remote Broker sessions are subject to Host identity checks. */
   readonly peerId: string;
   /** The Peer's role: `'guest'` or `'broker'`. */
   readonly role: VerserPeerRole;

@@ -5,6 +5,31 @@ const test = require('node:test');
 
 const rootDirectory = path.resolve(__dirname, '..');
 
+test('Broker session identity docs describe the certificate-bound duplicate allowance', () => {
+  const routesDocs = fs.readFileSync(path.join(rootDirectory, 'docs/routes.md'), 'utf8');
+  const connectingDocs = fs.readFileSync(path.join(rootDirectory, 'docs/connecting.md'), 'utf8');
+  const certificatesDocs = fs.readFileSync(
+    path.join(rootDirectory, 'docs/certificates.md'),
+    'utf8',
+  );
+  const hostCodemap = fs.readFileSync(
+    path.join(rootDirectory, 'packages/verser2-host/codemap.md'),
+    'utf8',
+  );
+
+  for (const content of [routesDocs, connectingDocs, certificatesDocs, hostCodemap]) {
+    assert.match(content, /same[\s\S]*authenticated[\s\S]*nonempty[\s\S]*fingerprint/i);
+  }
+  assert.match(routesDocs, /exact same normalized[\s\S]*registration and role/i);
+  assert.match(routesDocs, /authorized independently/i);
+  assert.match(routesDocs, /certificate is missing or unverified/i);
+  assert.match(routesDocs, /no arbitrary Broker-session cap/i);
+  assert.match(routesDocs, /every active Broker session/i);
+  assert.match(certificatesDocs, /exact DNS Subject Alternative Name/i);
+  assert.match(certificatesDocs, /Missing or unverified\s+certificates do not qualify/i);
+  assert.match(certificatesDocs, /not make verser2 a general-purpose authentication/i);
+});
+
 test('development docs document workspace setup commands', () => {
   const readme = fs.readFileSync(path.join(rootDirectory, 'README.md'), 'utf8');
   const developmentDocs = fs.readFileSync(path.join(rootDirectory, 'docs/development.md'), 'utf8');

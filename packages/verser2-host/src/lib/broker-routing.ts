@@ -254,7 +254,7 @@ function resolveRemoteBrokerDomain(
   callbacks: BrokerRoutingCallbacks,
 ): string {
   const sourceId = String(headers['x-verser-source-id'] ?? '');
-  const source = sourceId.length > 0 ? callbacks.getPeer(sourceId) : undefined;
+  const source = sourceId.length > 0 ? callbacks.getPeer(sourceId, stream.session) : undefined;
   if (
     source === undefined ||
     source.role !== 'broker' ||
@@ -267,7 +267,7 @@ function resolveRemoteBrokerDomain(
       { sourceId },
     );
   }
-  const brokerDomain = callbacks.getBrokerDomain(sourceId);
+  const brokerDomain = callbacks.getBrokerDomain(sourceId, stream.session);
   if (brokerDomain === undefined) {
     throw createVerserError(
       'authorization-denied',
@@ -285,8 +285,8 @@ function isRemoteBrokerRequestLive(
   callbacks: BrokerRoutingCallbacks,
 ): boolean {
   const sourceId = String(headers['x-verser-source-id'] ?? '');
-  const source = sourceId.length > 0 ? callbacks.getPeer(sourceId) : undefined;
   const session = stream.session;
+  const source = sourceId.length > 0 ? callbacks.getPeer(sourceId, session) : undefined;
   return (
     !closedRemoteBrokerRequests.has(stream) &&
     !stream.closed &&
@@ -337,7 +337,7 @@ export interface PeerInfo {
  */
 export interface BrokerRoutingCallbacks {
   /** Look up a registered peer by ID. */
-  getPeer(id: string): PeerInfo | undefined;
+  getPeer(id: string, session?: http2.Http2Session): PeerInfo | undefined;
 
   /** Emit a lifecycle event. */
   emitLifecycle(event: VerserHostLifecycleEvent): void;
@@ -380,7 +380,7 @@ export interface BrokerRoutingCallbacks {
   ): Promise<boolean>;
 
   /** Normalized `brokerDomain` persisted for a registered Broker peer. */
-  getBrokerDomain(sourceId: string): string | undefined;
+  getBrokerDomain(sourceId: string, session?: http2.Http2Session): string | undefined;
 
   /**
    * Identity that replaces the request `sourceId` at every Host-to-Host
