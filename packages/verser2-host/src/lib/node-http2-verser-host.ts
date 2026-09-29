@@ -113,6 +113,9 @@ interface RegisteredPeer {
    * Broker did not advertise one or the peer is not a Broker.
    */
   readonly brokerDomain?: string;
+  /** Authenticated leaf identity and normalized Broker registration, if any. */
+  readonly brokerFingerprint?: string;
+  readonly brokerRegistrationKey?: string;
 }
 
 interface UpstreamLink {
@@ -228,6 +231,15 @@ export class NodeHttp2VerserHost implements VerserHost {
 
   private readonly peers = new Map<VerserPeerId, RegisteredPeer>();
 
+  /** All admitted remote Broker sessions grouped under their logical ID. */
+  private readonly remoteBrokerSessions = new Map<
+    VerserPeerId,
+    Map<http2.Http2Session, RegisteredPeer>
+  >();
+
+  /** Invalidates asynchronous admissions that overlap Host shutdown. */
+  private lifecycleGeneration = 0;
+
   private readonly sessions = new Set<http2.ServerHttp2Session>();
 
   private unauthorizedClientHandler?: unauthorizedClient.UnauthorizedClientGate;
@@ -259,6 +271,8 @@ export class NodeHttp2VerserHost implements VerserHost {
   private readonly pendingUpstreamConnections = new Set<string>();
 
   private readonly inboundFederationHosts = new Map<string, InboundFederationLink>();
+
+  private readonly pendingInboundFederationHosts = new Map<string, symbol>();
 
   private readonly federatedRequestStreamWaiters = new Map<
     string,
@@ -329,8 +343,9 @@ export class NodeHttp2VerserHost implements VerserHost {
    */
   private getBrokerRoutingCallbacks(): BrokerRoutingCallbacks {
     return {
-      getPeer: (id) => {
-        const peer = this.peers.get(id);
+      getPeer: (id, session) => {
+        const peer =
+          session === undefined ? this.peers.get(id) : this.getPeerForSession(id, session);
         if (peer === undefined) return undefined;
         return {
           role: peer.role,
@@ -350,7 +365,7 @@ export class NodeHttp2VerserHost implements VerserHost {
       routeAuthorizerEnabled: () => this.routeAuthorizer !== undefined,
       authorizeFederatedHop: (previousAdvertisedDomain, nextSelectedDomain) =>
         this.authorizeFederatedHopPair(previousAdvertisedDomain, nextSelectedDomain),
-      getBrokerDomain: (sourceId) => this.getRegisteredBrokerDomain(sourceId),
+      getBrokerDomain: (sourceId, session) => this.getRegisteredBrokerDomain(sourceId, session),
       getEgressSourceId: () => this.options.hostId ?? 'host',
       trackController: (peerId, controller) => this.trackLocalRequestController(peerId, controller),
       untrackController: (peerId, controller) =>
@@ -494,6 +509,8 @@ export class NodeHttp2VerserHost implements VerserHost {
    * {@inheritDoc VerserHost.close}
    */
   public async close(reason = 'host-close'): Promise<void> {
+    this.lifecycleGeneration += 1;
+    this.pendingInboundFederationHosts.clear();
     this.stopDegradedRouteCleanupTimer();
     // Host shutdown invalidates every cached hop-local allow.
     this.invalidateRouteAuthorizations();
@@ -511,11 +528,20 @@ export class NodeHttp2VerserHost implements VerserHost {
       return;
     }
 
+    const brokerControlStreams = new Set<http2.ServerHttp2Stream>();
     for (const peer of this.peers.values()) {
-      peer.controlStream?.close(http2.constants.NGHTTP2_NO_ERROR);
+      if (peer.controlStream !== undefined) brokerControlStreams.add(peer.controlStream);
       if (peer.localBroker !== undefined) {
         closeLocalBrokerState(peer.localBroker, reason);
       }
+    }
+    for (const members of this.remoteBrokerSessions.values()) {
+      for (const peer of members.values()) {
+        if (peer.controlStream !== undefined) brokerControlStreams.add(peer.controlStream);
+      }
+    }
+    for (const controlStream of brokerControlStreams) {
+      controlStream.close(http2.constants.NGHTTP2_NO_ERROR);
     }
     this.abortAllLocalRequests();
 
@@ -532,6 +558,7 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
     this.sessions.clear();
     this.peers.clear();
+    this.remoteBrokerSessions.clear();
     this.inboundFederationHosts.clear();
     this.routeRegistry.clear();
 
@@ -616,12 +643,61 @@ export class NodeHttp2VerserHost implements VerserHost {
    *
    * @internal
    */
-  public getRegisteredBrokerDomain(peerId: VerserPeerId): string | undefined {
-    const peer = this.peers.get(peerId);
+  public getRegisteredBrokerDomain(
+    peerId: VerserPeerId,
+    session?: http2.Http2Session,
+  ): string | undefined {
+    const peer =
+      session === undefined ? this.peers.get(peerId) : this.getPeerForSession(peerId, session);
     if (peer === undefined || peer.role !== 'broker') {
       return undefined;
     }
     return peer.brokerDomain;
+  }
+
+  private getPeerForSession(
+    peerId: VerserPeerId,
+    session: http2.Http2Session,
+  ): RegisteredPeer | undefined {
+    return (
+      this.remoteBrokerSessions.get(peerId)?.get(session) ??
+      (this.peers.get(peerId)?.session === session ? this.peers.get(peerId) : undefined)
+    );
+  }
+
+  private isFederationPeerIdInUse(peerId: string): boolean {
+    return (
+      this.inboundFederationHosts.has(peerId) ||
+      this.pendingInboundFederationHosts.has(peerId) ||
+      this.upstreamLinks.has(peerId) ||
+      this.pendingUpstreamConnections.has(peerId)
+    );
+  }
+
+  private getAuthenticatedBrokerFingerprint(session: http2.Http2Session): string | undefined {
+    const clientAuth = this.options.tls?.clientAuth;
+    if (clientAuth?.ca === undefined && clientAuth?.caFile === undefined) {
+      return undefined;
+    }
+    const tlsSocket = session.socket as TLSSocket;
+    if (!tlsSocket.authorized) {
+      return undefined;
+    }
+    const fingerprint = this.getCertificateIdentity(tlsSocket)?.fingerprint256;
+    return typeof fingerprint === 'string' && fingerprint.length > 0 ? fingerprint : undefined;
+  }
+
+  private createBrokerRegistrationKey(
+    peerId: VerserPeerId,
+    registration: VerserRegistrationRequest,
+    brokerDomain: string | undefined,
+  ): string {
+    return JSON.stringify({
+      peerId,
+      role: registration.role,
+      routedDomains: registration.routedDomains ?? [],
+      brokerDomain: brokerDomain ?? null,
+    });
   }
 
   /**
@@ -640,7 +716,13 @@ export class NodeHttp2VerserHost implements VerserHost {
     const upstreamPool = validateUpstreamPool(options.upstreamPool);
     const localHostId = this.getFederationHostId();
     const upstreamId = createPeerId(options.upstreamId);
-    if (this.upstreamLinks.has(upstreamId) || this.pendingUpstreamConnections.has(upstreamId)) {
+    if (
+      this.upstreamLinks.has(upstreamId) ||
+      this.pendingUpstreamConnections.has(upstreamId) ||
+      this.peers.has(upstreamId) ||
+      this.inboundFederationHosts.has(upstreamId) ||
+      this.pendingInboundFederationHosts.has(upstreamId)
+    ) {
       throw createVerserError('invalid-registration', 'Upstream is already connected', {
         upstreamId,
       });
@@ -709,6 +791,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   }
 
   public async attachLocalGuest(options: VerserLocalGuestOptions): Promise<VerserLocalGuestHandle> {
+    const admissionGeneration = this.lifecycleGeneration;
     const peerId = createPeerId(options.guestId);
     if (this.peers.has(peerId)) {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
@@ -719,6 +802,10 @@ export class NodeHttp2VerserHost implements VerserHost {
       role: 'guest',
       routedDomains: [...(options.routedDomains ?? [])],
     });
+    this.assertAdmissionGeneration(admissionGeneration, peerId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
 
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'guest' });
     this.peers.set(peerId, {
@@ -891,6 +978,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   public async attachLocalBroker(
     options: VerserLocalBrokerOptions,
   ): Promise<VerserLocalBrokerHandle> {
+    const admissionGeneration = this.lifecycleGeneration;
     const peerId = createPeerId(options.brokerId);
     if (this.peers.has(peerId)) {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
@@ -925,6 +1013,10 @@ export class NodeHttp2VerserHost implements VerserHost {
       routedDomains: [],
       ...(brokerDomain === undefined ? {} : { brokerDomain }),
     });
+    this.assertAdmissionGeneration(admissionGeneration, peerId);
+    if (this.peers.has(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+    }
 
     const localBroker = createLocalBrokerState(this.getRoutedDomains());
     this.emitLifecycle({ name: VERSER_LIFECYCLE_EVENTS.connected, peerId, role: 'broker' });
@@ -1104,8 +1196,19 @@ export class NodeHttp2VerserHost implements VerserHost {
     stream: http2.ServerHttp2Stream,
     registration: VerserHostRegistrationRequest,
   ): Promise<void> {
+    const admissionGeneration = this.lifecycleGeneration;
     const peerId = createPeerId(registration.peerId);
-    if (this.peers.has(peerId)) {
+    if (this.isFederationPeerIdInUse(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer ID is already used by federation', {
+        peerId,
+      });
+    }
+    const currentPeer = this.peers.get(peerId);
+    const mayJoinRemoteBroker =
+      registration.role === 'broker' &&
+      currentPeer?.role === 'broker' &&
+      currentPeer.transport === 'h2';
+    if (currentPeer !== undefined && !mayJoinRemoteBroker) {
       throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
     }
 
@@ -1121,7 +1224,21 @@ export class NodeHttp2VerserHost implements VerserHost {
     if (!authorized) {
       return;
     }
-
+    if (admissionGeneration !== this.lifecycleGeneration) {
+      // Shutdown already invalidated this session; do not publish a peer or
+      // emit a late registration/error event from its authorization result.
+      return;
+    }
+    // Authorization is asynchronous. Revalidate both admission uniqueness
+    // and session liveness before publishing any peer state or routes.
+    if (session.closed || stream.closed || stream.destroyed) {
+      return;
+    }
+    if (this.isFederationPeerIdInUse(peerId)) {
+      throw createVerserError('invalid-registration', 'Peer ID is already used by federation', {
+        peerId,
+      });
+    }
     let brokerDomain: string | undefined;
     if (registration.role === 'broker' && registration.brokerDomain !== undefined) {
       // `parseRegistrationRequest` already normalized and validated the
@@ -1130,6 +1247,13 @@ export class NodeHttp2VerserHost implements VerserHost {
       this.assertBrokerDomainCertificate(session, peerId, brokerDomain);
     }
 
+    const brokerFingerprint =
+      registration.role === 'broker' ? this.getAuthenticatedBrokerFingerprint(session) : undefined;
+    const brokerRegistrationKey =
+      registration.role === 'broker'
+        ? this.createBrokerRegistrationKey(peerId, registration, brokerDomain)
+        : undefined;
+
     const peer: RegisteredPeer = {
       peerId,
       role: registration.role,
@@ -1137,9 +1261,35 @@ export class NodeHttp2VerserHost implements VerserHost {
       session,
       controlStream: registration.role === 'broker' ? stream : undefined,
       ...(brokerDomain === undefined ? {} : { brokerDomain }),
+      ...(brokerFingerprint === undefined ? {} : { brokerFingerprint }),
+      ...(brokerRegistrationKey === undefined ? {} : { brokerRegistrationKey }),
     };
 
-    this.peers.set(peerId, peer);
+    const existingPeer = this.peers.get(peerId);
+    if (existingPeer !== undefined) {
+      const members = this.remoteBrokerSessions.get(peerId);
+      if (
+        registration.role !== 'broker' ||
+        existingPeer.role !== 'broker' ||
+        existingPeer.transport !== 'h2' ||
+        members === undefined ||
+        members.has(session) ||
+        brokerFingerprint === undefined ||
+        existingPeer.brokerFingerprint === undefined ||
+        brokerRegistrationKey !== existingPeer.brokerRegistrationKey
+      ) {
+        throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
+      }
+      members.set(session, peer);
+    } else {
+      this.peers.set(peerId, peer);
+      if (registration.role === 'broker' && peer.transport === 'h2') {
+        this.remoteBrokerSessions.set(peerId, new Map([[session, peer]]));
+      }
+    }
+    if (registration.role === 'broker' && peer.transport === 'h2') {
+      stream.once('close', () => this.handleRemoteBrokerControlClose(peerId, session, stream));
+    }
     this.emitLifecycle({
       name: VERSER_LIFECYCLE_EVENTS.registered,
       peerId,
@@ -1274,6 +1424,16 @@ export class NodeHttp2VerserHost implements VerserHost {
     this.advertiseFederatedRoutes();
   }
 
+  private assertAdmissionGeneration(generation: number, peerId: VerserPeerId): void {
+    if (generation !== this.lifecycleGeneration) {
+      throw createVerserError(
+        'disconnected-target',
+        'Host shutdown invalidated the pending peer registration',
+        { peerId },
+      );
+    }
+  }
+
   private async authorizeRegistration(
     stream: http2.ServerHttp2Stream,
     session: http2.Http2Session,
@@ -1324,6 +1484,7 @@ export class NodeHttp2VerserHost implements VerserHost {
   }
 
   private async handleHostFederationStream(stream: http2.ServerHttp2Stream): Promise<void> {
+    const admissionGeneration = this.lifecycleGeneration;
     const localHostId = this.getFederationHostId();
     let handshake: VerserHostFederationHandshake;
     try {
@@ -1334,9 +1495,40 @@ export class NodeHttp2VerserHost implements VerserHost {
       });
     }
 
-    const authorization = await this.authorizeHostFederation(stream, handshake);
+    if (this.peers.has(handshake.hostId) || this.isFederationPeerIdInUse(handshake.hostId)) {
+      throw createVerserError('invalid-registration', 'Federated Host identity is already in use', {
+        hostId: handshake.hostId,
+      });
+    }
+    const session = stream.session;
+    if (session === undefined) {
+      throw createVerserError('protocol-error', 'Host federation stream has no HTTP/2 session');
+    }
+    const reservation = Symbol(handshake.hostId);
+    this.pendingInboundFederationHosts.set(handshake.hostId, reservation);
+    let authorization: Awaited<ReturnType<typeof this.authorizeHostFederation>>;
+    try {
+      authorization = await this.authorizeHostFederation(stream, handshake);
+    } finally {
+      if (this.pendingInboundFederationHosts.get(handshake.hostId) === reservation) {
+        this.pendingInboundFederationHosts.delete(handshake.hostId);
+      }
+    }
     if (!authorization.authorized) {
       return;
+    }
+    if (
+      admissionGeneration !== this.lifecycleGeneration ||
+      session.closed ||
+      stream.closed ||
+      stream.destroyed
+    ) {
+      return;
+    }
+    if (this.peers.has(handshake.hostId)) {
+      throw createVerserError('invalid-registration', 'Federated Host identity is already in use', {
+        hostId: handshake.hostId,
+      });
     }
     if (this.inboundFederationHosts.has(handshake.hostId)) {
       throw createVerserError('invalid-registration', 'Federated Host is already connected', {
@@ -1344,10 +1536,6 @@ export class NodeHttp2VerserHost implements VerserHost {
       });
     }
 
-    const session = stream.session;
-    if (session === undefined) {
-      throw createVerserError('protocol-error', 'Host federation stream has no HTTP/2 session');
-    }
     this.inboundFederationHosts.set(handshake.hostId, {
       hostId: handshake.hostId,
       session,
@@ -2290,19 +2478,19 @@ export class NodeHttp2VerserHost implements VerserHost {
           peerId: peer.peerId,
           role: peer.role,
         });
-        continue;
       }
-      if (
-        peer.role === 'broker' &&
-        peer.controlStream !== undefined &&
-        !peer.controlStream.closed
-      ) {
-        writeJsonLine(peer.controlStream, createBrokerRoutesControlFrame(routes));
-        this.emitLifecycle({
-          name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
-          peerId: peer.peerId,
-          role: peer.role,
-        });
+    }
+    const frame = createBrokerRoutesControlFrame(routes);
+    for (const members of this.remoteBrokerSessions.values()) {
+      for (const peer of members.values()) {
+        if (peer.controlStream !== undefined && !peer.controlStream.closed) {
+          writeJsonLine(peer.controlStream, frame);
+          this.emitLifecycle({
+            name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
+            peerId: peer.peerId,
+            role: peer.role,
+          });
+        }
       }
     }
   }
@@ -2332,15 +2520,6 @@ export class NodeHttp2VerserHost implements VerserHost {
         continue;
       }
 
-      if (peer.controlStream !== undefined && !peer.controlStream.closed) {
-        writeJsonLine(peer.controlStream, frame);
-        this.emitLifecycle({
-          name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
-          peerId: peer.peerId,
-          role: peer.role,
-        });
-      }
-
       if (peer.transport === 'local' && peer.localBroker !== undefined) {
         for (const event of events) {
           emitLocalBrokerRouteChange(peer.localBroker, event);
@@ -2350,6 +2529,19 @@ export class NodeHttp2VerserHost implements VerserHost {
           peerId: peer.peerId,
           role: peer.role,
         });
+      }
+    }
+
+    for (const members of this.remoteBrokerSessions.values()) {
+      for (const peer of members.values()) {
+        if (peer.controlStream !== undefined && !peer.controlStream.closed) {
+          writeJsonLine(peer.controlStream, frame);
+          this.emitLifecycle({
+            name: VERSER_LIFECYCLE_EVENTS.routeAdvertised,
+            peerId: peer.peerId,
+            role: peer.role,
+          });
+        }
       }
     }
 
@@ -2733,7 +2925,9 @@ export class NodeHttp2VerserHost implements VerserHost {
     const protocol = String(headers['x-verser-ws-protocol'] ?? '');
     const wsPath = String(headers['x-verser-ws-path'] ?? '/');
     const sourceId = createPeerId(String(headers['x-verser-source-id'] ?? ''));
-    const source = this.peers.get(sourceId);
+    const brokerSession = brokerStream.session;
+    const source =
+      brokerSession === undefined ? undefined : this.getPeerForSession(sourceId, brokerSession);
     if (
       source === undefined ||
       source.role !== 'broker' ||
@@ -2779,8 +2973,14 @@ export class NodeHttp2VerserHost implements VerserHost {
         undefined,
         // Source is already session-bound above; the persisted Broker domain
         // is the previous hop for a direct Broker VWS egress.
-        this.getRegisteredBrokerDomain(sourceId),
+        this.getRegisteredBrokerDomain(sourceId, brokerSession),
       );
+      if (!this.isFederationVwsSourceLive(brokerStream, openFrame, undefined, undefined)) {
+        if (!result.stream.closed && !result.stream.destroyed) {
+          result.stream.close(http2.constants.NGHTTP2_CANCEL);
+        }
+        return;
+      }
       const responseHeaders: http2.OutgoingHttpHeaders = { ':status': 200 };
       if (result.protocol.length > 0) responseHeaders['x-verser-ws-protocol'] = result.protocol;
       brokerStream.respond(responseHeaders);
@@ -2898,6 +3098,49 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
+  private isFederationVwsSourceLive(
+    sourceStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    open: ReturnType<typeof createFederationVwsOpen>,
+    sourceHostId: string | undefined,
+    signal: AbortSignal | undefined,
+  ): boolean {
+    const session = sourceStream.session;
+    if (
+      signal?.aborted ||
+      sourceStream.closed ||
+      sourceStream.destroyed ||
+      session === undefined ||
+      session.closed ||
+      session.destroyed
+    ) {
+      return false;
+    }
+    if (sourceHostId !== undefined) {
+      const inbound = this.inboundFederationHosts.get(sourceHostId);
+      if (inbound?.session === session) return true;
+      return [...this.upstreamLinks.values()].some(
+        (link) => link.remoteHostId === sourceHostId && link.session === session && !link.closing,
+      );
+    }
+    const broker = this.getPeerForSession(createPeerId(open.sourceId), session);
+    return (
+      broker !== undefined &&
+      broker.role === 'broker' &&
+      broker.transport === 'h2' &&
+      broker.session === session
+    );
+  }
+
+  private createCancelledFederationVwsError(
+    open: ReturnType<typeof createFederationVwsOpen>,
+  ): VerserError {
+    return createVerserError(
+      'disconnected-target',
+      'Federated WebSocket source disconnected during open',
+      { sourceId: open.sourceId, targetId: open.targetId },
+    );
+  }
+
   private async routeFederationVws(
     sourceStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
     open: ReturnType<typeof createFederationVwsOpen>,
@@ -2941,7 +3184,15 @@ export class NodeHttp2VerserHost implements VerserHost {
     framed: boolean;
   }> {
     let lastError: unknown;
+    const sourceIsLive = (): boolean =>
+      this.isFederationVwsSourceLive(sourceStream, open, sourceHostId, signal);
+    if (!sourceIsLive()) {
+      throw this.createCancelledFederationVwsError(open);
+    }
     for (const candidate of candidates) {
+      if (!sourceIsLive()) {
+        throw this.createCancelledFederationVwsError(open);
+      }
       if (candidate.source !== 'local' && candidate.nextHopHostId === sourceHostId) continue;
       let destination: http2.ServerHttp2Stream | http2.ClientHttp2Stream | undefined;
       try {
@@ -2963,6 +3214,9 @@ export class NodeHttp2VerserHost implements VerserHost {
             );
           }
           const allowed = await this.authorizeFederatedHopPair(previous, candidate.domain);
+          if (!sourceIsLive()) {
+            throw this.createCancelledFederationVwsError(open);
+          }
           if (!allowed) {
             throw createVerserError(
               'authorization-denied',
@@ -3029,6 +3283,14 @@ export class NodeHttp2VerserHost implements VerserHost {
           }
         }
 
+        if (!sourceIsLive()) {
+          if (destination !== undefined && !destination.closed && !destination.destroyed) {
+            destination.close(http2.constants.NGHTTP2_CANCEL);
+          }
+          destination = undefined;
+          throw this.createCancelledFederationVwsError(open);
+        }
+
         const forwardedOpen =
           candidate.source === 'local'
             ? open
@@ -3091,6 +3353,13 @@ export class NodeHttp2VerserHost implements VerserHost {
                 open.targetId,
                 open.domain,
               );
+        if (!sourceIsLive()) {
+          if (!destination.closed && !destination.destroyed) {
+            destination.close(http2.constants.NGHTTP2_CANCEL);
+          }
+          destination = undefined;
+          throw this.createCancelledFederationVwsError(open);
+        }
         return {
           stream: destination,
           protocol: protocol ?? '',
@@ -3098,8 +3367,11 @@ export class NodeHttp2VerserHost implements VerserHost {
         };
       } catch (error) {
         lastError = error;
-        if (destination !== undefined && !destination.closed)
+        if (destination !== undefined && !destination.closed && !destination.destroyed)
           destination.close(http2.constants.NGHTTP2_CANCEL);
+        if (!sourceIsLive()) {
+          throw this.createCancelledFederationVwsError(open);
+        }
       }
     }
     throw (
@@ -3414,11 +3686,59 @@ export class NodeHttp2VerserHost implements VerserHost {
     return routeBrokerRequestModule(stream, headers, this.getBrokerRoutingCallbacks());
   }
 
+  private handleRemoteBrokerControlClose(
+    peerId: VerserPeerId,
+    session: http2.Http2Session,
+    controlStream: http2.ServerHttp2Stream,
+  ): void {
+    if (this.server === undefined || session.closed || session.destroyed) {
+      return;
+    }
+    const member = this.remoteBrokerSessions.get(peerId)?.get(session);
+    if (member?.controlStream !== controlStream) {
+      return;
+    }
+    this.detachRemoteBrokerSession(peerId, session);
+    setImmediate(() => {
+      if (this.server !== undefined && !session.closed && !session.destroyed) {
+        session.destroy();
+      }
+    });
+  }
+
+  private detachRemoteBrokerSession(peerId: VerserPeerId, session: http2.Http2Session): void {
+    const members = this.remoteBrokerSessions.get(peerId);
+    const disconnectedPeer = members?.get(session);
+    if (members === undefined || disconnectedPeer === undefined) {
+      return;
+    }
+    members.delete(session);
+    if (members.size === 0) {
+      this.remoteBrokerSessions.delete(peerId);
+      if (this.peers.get(peerId)?.session === session) this.peers.delete(peerId);
+    } else if (this.peers.get(peerId)?.session === session) {
+      const promotedPeer = members.values().next().value as RegisteredPeer | undefined;
+      if (promotedPeer !== undefined) this.peers.set(peerId, promotedPeer);
+    }
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.disconnected,
+      peerId,
+      role: 'broker',
+    });
+  }
+
   private removeSessionPeers(session: http2.ServerHttp2Session): void {
     let shouldAdvertiseRoutes = false;
 
+    for (const peerId of this.remoteBrokerSessions.keys()) {
+      this.detachRemoteBrokerSession(peerId, session);
+    }
+
     for (const [peerId, peer] of this.peers) {
       if (peer.session === session) {
+        if (peer.role === 'broker' && peer.transport === 'h2') {
+          continue;
+        }
         this.peers.delete(peerId);
 
         if (peer.role === 'guest') {

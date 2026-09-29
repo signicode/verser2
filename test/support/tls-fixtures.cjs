@@ -1,10 +1,10 @@
 const {
   chmodSync,
+  copyFileSync,
   existsSync,
   writeFileSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   rmSync,
 } = require('node:fs');
 const { execFileSync } = require('node:child_process');
@@ -27,6 +27,8 @@ const clientCaKeyFilename = 'client-ca-key.pem';
 const trustedClientCertFilename = 'trusted-client-cert.pem';
 const trustedClientKeyFilename = 'trusted-client-key.pem';
 const trustedClientPfxFilename = 'trusted-client.p12';
+const trustedClientSiblingCertFilename = 'trusted-client-sibling-cert.pem';
+const trustedClientSiblingKeyFilename = 'trusted-client-sibling-key.pem';
 const untrustedClientCertFilename = 'untrusted-client-cert.pem';
 const untrustedClientKeyFilename = 'untrusted-client-key.pem';
 const pfxPassphrase = 'verser-pfx-pass';
@@ -64,7 +66,7 @@ subjectAltName = ${subjectAltNames}
   return configPath;
 }
 
-function createClientOpenSslConfig(stagingDirectory, commonName) {
+function createClientOpenSslConfig(stagingDirectory, commonName, dnsName = commonName) {
   const configPath = path.join(stagingDirectory, `${commonName}-openssl.cnf`);
   const config = `\
 [req]
@@ -77,7 +79,7 @@ req_extensions = v3_req
 CN = ${commonName}
 
 [v3_req]
-subjectAltName = DNS:${commonName},URI:urn:verser:client:${commonName}
+subjectAltName = DNS:${dnsName},URI:urn:verser:client:${commonName}
 extendedKeyUsage = clientAuth
 `;
 
@@ -211,7 +213,7 @@ function generateCaPair(certFilename, keyFilename, commonName) {
   return { certPath, keyPath, stagingDirectory };
 }
 
-function generateSignedClientPair(certFilename, keyFilename, commonName, ca) {
+function generateSignedClientPair(certFilename, keyFilename, commonName, ca, dnsName = commonName) {
   const stagingDirectory = path.join(
     os.tmpdir(),
     `verser-tls-client-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -221,7 +223,7 @@ function generateSignedClientPair(certFilename, keyFilename, commonName, ca) {
   const certPath = path.join(stagingDirectory, certFilename);
   const keyPath = path.join(stagingDirectory, keyFilename);
   const csrPath = path.join(stagingDirectory, `${commonName}.csr`);
-  const configPath = createClientOpenSslConfig(stagingDirectory, commonName);
+  const configPath = createClientOpenSslConfig(stagingDirectory, commonName, dnsName);
 
   runOpenSslCommand([
     'req',
@@ -281,7 +283,7 @@ function generatePfx(certPath, keyPath, pfxFilename, passphrase, stagingDirector
 
 function copyGeneratedFixture(source, fileName) {
   const destination = path.join(generatedPath, fileName);
-  renameSync(source, destination);
+  copyFileSync(source, destination);
 }
 
 function generatedFixturePaths() {
@@ -298,6 +300,8 @@ function generatedFixturePaths() {
     trustedClientCertPath: path.join(generatedPath, trustedClientCertFilename),
     trustedClientKeyPath: path.join(generatedPath, trustedClientKeyFilename),
     trustedClientPfxPath: path.join(generatedPath, trustedClientPfxFilename),
+    trustedClientSiblingCertPath: path.join(generatedPath, trustedClientSiblingCertFilename),
+    trustedClientSiblingKeyPath: path.join(generatedPath, trustedClientSiblingKeyFilename),
     untrustedClientCertPath: path.join(generatedPath, untrustedClientCertFilename),
     untrustedClientKeyPath: path.join(generatedPath, untrustedClientKeyFilename),
   };
@@ -317,6 +321,8 @@ function allFixturesExist(paths) {
     existsSync(paths.trustedClientCertPath) &&
     existsSync(paths.trustedClientKeyPath) &&
     existsSync(paths.trustedClientPfxPath) &&
+    existsSync(paths.trustedClientSiblingCertPath) &&
+    existsSync(paths.trustedClientSiblingKeyPath) &&
     existsSync(paths.untrustedClientCertPath) &&
     existsSync(paths.untrustedClientKeyPath)
   );
@@ -397,6 +403,13 @@ function ensureFixtures() {
       'trusted-client',
       clientCa,
     );
+    const trustedClientSibling = generateSignedClientPair(
+      trustedClientSiblingCertFilename,
+      trustedClientSiblingKeyFilename,
+      'trusted-client-sibling',
+      clientCa,
+      'trusted-client',
+    );
     const untrustedClient = generateCertificatePair(
       untrustedClientCertFilename,
       untrustedClientKeyFilename,
@@ -444,6 +457,11 @@ function ensureFixtures() {
       [trustedClient.keyPath, trustedClientKeyFilename],
       [trustedClientPfxPath, trustedClientPfxFilename],
       trustedClient,
+    );
+    generated.push(
+      [trustedClientSibling.certPath, trustedClientSiblingCertFilename],
+      [trustedClientSibling.keyPath, trustedClientSiblingKeyFilename],
+      trustedClientSibling,
     );
     generated.push(
       [untrustedClient.certPath, untrustedClientCertFilename],
@@ -517,6 +535,12 @@ module.exports = {
     pfx: readFileSync(fixtures.trustedClientPfxPath),
     pfxPath: fixtures.trustedClientPfxPath,
     pfxPassphrase: fixtures.pfxPassphrase,
+  },
+  trustedClientSibling: {
+    certificate: readFileSync(fixtures.trustedClientSiblingCertPath, 'utf8'),
+    key: readFileSync(fixtures.trustedClientSiblingKeyPath, 'utf8'),
+    certificatePath: fixtures.trustedClientSiblingCertPath,
+    keyPath: fixtures.trustedClientSiblingKeyPath,
   },
   untrustedClient: {
     certificate: readFileSync(fixtures.untrustedClientCertPath, 'utf8'),

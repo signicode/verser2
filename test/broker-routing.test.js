@@ -89,6 +89,47 @@ function requestJsonWithHeaders(session, headers, payload = '') {
   });
 }
 
+function registerRawBroker(session, peerId) {
+  const control = session.request({ ':method': 'POST', ':path': '/verser/register' });
+  control.setEncoding('utf8');
+  return new Promise((resolve, reject) => {
+    let pending = '';
+    let registered = false;
+    const timeout = setTimeout(() => {
+      control.close();
+      reject(new Error(`raw Broker ${peerId} registration timed out`));
+    }, 3000);
+    control.on('data', (chunk) => {
+      pending += chunk;
+      assert.ok(pending.length <= 16 * 1024, 'raw Broker control buffer exceeded its bound');
+      let newline = pending.indexOf('\n');
+      while (newline !== -1) {
+        const frame = JSON.parse(pending.slice(0, newline));
+        pending = pending.slice(newline + 1);
+        if (!registered) {
+          registered = true;
+          clearTimeout(timeout);
+          if (frame.status !== 'registered') {
+            reject(new Error(`raw Broker ${peerId} registration failed: ${JSON.stringify(frame)}`));
+            return;
+          }
+          resolve(control);
+        }
+        newline = pending.indexOf('\n');
+      }
+    });
+    control.once('end', () => {
+      clearTimeout(timeout);
+      if (!registered) reject(new Error(`raw Broker ${peerId} control ended before registration`));
+    });
+    control.once('error', (error) => {
+      clearTimeout(timeout);
+      if (!registered) reject(error);
+    });
+    control.end(JSON.stringify({ peerId, role: 'broker' }));
+  });
+}
+
 function openRawLease(session, peerId, leaseId, onRequest) {
   return new Promise((resolve, reject) => {
     const lease = session.request({
@@ -998,6 +1039,7 @@ test('Host remote H2 response uses pair-authoritative headers and metadata', asy
   await host.start();
   const rawGuest = await connectRawClient(host.address.port);
   const rawBroker = await connectRawClient(host.address.port);
+  let brokerControl;
   try {
     await requestJson(rawGuest, {
       peerId: 'guest-raw-h2-canonical',
@@ -1026,6 +1068,7 @@ test('Host remote H2 response uses pair-authoritative headers and metadata', asy
         );
       },
     );
+    brokerControl = await registerRawBroker(rawBroker, 'raw-h2-canonical-broker');
     const responseHeaders = await new Promise((resolve, reject) => {
       const stream = rawBroker.request({
         ':method': 'POST',
@@ -1056,6 +1099,7 @@ test('Host remote H2 response uses pair-authoritative headers and metadata', asy
       ['set-cookie', 'two=2'],
     ]);
   } finally {
+    brokerControl?.close();
     rawBroker.close();
     rawGuest.close();
     await host.close('test-complete');
@@ -1286,6 +1330,7 @@ test('Host pipes leased response body to Broker before the lease ends', async ()
   await host.start();
   const rawGuest = await connectRawClient(host.address.port);
   const rawBroker = await connectRawClient(host.address.port);
+  let brokerControl;
 
   try {
     assert.equal(
@@ -1298,6 +1343,7 @@ test('Host pipes leased response body to Broker before the lease ends', async ()
       ).status,
       'registered',
     );
+    brokerControl = await registerRawBroker(rawBroker, 'broker-lease-pipe-raw');
     await openRawLease(
       rawGuest,
       'guest-lease-pipe-1',
@@ -1321,6 +1367,7 @@ test('Host pipes leased response body to Broker before the lease ends', async ()
     const brokerStream = rawBroker.request({
       ':method': 'POST',
       ':path': '/verser/request',
+      'x-verser-source-id': 'broker-lease-pipe-raw',
       'x-verser-target-id': 'guest-lease-pipe-1',
       'x-verser-request-id': 'req-lease-pipe-1',
       'x-verser-method': 'GET',
@@ -1339,6 +1386,7 @@ test('Host pipes leased response body to Broker before the lease ends', async ()
 
     assert.deepEqual(await firstChunk, Buffer.from('first'));
   } finally {
+    brokerControl?.close();
     rawBroker.close();
     rawGuest.close();
     await host.close('test-complete');
@@ -1577,6 +1625,7 @@ test('leased Node Guest response body streams before the local response ends', a
   const host = createHost({ port: 0 });
   await host.start();
   const rawBroker = await connectRawClient(host.address.port);
+  let brokerControl;
   let guest;
 
   try {
@@ -1590,6 +1639,7 @@ test('leased Node Guest response body streams before the local response ends', a
       setTimeout(() => response.end(Buffer.from('second')), 100);
     }, 'streaming-response.local.test');
     await guest.connect();
+    brokerControl = await registerRawBroker(rawBroker, 'broker-streaming-response-1');
 
     const brokerStream = rawBroker.request({
       ':method': 'POST',
@@ -1613,6 +1663,7 @@ test('leased Node Guest response body streams before the local response ends', a
 
     assert.deepEqual(await firstChunk, Buffer.from('first'));
   } finally {
+    brokerControl?.close();
     rawBroker.destroy();
     if (guest !== undefined) await guest.close('test-complete');
     await host.close('test-complete');
@@ -1624,6 +1675,7 @@ test('leased upload dispatch starts before Broker request body ends', async () =
   await host.start();
   const rawGuest = await connectRawClient(host.address.port);
   const rawBroker = await connectRawClient(host.address.port);
+  let brokerControl;
 
   try {
     assert.equal(
@@ -1636,6 +1688,7 @@ test('leased upload dispatch starts before Broker request body ends', async () =
       ).status,
       'registered',
     );
+    brokerControl = await registerRawBroker(rawBroker, 'broker-streaming-upload-1');
 
     const firstBodyChunk = new Promise((resolve, reject) => {
       const lease = rawGuest.request({
@@ -1685,6 +1738,7 @@ test('leased upload dispatch starts before Broker request body ends', async () =
     );
     brokerStream.end(Buffer.from('second'));
   } finally {
+    brokerControl?.close();
     rawBroker.destroy();
     rawGuest.destroy();
     await host.close('test-complete');
@@ -1745,6 +1799,7 @@ test('Broker abort cancels the active leased stream', async () => {
   await host.start();
   const rawGuest = await connectRawClient(host.address.port);
   const rawBroker = await connectRawClient(host.address.port);
+  let brokerControl;
 
   try {
     assert.equal(
@@ -1757,6 +1812,7 @@ test('Broker abort cancels the active leased stream', async () => {
       ).status,
       'registered',
     );
+    brokerControl = await registerRawBroker(rawBroker, 'broker-abort-lease-1');
 
     const leaseClosed = new Promise((resolve, reject) => {
       const lease = rawGuest.request({
@@ -1797,6 +1853,7 @@ test('Broker abort cancels the active leased stream', async () => {
       ),
     ]);
   } finally {
+    brokerControl?.close();
     rawBroker.destroy();
     rawGuest.destroy();
     await host.close('test-complete');
@@ -1897,6 +1954,7 @@ test('Guest handler failure after response start cancels the Broker response str
   const host = createHost({ port: 0 });
   await host.start();
   const rawBroker = await connectRawClient(host.address.port);
+  let brokerControl;
   let guest;
 
   try {
@@ -1910,6 +1968,7 @@ test('Guest handler failure after response start cancels the Broker response str
       throw new Error('failed after partial response');
     }, 'post-response-failure.local.test');
     await guest.connect();
+    brokerControl = await registerRawBroker(rawBroker, 'broker-post-response-failure-1');
 
     const brokerStream = rawBroker.request({
       ':method': 'POST',
@@ -1933,6 +1992,7 @@ test('Guest handler failure after response start cancels the Broker response str
     assert.deepEqual(await firstChunk, Buffer.from('partial'));
     await closed;
   } finally {
+    brokerControl?.close();
     rawBroker.destroy();
     if (guest !== undefined) await guest.close('test-complete');
     await host.close('test-complete');
@@ -3121,8 +3181,9 @@ test('Broker request abort propagates as an error event to Guest handler request
   const host = createHost({ port: 0 });
   await host.start();
   const hostUrl = `https://127.0.0.1:${host.address.port}`;
-  const broker = createBroker({ hostUrl, brokerId: 'broker-abort-guest-2' });
   const guest = createGuest({ hostUrl, guestId: 'guest-abort-guest-2' });
+  let rawBrokerSession;
+  let brokerControl;
 
   try {
     let requestError;
@@ -3136,6 +3197,7 @@ test('Broker request abort propagates as an error event to Guest handler request
         request.once('error', (err) => {
           requestError = err;
           requestErrorResolve();
+          response.end();
         });
         request.once('close', () => {
           resolve();
@@ -3143,12 +3205,10 @@ test('Broker request abort propagates as an error event to Guest handler request
       }, 'abort-guest.local.test');
     });
 
-    await broker.connect();
     await guest.connect();
-    await broker.waitForRoute('abort-guest.local.test');
-
-    const rawBrokerSession = await connectRawClient(host.address.port);
+    rawBrokerSession = await connectRawClient(host.address.port);
     try {
+      brokerControl = await registerRawBroker(rawBrokerSession, 'broker-abort-guest-2');
       const brokerStream = rawBrokerSession.request({
         ':method': 'POST',
         ':path': '/verser/request',
@@ -3190,11 +3250,11 @@ test('Broker request abort propagates as an error event to Guest handler request
       assert.equal(requestError.code, 'stream-failure');
       assert.match(requestError.message, /cancelled|cancel/i);
     } finally {
+      brokerControl?.close();
       rawBrokerSession.destroy();
     }
   } finally {
-    await broker.close('test-complete');
-    await guest.close('test-complete');
     await host.close('test-complete');
+    await guest.close('test-complete');
   }
 });

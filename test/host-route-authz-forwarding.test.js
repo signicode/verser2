@@ -23,6 +23,16 @@ function once(emitter, eventName) {
   });
 }
 
+function withTimeout(promise, label, timeoutMs = 3000) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 function tlsOptions() {
   return { cert: trusted.certificate, key: trusted.key };
 }
@@ -370,6 +380,111 @@ test('configured authorizer denies Broker-selected federation requests lacking a
   }
 });
 
+test('closed remote Broker request is not federated after async route authorization', async () => {
+  let allowHop;
+  let enteredHop;
+  const hopDecision = new Promise((resolve) => {
+    allowHop = resolve;
+  });
+  const authorizationStarted = new Promise((resolve) => {
+    enteredHop = resolve;
+  });
+  const manager = createVerserHost({
+    hostId: 'authz-cancel-manager',
+    tls: tlsOptions(),
+    routeAuthorizer: () => {
+      enteredHop();
+      return hopDecision;
+    },
+  });
+  const runner = createVerserHost({ hostId: 'authz-cancel-runner', tls: tlsOptions() });
+  const guest = guestListenerFactory(async () => 0);
+  let session;
+  let control;
+  let request;
+
+  try {
+    await manager.start();
+    await runner.start();
+    await runner.connectUpstream({
+      upstreamId: 'manager',
+      url: hostUrl(manager),
+      tls: clientTls(),
+    });
+    await runner.attachLocalGuest({
+      guestId: 'authz-cancel-guest',
+      routedDomains: ['authz-cancel.verser.test'],
+      listener: guest.listener,
+    });
+    await assertEventually(() =>
+      assert.equal(
+        manager.getFederatedRouteCandidates('authz-cancel-guest', 'authz-cancel.verser.test')
+          .length,
+        1,
+      ),
+    );
+
+    session = await connectRawClient(manager.address.port);
+    control = session.request({ ':method': 'POST', ':path': '/verser/register' });
+    control.setEncoding('utf8');
+    const registered = new Promise((resolve, reject) => {
+      let line = '';
+      const timeout = setTimeout(() => reject(new Error('Broker registration timed out')), 3000);
+      control.on('data', (chunk) => {
+        line += chunk;
+        const newline = line.indexOf('\n');
+        if (newline !== -1) {
+          clearTimeout(timeout);
+          resolve(JSON.parse(line.slice(0, newline)));
+        }
+      });
+      control.once('error', (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+    });
+    control.end(
+      JSON.stringify({
+        peerId: 'authz-cancel-broker',
+        role: 'broker',
+        brokerDomain: 'cancel-source.verser.test',
+      }),
+    );
+    assert.equal((await registered).status, 'registered');
+
+    request = session.request({
+      ':method': 'POST',
+      ':path': '/verser/request',
+      'x-verser-source-id': 'authz-cancel-broker',
+      'x-verser-target-id': 'authz-cancel-guest',
+      'x-verser-route-domain': 'authz-cancel.verser.test',
+      'x-verser-request-id': 'authz-cancel-request',
+      'x-verser-method': 'GET',
+      'x-verser-path': '/',
+      'x-verser-headers': '{}',
+    });
+    request.on('error', () => {});
+    request.end();
+    await Promise.race([
+      authorizationStarted,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Hop auth timed out')), 3000)),
+    ]);
+    request.close(http2.constants.NGHTTP2_CANCEL);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    allowHop('allow');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.equal(guest.state.calls, 0);
+  } finally {
+    allowHop?.('deny');
+    request?.close();
+    control?.close();
+    session?.destroy();
+    await manager.close('test-complete');
+    await runner.close('test-complete');
+  }
+});
+
 test('Host-to-Host HTTP egress replaces sourceId with the local Host identity and carries the route baton', async () => {
   const pairs = [];
   const manager = createVerserHost({
@@ -588,7 +703,9 @@ test('direct Broker VWS authorizes the hop pair before open forwarding; denial r
     const message = new Promise((resolve) => ws.once('message', resolve));
     await ws.send('authorized', { type: 'text' });
     assert.equal(await message, 'authorized');
+    const wsClosed = once(ws, 'close');
     ws.close();
+    await withTimeout(wsClosed, 'VWS close handshake');
     assert.deepEqual(pairs, [
       {
         previousAdvertisedDomain: 'vws-hop.verser.test',
@@ -1027,7 +1144,9 @@ test('accepted federated VWS connection keeps its authorization through expiry a
     await ws.send('still-bound', { type: 'text' });
     assert.equal(await echo, 'still-bound');
     assert.equal(calls, 1);
+    const firstWsClosed = once(ws, 'close');
     ws.close();
+    await withTimeout(firstWsClosed, 'accepted VWS close handshake');
 
     // A new open decision reauthorizes.
     const second = await broker.webSocket({
