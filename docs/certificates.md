@@ -229,18 +229,25 @@ This mode is a Host protocol gate, not transport-level strict mTLS:
 ### Broker certificate identity
 
 When a Host accepts multiple remote Broker sessions under one `brokerId`, each
-session must independently pass registration authorization and present the same
-authenticated, nonempty leaf-certificate SHA-256 fingerprint. The normalized
-Broker registration and role must also match exactly. Missing or unverified
-certificates do not qualify for this duplicate-session allowance. Rotation changes
-the fingerprint; old sessions must depart before the new certificate can use
-the same ID.
+session must independently pass TLS client-certificate verification and any
+configured `authorizeRegistration` callback. Each needs an authenticated,
+nonempty trusted leaf certificate, but the certificates may have different
+SHA-256 fingerprints. The normalized Broker registration and role must match
+exactly. This permits distinct trusted certificates (for example, separate Host
+machines or overlapping old/new certificates during rotation) to use the ID at
+the same time. Missing or unverified certificates do not qualify. TLS trust
+alone does not replace an application-configured registration authorization
+callback or establish application-level authorization.
 
 When remote mTLS is enabled, a Broker's optional `brokerDomain` must match an
 exact DNS Subject Alternative Name on its client certificate after
 normalization. Wildcard SANs and Common Name fallback do not qualify. This
 registration check does not make verser2 a general-purpose authentication or
 authorization gateway; applications remain responsible for their own policy.
+
+Every registered Broker control stream belongs to one physical HTTP/2 session.
+Closing that stream closes that session only; sibling sessions with the same
+Broker ID remain registered independently.
 
 ### Upstream Host link TLS
 

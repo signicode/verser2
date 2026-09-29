@@ -23,6 +23,16 @@ function once(emitter, eventName) {
   });
 }
 
+function withTimeout(promise, label, timeoutMs = 3000) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 function tlsOptions() {
   return { cert: trusted.certificate, key: trusted.key };
 }
@@ -693,7 +703,9 @@ test('direct Broker VWS authorizes the hop pair before open forwarding; denial r
     const message = new Promise((resolve) => ws.once('message', resolve));
     await ws.send('authorized', { type: 'text' });
     assert.equal(await message, 'authorized');
+    const wsClosed = once(ws, 'close');
     ws.close();
+    await withTimeout(wsClosed, 'VWS close handshake');
     assert.deepEqual(pairs, [
       {
         previousAdvertisedDomain: 'vws-hop.verser.test',
@@ -1132,7 +1144,9 @@ test('accepted federated VWS connection keeps its authorization through expiry a
     await ws.send('still-bound', { type: 'text' });
     assert.equal(await echo, 'still-bound');
     assert.equal(calls, 1);
+    const firstWsClosed = once(ws, 'close');
     ws.close();
+    await withTimeout(firstWsClosed, 'accepted VWS close handshake');
 
     // A new open decision reauthorizes.
     const second = await broker.webSocket({

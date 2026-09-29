@@ -18,16 +18,27 @@ test('Broker session identity docs describe the certificate-bound duplicate allo
   );
 
   for (const content of [routesDocs, connectingDocs, certificatesDocs, hostCodemap]) {
-    assert.match(content, /same[\s\S]*authenticated[\s\S]*nonempty[\s\S]*fingerprint/i);
+    assert.match(content, /nonempty[\s\S]*trusted/i);
   }
   assert.match(routesDocs, /exact same normalized[\s\S]*registration and role/i);
-  assert.match(routesDocs, /authorized independently/i);
-  assert.match(routesDocs, /certificate is missing or unverified/i);
-  assert.match(routesDocs, /no arbitrary Broker-session cap/i);
-  assert.match(routesDocs, /every active Broker session/i);
+  assert.match(routesDocs, /applied independently to every physical\s+session/i);
+  assert.match(routesDocs, /Missing or unverified certificates do not qualify/i);
+  assert.match(routesDocs, /no\s+arbitrary Broker-session cap/i);
+  assert.match(routesDocs, /every active Broker\s+session/i);
+  assert.match(routesDocs, /certificates need not have the same fingerprint/i);
+  assert.match(routesDocs, /closes only that session/i);
+  assert.match(connectingDocs, /separate Host machines/i);
+  assert.match(connectingDocs, /old and new certificates need\s+not be rotated one at a time/i);
+  assert.match(connectingDocs, /any configured `authorizeRegistration` callback/i);
   assert.match(certificatesDocs, /exact DNS Subject Alternative Name/i);
-  assert.match(certificatesDocs, /Missing or unverified\s+certificates do not qualify/i);
+  assert.match(certificatesDocs, /certificates may have different\s+SHA-256 fingerprints/i);
+  assert.match(certificatesDocs, /Missing or unverified certificates do not qualify/i);
+  assert.match(certificatesDocs, /configured `authorizeRegistration` callback/i);
   assert.match(certificatesDocs, /not make verser2 a general-purpose authentication/i);
+  assert.match(
+    hostCodemap,
+    /closing one registered control stream closes only its owning HTTP\/2 session/i,
+  );
 });
 
 test('development docs document workspace setup commands', () => {

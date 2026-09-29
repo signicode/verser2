@@ -3,7 +3,13 @@ const http2 = require('node:http2');
 const test = require('./support/guarded-test.cjs');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
-const { clientCa, trusted, trustedClient, untrustedClient } = require('./support/tls-fixtures.cjs');
+const {
+  clientCa,
+  trusted,
+  trustedClient,
+  trustedClientSibling,
+  untrustedClient,
+} = require('./support/tls-fixtures.cjs');
 
 const brokerId = 'shared-mtls-broker';
 const brokerDomain = 'trusted-client';
@@ -28,10 +34,17 @@ function withTimeout(promise, description, duration = timeoutMs) {
   ]).finally(() => clearTimeout(timer));
 }
 
-function makeHost(authorizationContexts, authorizeRegistration) {
+function makeHost(
+  authorizationContexts,
+  authorizeRegistration,
+  routeAuthorizer,
+  routeAuthorizationCacheTtlMs,
+) {
   return createVerserHost({
     hostId: 'shared-identity-host',
     port: 0,
+    ...(routeAuthorizer === undefined ? {} : { routeAuthorizer }),
+    ...(routeAuthorizationCacheTtlMs === undefined ? {} : { routeAuthorizationCacheTtlMs }),
     tls: {
       cert: trusted.certificate,
       key: trusted.key,
@@ -43,7 +56,7 @@ function makeHost(authorizationContexts, authorizeRegistration) {
           }
           if (
             context.metadata.local !== true &&
-            context.certificate?.commonName !== 'trusted-client'
+            !['trusted-client', 'trusted-client-sibling'].includes(context.certificate?.commonName)
           ) {
             return { action: 'close', reason: 'unexpected client certificate' };
           }
@@ -216,7 +229,7 @@ test('same mTLS Broker identity can use independent sessions, routes, requests a
     controls.push(firstRegistration.control);
     assert.equal((await firstRegistration.nextFrame()).status, 'registered');
 
-    const sibling = await connectMtls(host);
+    const sibling = await connectMtls(host, trustedClientSibling);
     sessions.push(sibling);
     const siblingRegistration = openBrokerRegistration(sibling);
     controls.push(siblingRegistration.control);
@@ -231,7 +244,7 @@ test('same mTLS Broker identity can use independent sessions, routes, requests a
       2,
       'each physical Broker session must be independently authorized',
     );
-    assert.equal(
+    assert.notEqual(
       authorizationContexts[0].certificate.fingerprint256,
       authorizationContexts[1].certificate.fingerprint256,
     );
@@ -240,6 +253,13 @@ test('same mTLS Broker identity can use independent sessions, routes, requests a
     assert.notEqual(
       (await duplicateOnSameSession.nextFrame('same-session duplicate registration')).status,
       'registered',
+    );
+    duplicateOnSameSession.control.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(
+      first.closed,
+      false,
+      'closing a rejected registration stream must not detach its Broker',
     );
 
     heldRequestStarted = new Promise((resolve) => {
@@ -289,8 +309,9 @@ test('same mTLS Broker identity can use independent sessions, routes, requests a
     assert.equal(heldResponse.status, 200);
     assert.equal(heldResponse.body, 'held');
 
-    first.destroy();
-    await withTimeout(once(first, 'close'), 'first Broker session close');
+    const firstSessionClosed = once(first, 'close');
+    firstRegistration.control.close();
+    await withTimeout(firstSessionClosed, 'Broker registration control closes its session');
     const siblingAfterDetach = brokerRequest(sibling, 'sibling-after-detach', '/after-close');
     assert.equal((await siblingAfterDetach.response).body, 'fast');
 
@@ -303,7 +324,9 @@ test('same mTLS Broker identity can use independent sessions, routes, requests a
     assert.deepEqual(reconnectFrame.routes, [expectedRoute]);
   } finally {
     releaseHeldRequest?.();
-    for (const control of controls) control.close();
+    for (const control of controls) {
+      if (!control.closed) control.close();
+    }
     for (const session of sessions) session.destroy();
     outsider?.destroy();
     await guest?.close('test-complete');
@@ -358,6 +381,153 @@ test('concurrent same-certificate Broker admissions independently authorize and 
     }
     for (const control of controls) control.close();
     for (const session of sessions) session.destroy();
+    await host.close('test-complete');
+  }
+});
+
+test('closing one admitted Broker control stream detaches only that session', async () => {
+  const host = makeHost([]);
+  let firstSession;
+  let firstControl;
+  let duplicateControl;
+  let siblingSession;
+  let siblingControl;
+  let guest;
+
+  try {
+    await host.start();
+    firstSession = await connectMtls(host);
+    const first = openBrokerRegistration(firstSession);
+    firstControl = first.control;
+    assert.equal((await first.nextFrame()).status, 'registered');
+
+    const duplicate = openBrokerRegistration(firstSession);
+    duplicateControl = duplicate.control;
+    assert.notEqual(
+      (await duplicate.nextFrame('duplicate registration result')).status,
+      'registered',
+    );
+    duplicateControl.close();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      firstSession.closed,
+      false,
+      'a failed duplicate stream cannot detach the admitted session',
+    );
+
+    siblingSession = await connectMtls(host);
+    const sibling = openBrokerRegistration(siblingSession);
+    siblingControl = sibling.control;
+    assert.equal((await sibling.nextFrame()).status, 'registered');
+
+    guest = await host.attachLocalGuest({
+      guestId,
+      routedDomains: [guestDomain],
+      listener: (_request, response) => response.end('sibling survived'),
+    });
+    const firstSessionClosed = once(firstSession, 'close');
+    firstControl.close();
+    await withTimeout(firstSessionClosed, 'registration-control session detachment');
+
+    const response = brokerRequest(siblingSession, 'sibling-after-control-close');
+    assert.equal((await response.response).body, 'sibling survived');
+  } finally {
+    for (const control of [firstControl, duplicateControl, siblingControl]) {
+      if (control !== undefined && !control.closed) control.close();
+    }
+    firstSession?.destroy();
+    siblingSession?.destroy();
+    await guest?.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test('cancelled Broker VWS authorization stops route fallback and leaves its sibling usable', async () => {
+  let authorizeVws;
+  let signalAuthorization;
+  const vwsAuthorization = new Promise((resolve) => {
+    authorizeVws = resolve;
+  });
+  const authorizationStarted = new Promise((resolve) => {
+    signalAuthorization = resolve;
+  });
+  const hopPairs = [];
+  const host = makeHost(
+    [],
+    undefined,
+    (pair) => {
+      hopPairs.push(pair);
+      if (hopPairs.length === 1) {
+        signalAuthorization();
+        return vwsAuthorization;
+      }
+      return 'allow';
+    },
+    0,
+  );
+  let firstSession;
+  let firstControl;
+  let siblingSession;
+  let siblingControl;
+  let guest;
+  let vwsStream;
+
+  try {
+    await host.start();
+    firstSession = await connectMtls(host);
+    const first = openBrokerRegistration(firstSession);
+    firstControl = first.control;
+    assert.equal((await first.nextFrame()).status, 'registered');
+    siblingSession = await connectMtls(host);
+    const sibling = openBrokerRegistration(siblingSession);
+    siblingControl = sibling.control;
+    assert.equal((await sibling.nextFrame()).status, 'registered');
+
+    guest = await host.attachLocalGuest({
+      guestId,
+      routedDomains: [guestDomain],
+      listener: (_request, response) => response.end('same-ID sibling stays live'),
+    });
+    const forwardedRoute = (nextHopHostId) => ({
+      targetId: guestId,
+      domain: guestDomain,
+      originHostId: `origin-${nextHopHostId}`,
+      nextHopHostId,
+      hopCount: 1,
+      viaHostIds: [`origin-${nextHopHostId}`],
+      source: 'upstream',
+    });
+    host.setImportedFederatedRoutes('vws-hop-a', [forwardedRoute('vws-hop-a')]);
+    host.setImportedFederatedRoutes('vws-hop-b', [forwardedRoute('vws-hop-b')]);
+
+    vwsStream = firstSession.request({
+      ':method': 'POST',
+      ':path': '/verser/websocket',
+      'x-verser-source-id': brokerId,
+      'x-verser-target-id': guestId,
+      'x-verser-domain': guestDomain,
+      'x-verser-ws-path': '/cancel-before-forward',
+    });
+    vwsStream.on('error', () => {});
+    vwsStream.end();
+    await withTimeout(authorizationStarted, 'pending Broker VWS hop authorization');
+    vwsStream.close(http2.constants.NGHTTP2_CANCEL);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    authorizeVws('allow');
+    await new Promise((resolve) => setTimeout(resolve, 75));
+
+    assert.equal(hopPairs.length, 1, 'a cancelled VWS open must not fall back to another route');
+    const response = brokerRequest(siblingSession, 'sibling-after-vws-cancel');
+    assert.equal((await response.response).body, 'same-ID sibling stays live');
+  } finally {
+    authorizeVws?.('deny');
+    vwsStream?.close(http2.constants.NGHTTP2_CANCEL);
+    for (const control of [firstControl, siblingControl]) {
+      if (control !== undefined && !control.closed) control.close();
+    }
+    firstSession?.destroy();
+    siblingSession?.destroy();
+    await guest?.close('test-complete');
     await host.close('test-complete');
   }
 });
@@ -482,6 +652,8 @@ test('rejected mTLS siblings with mismatched registration or certificate do not 
   let admittedControl;
   let mismatchedSession;
   let mismatchedControl;
+  let omittedDomainSession;
+  let omittedDomainControl;
   let roleMismatchSession;
   let roleMismatchControl;
   let untrustedSession;
@@ -501,6 +673,17 @@ test('rejected mTLS siblings with mismatched registration or certificate do not 
     mismatchedControl = mismatch.control;
     const mismatchFrame = await mismatch.nextFrame('mismatched-domain registration response');
     assert.notEqual(mismatchFrame.status, 'registered');
+
+    omittedDomainSession = await connectMtls(host);
+    const omittedDomain = openBrokerRegistration(omittedDomainSession, { brokerDomain: undefined });
+    omittedDomainControl = omittedDomain.control;
+    assert.notEqual(
+      (await omittedDomain.nextFrame('valid but mismatched registration response')).status,
+      'registered',
+    );
+    assert.equal(authorizationContexts.at(-1).peerId, brokerId);
+    assert.equal(authorizationContexts.at(-1).role, 'broker');
+    assert.equal(authorizationContexts.at(-1).brokerDomain, undefined);
 
     roleMismatchSession = await connectMtls(host);
     const roleMismatch = openBrokerRegistration(roleMismatchSession, {
@@ -553,9 +736,11 @@ test('rejected mTLS siblings with mismatched registration or certificate do not 
   } finally {
     admittedControl?.close();
     mismatchedControl?.close();
+    omittedDomainControl?.close();
     roleMismatchControl?.close();
     admittedSession?.destroy();
     mismatchedSession?.destroy();
+    omittedDomainSession?.destroy();
     roleMismatchSession?.destroy();
     untrustedSession?.destroy();
     await guest?.close('test-complete');

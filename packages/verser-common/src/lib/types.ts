@@ -3,9 +3,10 @@
  *
  * IDs are supplied by the application at registration time and appear in routed
  * request/response envelopes as `sourceId` and `targetId`. Guest and local Broker
- * IDs are unique per Host. A remote Broker ID can identify multiple sessions only
- * under the Host's authenticated certificate and exact-registration duplicate
- * session rules; it does not merge those independent sessions.
+ * IDs are unique per Host. A remote Broker ID can identify multiple independent
+ * sessions when each has an authenticated, nonempty trusted client certificate,
+ * passes session-level authorization, and has the same exact normalized
+ * registration and role; the sessions need not present the same certificate.
  *
  * @public
  */

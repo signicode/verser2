@@ -1275,7 +1275,7 @@ export class NodeHttp2VerserHost implements VerserHost {
         members === undefined ||
         members.has(session) ||
         brokerFingerprint === undefined ||
-        brokerFingerprint !== existingPeer.brokerFingerprint ||
+        existingPeer.brokerFingerprint === undefined ||
         brokerRegistrationKey !== existingPeer.brokerRegistrationKey
       ) {
         throw createVerserError('invalid-registration', 'Peer is already registered', { peerId });
@@ -1286,6 +1286,9 @@ export class NodeHttp2VerserHost implements VerserHost {
       if (registration.role === 'broker' && peer.transport === 'h2') {
         this.remoteBrokerSessions.set(peerId, new Map([[session, peer]]));
       }
+    }
+    if (registration.role === 'broker' && peer.transport === 'h2') {
+      stream.once('close', () => this.handleRemoteBrokerControlClose(peerId, session, stream));
     }
     this.emitLifecycle({
       name: VERSER_LIFECYCLE_EVENTS.registered,
@@ -2972,6 +2975,12 @@ export class NodeHttp2VerserHost implements VerserHost {
         // is the previous hop for a direct Broker VWS egress.
         this.getRegisteredBrokerDomain(sourceId, brokerSession),
       );
+      if (!this.isFederationVwsSourceLive(brokerStream, openFrame, undefined, undefined)) {
+        if (!result.stream.closed && !result.stream.destroyed) {
+          result.stream.close(http2.constants.NGHTTP2_CANCEL);
+        }
+        return;
+      }
       const responseHeaders: http2.OutgoingHttpHeaders = { ':status': 200 };
       if (result.protocol.length > 0) responseHeaders['x-verser-ws-protocol'] = result.protocol;
       brokerStream.respond(responseHeaders);
@@ -3089,6 +3098,49 @@ export class NodeHttp2VerserHost implements VerserHost {
     }
   }
 
+  private isFederationVwsSourceLive(
+    sourceStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
+    open: ReturnType<typeof createFederationVwsOpen>,
+    sourceHostId: string | undefined,
+    signal: AbortSignal | undefined,
+  ): boolean {
+    const session = sourceStream.session;
+    if (
+      signal?.aborted ||
+      sourceStream.closed ||
+      sourceStream.destroyed ||
+      session === undefined ||
+      session.closed ||
+      session.destroyed
+    ) {
+      return false;
+    }
+    if (sourceHostId !== undefined) {
+      const inbound = this.inboundFederationHosts.get(sourceHostId);
+      if (inbound?.session === session) return true;
+      return [...this.upstreamLinks.values()].some(
+        (link) => link.remoteHostId === sourceHostId && link.session === session && !link.closing,
+      );
+    }
+    const broker = this.getPeerForSession(createPeerId(open.sourceId), session);
+    return (
+      broker !== undefined &&
+      broker.role === 'broker' &&
+      broker.transport === 'h2' &&
+      broker.session === session
+    );
+  }
+
+  private createCancelledFederationVwsError(
+    open: ReturnType<typeof createFederationVwsOpen>,
+  ): VerserError {
+    return createVerserError(
+      'disconnected-target',
+      'Federated WebSocket source disconnected during open',
+      { sourceId: open.sourceId, targetId: open.targetId },
+    );
+  }
+
   private async routeFederationVws(
     sourceStream: http2.ServerHttp2Stream | http2.ClientHttp2Stream,
     open: ReturnType<typeof createFederationVwsOpen>,
@@ -3132,7 +3184,15 @@ export class NodeHttp2VerserHost implements VerserHost {
     framed: boolean;
   }> {
     let lastError: unknown;
+    const sourceIsLive = (): boolean =>
+      this.isFederationVwsSourceLive(sourceStream, open, sourceHostId, signal);
+    if (!sourceIsLive()) {
+      throw this.createCancelledFederationVwsError(open);
+    }
     for (const candidate of candidates) {
+      if (!sourceIsLive()) {
+        throw this.createCancelledFederationVwsError(open);
+      }
       if (candidate.source !== 'local' && candidate.nextHopHostId === sourceHostId) continue;
       let destination: http2.ServerHttp2Stream | http2.ClientHttp2Stream | undefined;
       try {
@@ -3154,6 +3214,9 @@ export class NodeHttp2VerserHost implements VerserHost {
             );
           }
           const allowed = await this.authorizeFederatedHopPair(previous, candidate.domain);
+          if (!sourceIsLive()) {
+            throw this.createCancelledFederationVwsError(open);
+          }
           if (!allowed) {
             throw createVerserError(
               'authorization-denied',
@@ -3220,6 +3283,14 @@ export class NodeHttp2VerserHost implements VerserHost {
           }
         }
 
+        if (!sourceIsLive()) {
+          if (destination !== undefined && !destination.closed && !destination.destroyed) {
+            destination.close(http2.constants.NGHTTP2_CANCEL);
+          }
+          destination = undefined;
+          throw this.createCancelledFederationVwsError(open);
+        }
+
         const forwardedOpen =
           candidate.source === 'local'
             ? open
@@ -3282,6 +3353,13 @@ export class NodeHttp2VerserHost implements VerserHost {
                 open.targetId,
                 open.domain,
               );
+        if (!sourceIsLive()) {
+          if (!destination.closed && !destination.destroyed) {
+            destination.close(http2.constants.NGHTTP2_CANCEL);
+          }
+          destination = undefined;
+          throw this.createCancelledFederationVwsError(open);
+        }
         return {
           stream: destination,
           protocol: protocol ?? '',
@@ -3289,8 +3367,11 @@ export class NodeHttp2VerserHost implements VerserHost {
         };
       } catch (error) {
         lastError = error;
-        if (destination !== undefined && !destination.closed)
+        if (destination !== undefined && !destination.closed && !destination.destroyed)
           destination.close(http2.constants.NGHTTP2_CANCEL);
+        if (!sourceIsLive()) {
+          throw this.createCancelledFederationVwsError(open);
+        }
       }
     }
     throw (
@@ -3605,31 +3686,52 @@ export class NodeHttp2VerserHost implements VerserHost {
     return routeBrokerRequestModule(stream, headers, this.getBrokerRoutingCallbacks());
   }
 
+  private handleRemoteBrokerControlClose(
+    peerId: VerserPeerId,
+    session: http2.Http2Session,
+    controlStream: http2.ServerHttp2Stream,
+  ): void {
+    if (this.server === undefined || session.closed || session.destroyed) {
+      return;
+    }
+    const member = this.remoteBrokerSessions.get(peerId)?.get(session);
+    if (member?.controlStream !== controlStream) {
+      return;
+    }
+    this.detachRemoteBrokerSession(peerId, session);
+    setImmediate(() => {
+      if (this.server !== undefined && !session.closed && !session.destroyed) {
+        session.destroy();
+      }
+    });
+  }
+
+  private detachRemoteBrokerSession(peerId: VerserPeerId, session: http2.Http2Session): void {
+    const members = this.remoteBrokerSessions.get(peerId);
+    const disconnectedPeer = members?.get(session);
+    if (members === undefined || disconnectedPeer === undefined) {
+      return;
+    }
+    members.delete(session);
+    if (members.size === 0) {
+      this.remoteBrokerSessions.delete(peerId);
+      if (this.peers.get(peerId)?.session === session) this.peers.delete(peerId);
+    } else if (this.peers.get(peerId)?.session === session) {
+      const promotedPeer = members.values().next().value as RegisteredPeer | undefined;
+      if (promotedPeer !== undefined) this.peers.set(peerId, promotedPeer);
+    }
+    this.emitLifecycle({
+      name: VERSER_LIFECYCLE_EVENTS.disconnected,
+      peerId,
+      role: 'broker',
+    });
+  }
+
   private removeSessionPeers(session: http2.ServerHttp2Session): void {
     let shouldAdvertiseRoutes = false;
 
-    for (const [peerId, members] of this.remoteBrokerSessions) {
-      const disconnectedPeer = members.get(session);
-      if (disconnectedPeer === undefined) {
-        continue;
-      }
-      members.delete(session);
-      if (members.size === 0) {
-        this.remoteBrokerSessions.delete(peerId);
-        if (this.peers.get(peerId)?.session === session) {
-          this.peers.delete(peerId);
-        }
-      } else if (this.peers.get(peerId)?.session === session) {
-        const promotedPeer = members.values().next().value as RegisteredPeer | undefined;
-        if (promotedPeer !== undefined) {
-          this.peers.set(peerId, promotedPeer);
-        }
-      }
-      this.emitLifecycle({
-        name: VERSER_LIFECYCLE_EVENTS.disconnected,
-        peerId,
-        role: 'broker',
-      });
+    for (const peerId of this.remoteBrokerSessions.keys()) {
+      this.detachRemoteBrokerSession(peerId, session);
     }
 
     for (const [peerId, peer] of this.peers) {
