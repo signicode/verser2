@@ -67,7 +67,7 @@ child exit/signal semantics are unchanged. The canonical runner also accepts
 Default repository tests must remain compatible with the bounded runner. New or
 changed tests should pass with the default bounded heap and the guarded per-test
 growth threshold. If a test needs a larger per-test growth allowance, document
-the bounded infrastructure cost in the test or track notes and set an explicit
+the bounded infrastructure cost in the test notes and set an explicit
 `memoryLeakBytes` option on the guarded test instead of raising the global
 threshold.
 

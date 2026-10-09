@@ -49,7 +49,6 @@ npm run test:package-tarballs
 
 ## Workflow expectations
 
-- Follow the active Conductor track in `conductor/tracks.md` when contributing to planned work.
 - Write or update focused tests before behavior changes.
 - Prefer small, reviewable pull requests.
 - Reuse shared code from `@signicode/verser-common` before adding package-local helpers.

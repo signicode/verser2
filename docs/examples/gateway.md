@@ -180,5 +180,5 @@ Add these at the application boundary as needed:
 - deployment topology for one or more Hosts. Host federation can share route
   availability across upstream links, but route state is eventually consistent.
 
-Future `verser2` tracks may add gateway helpers, per-request Broker target
+Future `verser2` work may add gateway helpers, per-request Broker target
 authorization, and more advanced reconnect or cluster-state patterns.

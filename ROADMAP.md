@@ -4,8 +4,8 @@ This roadmap lists future implementation work only. Completed Node, Bun, Python
 Guest/Broker, TLS, packaging, and documentation work is described in the README,
 task docs, package READMEs, and codemaps.
 
-Future work is tracked as Conductor tracks before implementation. Roadmap items
-below are not implemented unless a linked track and source code say otherwise.
+Roadmap items below are not implemented unless the source code and current
+documentation say otherwise.
 
 ## Priority 1
 
@@ -16,7 +16,7 @@ gateway. Applications can build gateways on top of Brokers today, but the public
 HTTP listener, auth, policy, observability, and operational behavior are owned by
 the application.
 
-Future gateway-oriented tracks, in priority order:
+Future gateway-oriented work, in priority order:
 
 - P1.1: Per-request Broker target authorization so a Host can decide whether a
   Broker may route to a specific Guest, target ID, or domain.

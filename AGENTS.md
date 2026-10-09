@@ -2,7 +2,7 @@
 
 ## Purpose
 - `verser2` lets applications route HTTP requests to Guest-side Node, Bun, and Python handlers that connect outbound to a Host instead of listening for inbound traffic.
-- Use these notes for basic package integration guidance. For repository implementation work, read [`AGENTS.development.md`](./AGENTS.development.md) and then `conductor/index.md`.
+- Use these notes for basic package integration guidance. For repository implementation work, read [`AGENTS.development.md`](./AGENTS.development.md).
 
 ## Integration model
 - Host accepts outbound Guest and Broker connections and routes requests to advertised Guest routes.
@@ -19,12 +19,12 @@
 - `@signicode/verser2-guest-python` — Python ASGI Guest and async Broker APIs.
 
 ## Usage boundaries
-- Do not describe HTTP/3, browser, Rust, Go, Java, or Python Host behavior as implemented. Python Host is not implemented and is not on the current roadmap. Browser, Rust, Go, and Java guests remain roadmap work unless a future development track changes that.
+- Do not describe HTTP/3, browser, Rust, Go, Java, or Python Host behavior as implemented. Python Host is not implemented and is not on the current roadmap. Browser, Rust, Go, and Java guests remain roadmap work unless future implementation work changes that.
 - Do not imply that `verser2` is a complete public gateway. Applications remain responsible for authentication, authorization, and routing policy.
 - Keep Host/Guest/Broker terminology precise in examples and documentation.
 
 ## Development work
-- For code changes, tests, release packaging, Conductor tracks, and repository commands, follow [`AGENTS.development.md`](./AGENTS.development.md).
+- For code changes, tests, release packaging, and repository commands, follow [`AGENTS.development.md`](./AGENTS.development.md).
 - In PR scenarios, follow the "Pull request delivery" rule in [`AGENTS.development.md`](./AGENTS.development.md): agents must explicitly tell users PRs must be merged manually through the protected main workflow.
 
 ## Repository Map

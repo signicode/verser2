@@ -111,26 +111,19 @@ jobs:
             CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}" 2>/dev/null || echo "")
             PACKAGE_AFFECTING=false
             RELEASE_DOCS=false
-            CONDUCTOR_ONLY=true
             OTHER_CHANGES=false
 
             for file in $CHANGED_FILES; do
               case "$file" in
                 .github/workflows/package-publish.yml | packages/* | scripts/* | test/* | package.json | package-lock.json | tsconfig*.json | biome*)
                   PACKAGE_AFFECTING=true
-                  CONDUCTOR_ONLY=false
                   ;;
                 docs/release-procedure.md | docs/package-publishing.md)
                   RELEASE_DOCS=true
-                  CONDUCTOR_ONLY=false
-                  ;;
-                conductor/*)
                   ;;
                 docs/*)
-                  CONDUCTOR_ONLY=false
                   ;;
                 *)
-                  CONDUCTOR_ONLY=false
                   OTHER_CHANGES=true
                   ;;
               esac
@@ -143,10 +136,6 @@ jobs:
             elif [ "$RELEASE_DOCS" = "true" ]; then
               echo "change_type=release-docs"
               echo "should_validate=true" >> "$GITHUB_OUTPUT"
-              echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
-            elif [ "$CONDUCTOR_ONLY" = "true" ]; then
-              echo "change_type=conductor-only"
-              echo "should_validate=false" >> "$GITHUB_OUTPUT"
               echo "should_publish_sha=false" >> "$GITHUB_OUTPUT"
             elif [ "$OTHER_CHANGES" = "true" ]; then
               echo "change_type=package-affecting"

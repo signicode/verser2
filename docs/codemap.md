@@ -59,4 +59,3 @@ Staging (stage-packages.js)
 - **Package READMEs** — Each workspace package's README.md links to specific docs/ pages. These relative links are rewritten to GitHub blob URLs at staging time.
 - **Scripts** — `scripts/stage-packages.js` reads package READMEs and rewrites relative links to `../../docs/...` into GitHub blob references. `VERSER_PACKAGE_DOCS_REF` env var controls the ref (default: current commit SHA).
 - **Tests** — `test/docs.test.js` and `test/python-guest-documentation.test.js` assert that documentation covers required topics, package mentions, and API names. They verify that docs reference implemented APIs and avoid exposing internal symbols (e.g., `dispatchVerserBunRequest`).
-- **Conductor** — `conductor/tech-stack.md` references the docs structure.
