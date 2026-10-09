@@ -15,7 +15,7 @@ gh pr view <number> --json reviews,comments
 
 Address any required Copilot or human review comments, re-run the narrowest local validation needed for the changed files, and merge through the normal protected PR flow.
 
-When a merged pull request changes package-affecting source, scripts, tests, package metadata, or workflow files, the main-branch workflow validates the package output and publishes deterministic SHA-versioned GitHub Packages previews with the `main-sha` dist-tag. Documentation-only and Conductor-only merges do not publish packages; release-procedure/package-publishing docs can trigger validation without advancing a package channel.
+When a merged pull request changes package-affecting source, scripts, tests, package metadata, or workflow files, the main-branch workflow validates the package output and publishes deterministic SHA-versioned GitHub Packages previews with the `main-sha` dist-tag. Documentation-only merges do not publish packages; release-procedure/package-publishing docs can trigger validation without advancing a package channel.
 
 Scheduled nightly workflow runs publish deterministic nightly versions as GitHub Packages previews with the `nightly` dist-tag. SHA and nightly preview publications never move `latest` or `next`.
 

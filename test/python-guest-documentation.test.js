@@ -38,12 +38,3 @@ test('Python package README documents usage, streaming, and limits', () => {
   assert.match(readme, /FastAPI-compatible/);
   assert.doesNotMatch(readme, /full Python Broker/);
 });
-
-test('Tech stack lists Python Guest as implemented with uv and h2', () => {
-  const techStack = readText('conductor/tech-stack.md');
-
-  assert.match(techStack, /@signicode\/verser2-guest-python/);
-  assert.match(techStack, /Python ASGI Guest/);
-  assert.match(techStack, /uv/);
-  assert.match(techStack, /h2/);
-});

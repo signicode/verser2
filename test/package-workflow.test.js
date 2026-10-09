@@ -53,7 +53,6 @@ test('workflow detects package-affecting changes before validation or preview pu
   assert.match(content, /detect-package-changes:/);
   assert.match(content, /package-affecting/);
   assert.match(content, /release-docs/);
-  assert.match(content, /conductor-only/);
   assert.match(content, /docs-only/);
   assert.match(content, /github\.event\.before/);
   assert.match(content, /workflow_dispatch/);
