@@ -9,6 +9,7 @@ const {
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
 const { trusted } = require('./support/tls-fixtures.cjs');
+const nodeFetchPromise = import('node-fetch');
 
 function createHost(options = {}) {
   return createVerserHost({
@@ -663,6 +664,127 @@ test('Broker Agent cleans up when client aborts during response streaming', asyn
     await withTimeout(host.close('test-complete'), 'host-agent-abort-response-1 close');
   }
 });
+
+test(
+  'node-fetch Agent abort resets remote request after upload while a control request survives',
+  {
+    memoryLeakBytes: 512 * 1024,
+  },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-agent-node-fetch-cancel' });
+    const guest = createGuest({
+      hostUrl,
+      guestId: 'guest-agent-node-fetch-cancel',
+      minWaitingStreams: 2,
+    });
+    let agent;
+    let resolveEntered;
+    let resolveUploadEnded;
+    let resolveCleanup;
+    const entered = new Promise((resolve) => {
+      resolveEntered = resolve;
+    });
+    const uploadEnded = new Promise((resolve) => {
+      resolveUploadEnded = resolve;
+    });
+    const cleaned = new Promise((resolve) => {
+      resolveCleanup = resolve;
+    });
+    let nativeEnteredResolve;
+    let nativeUploadResolve;
+    let nativeCleanupResolve;
+    const nativeEntered = new Promise((resolve) => {
+      nativeEnteredResolve = resolve;
+    });
+    const nativeUploadEnded = new Promise((resolve) => {
+      nativeUploadResolve = resolve;
+    });
+    const nativeCleaned = new Promise((resolve) => {
+      nativeCleanupResolve = resolve;
+    });
+    let controlEnteredResolve;
+    let releaseControl = () => {};
+    let controlResponsePromise;
+    const controlEntered = new Promise((resolve) => {
+      controlEnteredResolve = resolve;
+    });
+    const controlGate = new Promise((resolve) => {
+      releaseControl = resolve;
+    });
+    guest.attach(async (request, response) => {
+      if (request.url === '/cancel' || request.url === '/native') {
+        const native = request.url === '/native';
+        const markEntered = native ? nativeEnteredResolve : resolveEntered;
+        const markUploaded = native ? nativeUploadResolve : resolveUploadEnded;
+        const markCleaned = native ? nativeCleanupResolve : resolveCleanup;
+        markEntered();
+        request.resume();
+        request.once('end', markUploaded);
+        request.once('error', markCleaned);
+        return;
+      }
+      controlEnteredResolve();
+      await controlGate;
+      response.end('control-ok');
+    }, 'agent-node-fetch-cancel.local.test');
+
+    try {
+      await withTimeout(broker.connect(), 'node-fetch cancel Broker connect');
+      await withTimeout(guest.connect(), 'node-fetch cancel Guest connect');
+      await withTimeout(broker.waitForRoute('agent-node-fetch-cancel.local.test'), 'cancel route');
+      agent = broker.createAgent();
+      const { default: nodeFetch } = await nodeFetchPromise;
+      const controller = new AbortController();
+      const cancelled = nodeFetch('http://agent-node-fetch-cancel.local.test/cancel', {
+        method: 'POST',
+        body: 'completed-upload',
+        agent,
+        signal: controller.signal,
+      });
+      const cancellation = assert.rejects(cancelled, (error) => error.name === 'AbortError');
+      await withTimeout(entered, 'remote request entry');
+      await withTimeout(uploadEnded, 'remote upload completion');
+      controlResponsePromise = nodeFetch('http://agent-node-fetch-cancel.local.test/control', {
+        agent,
+      });
+      await withTimeout(controlEntered, 'concurrent control request entry');
+      controller.abort();
+      await cancellation;
+      await withTimeout(cleaned, 'remote handler cleanup');
+      releaseControl();
+      assert.equal(await (await controlResponsePromise).text(), 'control-ok');
+
+      const nativeController = new AbortController();
+      const nativeRequest = http.request('http://agent-node-fetch-cancel.local.test/native', {
+        agent,
+        method: 'POST',
+        signal: nativeController.signal,
+      });
+      const nativeFailure = new Promise((resolve, reject) => {
+        nativeRequest.once('error', resolve);
+        nativeRequest.once('response', () =>
+          reject(new Error('native request unexpectedly responded')),
+        );
+      });
+      nativeRequest.end('native-upload');
+      await withTimeout(nativeEntered, 'native remote request entry');
+      await withTimeout(nativeUploadEnded, 'native remote upload completion');
+      nativeController.abort();
+      assert.equal((await withTimeout(nativeFailure, 'native client abort')).name, 'AbortError');
+      await withTimeout(nativeCleaned, 'native remote handler cleanup');
+    } finally {
+      releaseControl();
+      await controlResponsePromise?.catch(() => {});
+      agent?.destroy();
+      await withTimeout(broker.close('test-complete'), 'node-fetch cancel Broker close');
+      await withTimeout(guest.close('test-complete'), 'node-fetch cancel Guest close');
+      await withTimeout(host.close('test-complete'), 'node-fetch cancel Host close');
+    }
+  },
+);
 
 test('Broker Agent streams large request bodies through leased routing', async () => {
   const host = createHost({ port: 0 });

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import h2.events
 
+from verser2_guest_python import guest as guest_module
 from verser2_guest_python import create_verser_guest
 from verser2_guest_python.protocol import (
     decode_envelope,
@@ -33,7 +34,10 @@ class FakeConn:
         self.events = list(events or [])
         self.acknowledged = []
         self.sent_data = []
+        self.sent_headers = []
+        self.reset_streams = []
         self.window = window
+        self._next_stream_id = 3
 
     def receive_data(self, _data):
         return list(self.events)
@@ -43,6 +47,17 @@ class FakeConn:
 
     def send_data(self, stream_id, data, end_stream=False):
         self.sent_data.append((stream_id, data, end_stream))
+
+    def send_headers(self, stream_id, headers, end_stream=False):
+        self.sent_headers.append((stream_id, headers, end_stream))
+
+    def get_next_available_stream_id(self):
+        stream_id = self._next_stream_id
+        self._next_stream_id += 2
+        return stream_id
+
+    def reset_stream(self, stream_id):
+        self.reset_streams.append(stream_id)
 
     def data_to_send(self):
         return b""
@@ -57,6 +72,43 @@ class FakeWriter:
 
     async def drain(self):
         pass
+
+
+class FeedReader:
+    def __init__(self):
+        self._chunks = asyncio.Queue()
+
+    async def read(self, _size):
+        return await self._chunks.get()
+
+    def feed(self):
+        self._chunks.put_nowait(b"event")
+
+
+class EventBatchConn(FakeConn):
+    def __init__(self, window=65535):
+        super().__init__(window=window)
+        self._event_batches = []
+
+    def receive_data(self, _data):
+        return self._event_batches.pop(0)
+
+    def feed_events(self, *events):
+        self._event_batches.append(list(events))
+
+
+class ObservableWindowConn(EventBatchConn):
+    def __init__(self, window=0, expected_waiters=1):
+        super().__init__(window=window)
+        self.expected_waiters = expected_waiters
+        self.waiter_checks = 0
+        self.waiters_blocked = asyncio.Event()
+
+    def local_flow_control_window(self, _stream_id):
+        self.waiter_checks += 1
+        if self.waiter_checks >= self.expected_waiters:
+            self.waiters_blocked.set()
+        return self.window
 
 
 class AsgiDispatchTest(unittest.TestCase):
@@ -1425,6 +1477,1030 @@ class LeaseStreamResetTest(unittest.TestCase):
             # Prove the app task was cleaned up (finally ran) and did not
             # remain pending until event-loop shutdown.
             await asyncio.wait_for(app_exited.wait(), timeout=5)
+
+        asyncio.run(run())
+
+
+class HttpLeaseCancellationTest(unittest.TestCase):
+    """Barrier-driven coverage for HTTP lease EOF/disconnect supervision."""
+
+    @staticmethod
+    def _request(request_id: str = "cancel-http") -> bytes:
+        return encode_envelope(
+            "request",
+            {
+                "requestId": request_id,
+                "sourceId": "broker-unit",
+                "targetId": "cancel-http-guest",
+                "method": "GET",
+                "path": "/cancel",
+                "headers": {},
+            },
+        )
+
+    @staticmethod
+    async def _dispatch(app: Any, stream_id: int = 71) -> tuple[Any, FakeConn, asyncio.Queue, asyncio.Task]:
+        guest = create_verser_guest(
+            host_url="https://127.0.0.1:1", guest_id="cancel-http-guest", app=app
+        )
+        conn = FakeConn()
+        events: asyncio.Queue = asyncio.Queue()
+        guest._conn = conn
+        guest._events[stream_id] = events
+        task = asyncio.create_task(guest._dispatch_leased_request_stream(stream_id))
+        await events.put(
+            h2.events.DataReceived(
+                stream_id=stream_id,
+                data=HttpLeaseCancellationTest._request(),
+                flow_controlled_length=len(HttpLeaseCancellationTest._request()),
+            )
+        )
+        return guest, conn, events, task
+
+    async def _finish_task(self, task: asyncio.Task) -> None:
+        await asyncio.wait_for(task, timeout=2)
+
+    def test_post_upload_eof_reset_notifies_receive_and_finishes_app_before_dispatch(self) -> None:
+        async def run_case(streaming: bool) -> None:
+            app_ready = asyncio.Event()
+            eof_received = asyncio.Event()
+            cleanup_finished = asyncio.Event()
+            disconnect_events: list[dict[str, Any]] = []
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                try:
+                    request_event = await receive()
+                    self.assertEqual(request_event["type"], "http.request")
+                    self.assertFalse(request_event["more_body"])
+                    eof_received.set()
+                    if streaming:
+                        await send(
+                            {"type": "http.response.start", "status": 200, "headers": []}
+                        )
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": b"partial",
+                                "more_body": True,
+                            }
+                        )
+                    app_ready.set()
+                    disconnect_events.append(await receive())
+                finally:
+                    cleanup_finished.set()
+
+            guest, conn, events, dispatch = await self._dispatch(app, 71 if not streaming else 72)
+            try:
+                await events.put(h2.events.StreamEnded(stream_id=71 if not streaming else 72))
+                await asyncio.wait_for(eof_received.wait(), timeout=2)
+                await asyncio.wait_for(app_ready.wait(), timeout=2)
+                # app_ready is set only after EOF has become an ASGI request event.
+                await events.put(
+                    h2.events.StreamReset(stream_id=71 if not streaming else 72, error_code=8)
+                )
+                await self._finish_task(dispatch)
+                self.assertEqual(disconnect_events, [{"type": "http.disconnect"}])
+                self.assertTrue(cleanup_finished.is_set())
+                self.assertEqual(conn.reset_streams, [])
+                if streaming:
+                    self.assertTrue(any(data == b"partial" for _, data, _ in conn.sent_data))
+                    self.assertFalse(any(ended for _, _, ended in conn.sent_data))
+            finally:
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        async def run() -> None:
+            with patch.object(
+                guest_module, "_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS", 0.01, create=True
+            ):
+                await run_case(False)
+                await run_case(True)
+
+        asyncio.run(run())
+
+    def test_unobserved_disconnect_cancels_app_after_private_grace(self) -> None:
+        async def run() -> None:
+            unrelated_work = asyncio.Event()
+            app_waiting = asyncio.Event()
+            cancelled = asyncio.Event()
+            received_events: list[dict[str, Any]] = []
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                try:
+                    received_events.append(await receive())
+                    app_waiting.set()
+                    await unrelated_work.wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+            with patch.object(
+                guest_module, "_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS", 0.01, create=True
+            ):
+                guest, _conn, events, dispatch = await self._dispatch(app, 73)
+                try:
+                    await events.put(h2.events.StreamEnded(stream_id=73))
+                    await asyncio.wait_for(app_waiting.wait(), timeout=2)
+                    await events.put(h2.events.StreamReset(stream_id=73, error_code=8))
+                    await self._finish_task(dispatch)
+                    self.assertTrue(cancelled.is_set())
+                    self.assertEqual(received_events[0]["type"], "http.request")
+                finally:
+                    if not dispatch.done():
+                        dispatch.cancel()
+                        await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_observed_disconnect_cleanup_is_not_cancelled_after_grace_expires(self) -> None:
+        async def run() -> None:
+            eof_received = asyncio.Event()
+            cleanup_started = asyncio.Event()
+            release_cleanup = asyncio.Event()
+            cleanup_cancelled = asyncio.Event()
+            cleanup_continued_past_grace = asyncio.Event()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                try:
+                    await receive()
+                    eof_received.set()
+                    await receive()
+                finally:
+                    cleanup_started.set()
+                    try:
+                        await release_cleanup.wait()
+                    except asyncio.CancelledError:
+                        cleanup_cancelled.set()
+                        raise
+
+            with patch.object(
+                guest_module, "_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS", 0.001, create=True
+            ):
+                guest, _conn, events, dispatch = await self._dispatch(app, 74)
+                loop = asyncio.get_running_loop()
+                grace_elapsed = asyncio.Event()
+                timer = loop.call_later(0.02, grace_elapsed.set)
+                try:
+                    await events.put(h2.events.StreamEnded(stream_id=74))
+                    await asyncio.wait_for(eof_received.wait(), timeout=2)
+                    await events.put(h2.events.StreamReset(stream_id=74, error_code=8))
+                    await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+                    await asyncio.wait_for(grace_elapsed.wait(), timeout=2)
+                    cleanup_continued_past_grace.set()
+                    self.assertFalse(cleanup_cancelled.is_set())
+                    release_cleanup.set()
+                    await self._finish_task(dispatch)
+                    self.assertTrue(cleanup_continued_past_grace.is_set())
+                    self.assertFalse(cleanup_cancelled.is_set())
+                finally:
+                    timer.cancel()
+                    release_cleanup.set()
+                    if not dispatch.done():
+                        dispatch.cancel()
+                        await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_connection_failure_after_upload_eof_awaits_cleanup_then_reraises_original(self) -> None:
+        async def run() -> None:
+            eof_received = asyncio.Event()
+            cleanup_started = asyncio.Event()
+            release_cleanup = asyncio.Event()
+            original = RuntimeError("post-EOF connection failure")
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                try:
+                    await receive()
+                    eof_received.set()
+                    await receive()
+                finally:
+                    cleanup_started.set()
+                    await release_cleanup.wait()
+
+            guest, _conn, events, dispatch = await self._dispatch(app, 75)
+            try:
+                await events.put(h2.events.StreamEnded(stream_id=75))
+                await asyncio.wait_for(eof_received.wait(), timeout=2)
+                await events.put(original)
+                await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+                self.assertFalse(dispatch.done())
+                release_cleanup.set()
+                with self.assertRaises(RuntimeError) as caught:
+                    await asyncio.wait_for(dispatch, timeout=2)
+                self.assertIs(caught.exception, original)
+            finally:
+                release_cleanup.set()
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_normal_response_then_future_receive_is_disconnect_without_transport_abort(self) -> None:
+        async def run() -> None:
+            received: list[dict[str, Any]] = []
+            response_complete = asyncio.Event()
+            app_done = asyncio.Event()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                received.append(await receive())
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+                response_complete.set()
+                received.append(await receive())
+                app_done.set()
+
+            guest, conn, events, dispatch = await self._dispatch(app, 76)
+            try:
+                await events.put(h2.events.StreamEnded(stream_id=76))
+                await asyncio.wait_for(response_complete.wait(), timeout=2)
+                await asyncio.wait_for(app_done.wait(), timeout=2)
+                await self._finish_task(dispatch)
+                self.assertEqual(received[-1], {"type": "http.disconnect"})
+                self.assertEqual(conn.reset_streams, [])
+                self.assertTrue(any(item[2] for item in conn.sent_data))
+            finally:
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_upload_eof_does_not_disconnect_while_response_is_still_pending(self) -> None:
+        async def run() -> None:
+            eof_received = asyncio.Event()
+            waiting_for_response = asyncio.Event()
+            allow_response = asyncio.Event()
+            app_done = asyncio.Event()
+            final_body_sent = asyncio.Event()
+            receive_after_response = asyncio.Event()
+            received: list[dict[str, Any]] = []
+            body_send_errors: list[BaseException] = []
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                received.append(await receive())
+                eof_received.set()
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                pending_receive = asyncio.create_task(receive())
+                waiting_for_response.set()
+                await allow_response.wait()
+                try:
+                    await send({"type": "http.response.body", "body": b"done", "more_body": False})
+                except BaseException as error:
+                    body_send_errors.append(error)
+                    raise
+                finally:
+                    final_body_sent.set()
+                received.append(await pending_receive)
+                receive_after_response.set()
+                app_done.set()
+
+            guest, conn, events, dispatch = await self._dispatch(app, 77)
+            try:
+                await events.put(h2.events.StreamEnded(stream_id=77))
+                await asyncio.wait_for(waiting_for_response.wait(), timeout=2)
+                self.assertTrue(eof_received.is_set())
+                self.assertFalse(dispatch.done())
+                self.assertNotIn({"type": "http.disconnect"}, received)
+                allow_response.set()
+                await asyncio.wait_for(final_body_sent.wait(), timeout=2)
+                self.assertEqual(body_send_errors, [])
+                await asyncio.wait_for(receive_after_response.wait(), timeout=2)
+                await asyncio.wait_for(app_done.wait(), timeout=2)
+                await self._finish_task(dispatch)
+                self.assertEqual(received[-1], {"type": "http.disconnect"})
+                self.assertEqual(conn.reset_streams, [])
+            finally:
+                allow_response.set()
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_observed_disconnect_wins_timeout_race(self) -> None:
+        async def run() -> None:
+            eof_received = asyncio.Event()
+            disconnect_received = asyncio.Event()
+            cancelled = asyncio.Event()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                try:
+                    await receive()
+                    eof_received.set()
+                    event = await receive()
+                    self.assertEqual(event, {"type": "http.disconnect"})
+                    disconnect_received.set()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+            with patch.object(
+                guest_module, "_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS", 0.01, create=True
+            ):
+                guest, _conn, events, dispatch = await self._dispatch(app, 78)
+                try:
+                    await events.put(h2.events.StreamEnded(stream_id=78))
+                    await asyncio.wait_for(eof_received.wait(), timeout=2)
+                    # Queue the terminal transport signal only after receive is waiting;
+                    # the app's notification is the competing observation outcome.
+                    await events.put(h2.events.StreamReset(stream_id=78, error_code=8))
+                    await asyncio.wait_for(disconnect_received.wait(), timeout=2)
+                    await self._finish_task(dispatch)
+                    self.assertFalse(cancelled.is_set())
+                finally:
+                    if not dispatch.done():
+                        dispatch.cancel()
+                        await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_application_can_finish_before_eof_and_remaining_upload_is_drained_once(self) -> None:
+        async def run() -> tuple[FakeConn, bytes]:
+            app_finished = asyncio.Event()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"early", "more_body": False})
+                app_finished.set()
+
+            guest, conn, events, dispatch = await self._dispatch(app, 79)
+            envelope = self._request()
+            try:
+                await asyncio.wait_for(app_finished.wait(), timeout=2)
+                await events.put(
+                    h2.events.DataReceived(
+                        stream_id=79, data=b"discard-one", flow_controlled_length=11
+                    )
+                )
+                await events.put(h2.events.DataReceived(stream_id=79, data=b"two", flow_controlled_length=3))
+                await events.put(h2.events.StreamEnded(stream_id=79))
+                await self._finish_task(dispatch)
+                return conn, envelope
+            finally:
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        conn, envelope = asyncio.run(run())
+        self.assertEqual(
+            sorted(amount for stream_id, amount in conn.acknowledged if stream_id == 79),
+            sorted([len(envelope), 11, 3]),
+        )
+        self.assertEqual(
+            sum(amount for _stream_id, amount in conn.acknowledged), len(envelope) + 14
+        )
+        self.assertTrue(any(ended for _stream, _data, ended in conn.sent_data))
+
+    def test_early_response_reclaims_prequeued_body_credit_before_upload_eof(self) -> None:
+        async def run() -> tuple[FakeConn, int, list[int]]:
+            response_finished = asyncio.Event()
+            expected_credit: list[int] = []
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send(
+                    {"type": "http.response.body", "body": b"early", "more_body": False}
+                )
+                response_finished.set()
+
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="prequeued-early-response", app=app
+            )
+            conn = FakeConn()
+            events: asyncio.Queue = asyncio.Queue()
+            guest._conn = conn
+            guest._events[82] = events
+            envelope = self._request("prequeued-early-response")
+            first_credit = len(envelope) + 3
+            second_credit = 7
+            expected_credit.extend([first_credit, second_credit])
+            original_acknowledge = guest._acknowledge_received_data
+            all_credit_returned = asyncio.Event()
+
+            async def observe_acknowledgement(stream_id: int, amount: int) -> None:
+                await original_acknowledge(stream_id, amount)
+                if sum(value for _sid, value in conn.acknowledged) >= sum(expected_credit):
+                    all_credit_returned.set()
+
+            guest._acknowledge_received_data = observe_acknowledgement
+            events.put_nowait(
+                h2.events.DataReceived(
+                    stream_id=82,
+                    data=envelope + b"one",
+                    flow_controlled_length=first_credit,
+                )
+            )
+            events.put_nowait(
+                h2.events.DataReceived(
+                    stream_id=82,
+                    data=b"payload",
+                    flow_controlled_length=second_credit,
+                )
+            )
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(82))
+            try:
+                await asyncio.wait_for(response_finished.wait(), timeout=2)
+                await asyncio.wait_for(all_credit_returned.wait(), timeout=2)
+                self.assertFalse(task.done(), "the dispatcher must keep monitoring for upload EOF")
+                self.assertEqual(
+                    sorted(amount for _sid, amount in conn.acknowledged),
+                    sorted(expected_credit),
+                )
+                await events.put(h2.events.StreamEnded(stream_id=82))
+                await self._finish_task(task)
+                return conn, sum(expected_credit), [amount for _sid, amount in conn.acknowledged]
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        conn, expected_total, acknowledged = asyncio.run(run())
+        self.assertEqual(sum(acknowledged), expected_total)
+        self.assertTrue(all(stream_id == 82 for stream_id, _amount in conn.acknowledged))
+
+    def test_receive_and_terminal_credit_cleanup_join_one_inflight_ack(self) -> None:
+        async def run() -> tuple[FakeConn, list[int]]:
+            acknowledgement_entered = asyncio.Event()
+            release_acknowledgement = asyncio.Event()
+            receive_returned = asyncio.Event()
+            app_events: list[dict[str, Any]] = []
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                app_events.append(await receive())
+                receive_returned.set()
+
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="overlap-credit-ack", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            events: asyncio.Queue = asyncio.Queue()
+            guest._events[84] = events
+            original_acknowledge = guest._acknowledge_received_data
+            credit = len(self._request("overlap-credit-ack")) + 4
+
+            async def gated_acknowledgement(stream_id: int, amount: int) -> None:
+                await original_acknowledge(stream_id, amount)
+                acknowledgement_entered.set()
+                await release_acknowledgement.wait()
+
+            guest._acknowledge_received_data = gated_acknowledgement
+            await events.put(
+                h2.events.DataReceived(
+                    stream_id=84,
+                    data=self._request("overlap-credit-ack") + b"body",
+                    flow_controlled_length=credit,
+                )
+            )
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(84))
+            try:
+                await asyncio.wait_for(acknowledgement_entered.wait(), timeout=2)
+                # The protocol acknowledgement has happened, but its flush is
+                # held. Reset makes the supervisor concurrently claim cleanup.
+                self.assertEqual(conn.acknowledged, [(84, credit)])
+                await events.put(h2.events.StreamReset(stream_id=84, error_code=8))
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+                release_acknowledgement.set()
+                await self._finish_task(task)
+                self.assertTrue(receive_returned.is_set())
+                self.assertEqual([event["type"] for event in app_events], ["http.disconnect"])
+                self.assertEqual(conn.acknowledged, [(84, credit)])
+                leaked_ack_tasks = [
+                    pending
+                    for pending in asyncio.all_tasks()
+                    if pending.get_name().startswith("verser-http-credit-")
+                    and not pending.done()
+                ]
+                self.assertEqual(leaked_ack_tasks, [])
+                return conn, [amount for _stream_id, amount in conn.acknowledged]
+            finally:
+                release_acknowledgement.set()
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        conn, acknowledged = asyncio.run(run())
+        self.assertEqual(acknowledged, [len(self._request("overlap-credit-ack")) + 4])
+        self.assertEqual(len(conn.acknowledged), 1)
+
+    def test_administrative_cancel_joins_shared_ack_without_dangling_task(self) -> None:
+        async def run() -> tuple[FakeConn, int]:
+            acknowledgement_entered = asyncio.Event()
+            release_acknowledgement = asyncio.Event()
+            app_cancelled = asyncio.Event()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                try:
+                    await receive()
+                    await receive()
+                except asyncio.CancelledError:
+                    app_cancelled.set()
+                    raise
+
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="admin-credit-ack", app=app
+            )
+            conn = FakeConn()
+            guest._conn = conn
+            events: asyncio.Queue = asyncio.Queue()
+            guest._events[85] = events
+            original_acknowledge = guest._acknowledge_received_data
+            credit = len(self._request("admin-credit-ack")) + 2
+
+            async def gated_acknowledgement(stream_id: int, amount: int) -> None:
+                await original_acknowledge(stream_id, amount)
+                acknowledgement_entered.set()
+                await release_acknowledgement.wait()
+
+            guest._acknowledge_received_data = gated_acknowledgement
+            await events.put(
+                h2.events.DataReceived(
+                    stream_id=85,
+                    data=self._request("admin-credit-ack") + b"x",
+                    flow_controlled_length=credit,
+                )
+            )
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(85))
+            try:
+                await asyncio.wait_for(acknowledgement_entered.wait(), timeout=2)
+                self.assertEqual(conn.acknowledged, [(85, credit)])
+                task.cancel()
+                await asyncio.wait_for(app_cancelled.wait(), timeout=2)
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+                release_acknowledgement.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=2)
+                leaked_ack_tasks = [
+                    pending
+                    for pending in asyncio.all_tasks()
+                    if pending.get_name().startswith("verser-http-credit-")
+                    and not pending.done()
+                ]
+                self.assertEqual(leaked_ack_tasks, [])
+                self.assertEqual(conn.acknowledged, [(85, credit)])
+                return conn, credit
+            finally:
+                release_acknowledgement.set()
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        conn, credit = asyncio.run(run())
+        self.assertEqual(conn.acknowledged, [(85, credit)])
+
+    def test_terminal_send_failure_reclaims_fetched_and_raw_native_event_credit_once(self) -> None:
+        async def run() -> tuple[FakeConn, list[int]]:
+            fetched_event = asyncio.Event()
+
+            class ObservedEventQueue(asyncio.Queue):
+                async def get(self) -> Any:
+                    event = await super().get()
+                    if isinstance(event, h2.events.DataReceived) and event.data == b"fetched":
+                        fetched_event.set()
+                    return event
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await fetched_event.wait()
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"terminal-send-failure",
+                        "more_body": False,
+                    }
+                )
+
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="terminal-send-credit", app=app
+            )
+            conn = FakeConn()
+            original_send_data = conn.send_data
+
+            def reset_on_response_body(
+                stream_id: int, data: bytes, end_stream: bool = False
+            ) -> None:
+                if data == b"terminal-send-failure":
+                    raise guest_module._HTTP2StreamResetError("test terminal write reset")
+                original_send_data(stream_id, data, end_stream)
+
+            conn.send_data = reset_on_response_body
+            events: asyncio.Queue = ObservedEventQueue()
+            guest._conn = conn
+            guest._events[83] = events
+            envelope = self._request("terminal-send-credit")
+            expected_credit = [len(envelope) + 3, 7, 5]
+            events.put_nowait(
+                h2.events.DataReceived(
+                    stream_id=83,
+                    data=envelope + b"one",
+                    flow_controlled_length=expected_credit[0],
+                )
+            )
+            events.put_nowait(
+                h2.events.DataReceived(
+                    stream_id=83, data=b"fetched", flow_controlled_length=7
+                )
+            )
+            # These are still native-queue-owned when the response write fails.
+            events.put_nowait(
+                h2.events.DataReceived(stream_id=83, data=b"raw", flow_controlled_length=5)
+            )
+            events.put_nowait(h2.events.StreamEnded(stream_id=83))
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(83))
+            try:
+                await self._finish_task(task)
+                return conn, expected_credit
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        conn, expected_credit = asyncio.run(run())
+        self.assertEqual(
+            sorted(amount for stream_id, amount in conn.acknowledged if stream_id == 83),
+            sorted(expected_credit),
+        )
+        self.assertEqual(
+            sum(amount for stream_id, amount in conn.acknowledged if stream_id == 83),
+            sum(expected_credit),
+        )
+
+    def test_reset_recovers_queued_body_and_metadata_credit_exactly_once(self) -> None:
+        async def run() -> tuple[FakeConn, bytes]:
+            unrelated_work = asyncio.Event()
+            app_started = asyncio.Event()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                app_started.set()
+                await unrelated_work.wait()
+
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="cancel-http-guest", app=app
+            )
+            conn = FakeConn()
+            events: asyncio.Queue = asyncio.Queue()
+            guest._conn = conn
+            guest._events[80] = events
+            envelope = self._request("credit-on-reset")
+            task = asyncio.create_task(guest._dispatch_leased_request_stream(80))
+            try:
+                await events.put(
+                    h2.events.DataReceived(
+                        stream_id=80,
+                        data=envelope + b"one",
+                        flow_controlled_length=len(envelope) + 3,
+                    )
+                )
+                await asyncio.wait_for(app_started.wait(), timeout=2)
+                await events.put(
+                    h2.events.DataReceived(
+                        stream_id=80, data=b"two", flow_controlled_length=3
+                    )
+                )
+                await events.put(h2.events.StreamEnded(stream_id=80))
+                await events.put(h2.events.StreamReset(stream_id=80, error_code=8))
+                await self._finish_task(task)
+                return conn, envelope
+            finally:
+                unrelated_work.set()
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        conn, envelope = asyncio.run(run())
+        self.assertEqual(sum(amount for _stream_id, amount in conn.acknowledged), len(envelope) + 6)
+        self.assertTrue(all(stream_id == 80 for stream_id, _amount in conn.acknowledged))
+        self.assertEqual(
+            [amount for _stream_id, amount in conn.acknowledged].count(len(envelope) + 3), 1
+        )
+        self.assertEqual([amount for _stream_id, amount in conn.acknowledged].count(3), 1)
+
+    def test_http_stream_ended_preserves_blocked_response_write_until_window_update(self) -> None:
+        async def run() -> tuple[ObservableWindowConn, int]:
+            app_started = asyncio.Event()
+            conn = ObservableWindowConn(window=65535, expected_waiters=2)
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                await receive()
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                app_started.set()
+                conn.window = 0
+                await send({"type": "http.response.body", "body": b"windowed", "more_body": False})
+
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="window-after-eof", app=app
+            )
+            reader = FeedReader()
+            guest._conn = conn
+            guest._reader = reader
+            guest._events[81] = asyncio.Queue()
+            # The test enters through the HTTP lease path; the stream id is registered
+            # before the reader processes its upload EOF.
+            guest._http_lease_stream_ids.add(81)
+            dispatch = asyncio.create_task(guest._dispatch_leased_request_stream(81))
+            read_loop = asyncio.create_task(guest._read_loop())
+            try:
+                await guest._events[81].put(
+                    h2.events.DataReceived(
+                        stream_id=81,
+                        data=self._request("window-after-eof") + b"request-body",
+                        flow_controlled_length=len(self._request("window-after-eof"))
+                        + len(b"request-body"),
+                    )
+                )
+                await asyncio.wait_for(app_started.wait(), timeout=2)
+                await asyncio.wait_for(conn.waiters_blocked.wait(), timeout=2)
+                self.assertTrue(guest._window_waiters.get(81))
+                conn.feed_events(
+                    h2.events.StreamEnded(stream_id=81),
+                    h2.events.WindowUpdated(stream_id=0, delta=8),
+                )
+                conn.window = 8
+                reader.feed()
+                await self._finish_task(dispatch)
+                return conn, 81
+            finally:
+                if not read_loop.done():
+                    read_loop.cancel()
+                    await asyncio.gather(read_loop, return_exceptions=True)
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        conn, stream_id = asyncio.run(run())
+        self.assertTrue(any(data == b"windowed" for sid, data, _end in conn.sent_data if sid == stream_id))
+
+    def test_reset_fails_only_the_affected_window_writer_with_oserror(self) -> None:
+        async def run() -> tuple[ObservableWindowConn, asyncio.Task, asyncio.Task]:
+            guest = create_verser_guest(
+                host_url="https://127.0.0.1:1", guest_id="isolated-window-reset"
+            )
+            conn = ObservableWindowConn(window=0, expected_waiters=2)
+            reader = FeedReader()
+            guest._conn = conn
+            guest._reader = reader
+            guest._http_lease_stream_ids.add(91)
+            affected = asyncio.create_task(guest._send_data(91, b"affected", False))
+            survivor = asyncio.create_task(guest._send_data(92, b"survives", False))
+            read_loop = asyncio.create_task(guest._read_loop())
+            try:
+                await asyncio.wait_for(conn.waiters_blocked.wait(), timeout=2)
+                conn.feed_events(h2.events.StreamReset(stream_id=91, error_code=8))
+                reader.feed()
+                with self.assertRaises(OSError):
+                    await asyncio.wait_for(affected, timeout=2)
+                self.assertFalse(survivor.done())
+                conn.window = 16
+                conn.feed_events(h2.events.WindowUpdated(stream_id=92, delta=16))
+                reader.feed()
+                await asyncio.wait_for(survivor, timeout=2)
+                return conn, affected, survivor
+            finally:
+                if not read_loop.done():
+                    read_loop.cancel()
+                    await asyncio.gather(read_loop, return_exceptions=True)
+                for task in (affected, survivor):
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_completed_and_reset_sends_preserve_closed_and_validation_errors(self) -> None:
+        async def run() -> tuple[list[type[BaseException]], FakeConn]:
+            errors: list[type[BaseException]] = []
+            response_done = asyncio.Event()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                await receive()
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"done", "more_body": False})
+                response_done.set()
+                for message in (
+                    {"type": "not-an-asgi-message"},
+                    {"type": "http.response.body", "body": b"late", "more_body": False},
+                ):
+                    try:
+                        await send(message)
+                    except BaseException as error:
+                        errors.append(type(error))
+
+            guest, conn, events, dispatch = await self._dispatch(app, 93)
+            try:
+                await events.put(h2.events.StreamEnded(stream_id=93))
+                await asyncio.wait_for(response_done.wait(), timeout=2)
+                await self._finish_task(dispatch)
+                return errors, conn
+            finally:
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        errors, _conn = asyncio.run(run())
+        self.assertTrue(errors)
+        self.assertTrue(issubclass(errors[0], ValueError))
+        self.assertTrue(issubclass(errors[1], ConnectionError))
+
+    def test_send_after_transport_reset_raises_connection_error(self) -> None:
+        async def run() -> None:
+            request_received = asyncio.Event()
+            send_failed = asyncio.Event()
+            observed: list[dict[str, Any]] = []
+            errors: list[BaseException] = []
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                observed.append(await receive())
+                request_received.set()
+                observed.append(await receive())
+                try:
+                    await send({"type": "http.response.start", "status": 200, "headers": []})
+                except ConnectionError as error:
+                    errors.append(error)
+                finally:
+                    send_failed.set()
+
+            guest, _conn, events, dispatch = await self._dispatch(app, 95)
+            try:
+                await events.put(h2.events.StreamEnded(stream_id=95))
+                await asyncio.wait_for(request_received.wait(), timeout=2)
+                await events.put(h2.events.StreamReset(stream_id=95, error_code=8))
+                await asyncio.wait_for(send_failed.wait(), timeout=2)
+                await self._finish_task(dispatch)
+                self.assertEqual(observed[-1], {"type": "http.disconnect"})
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], OSError)
+            finally:
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_supervisor_cancellation_does_not_recancel_async_finally_or_leak_tasks(self) -> None:
+        async def run() -> None:
+            app_waiting = asyncio.Event()
+            cleanup_started = asyncio.Event()
+            release_cleanup = asyncio.Event()
+            cancellations = 0
+            cleanup_interrupted = False
+            baseline = asyncio.all_tasks()
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                nonlocal cancellations, cleanup_interrupted
+                try:
+                    await receive()
+                    app_waiting.set()
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancellations += 1
+                    raise
+                finally:
+                    cleanup_started.set()
+                    try:
+                        await release_cleanup.wait()
+                    except asyncio.CancelledError:
+                        cleanup_interrupted = True
+                        raise
+
+            guest, _conn, events, dispatch = await self._dispatch(app, 94)
+            try:
+                await events.put(h2.events.StreamEnded(stream_id=94))
+                await asyncio.wait_for(app_waiting.wait(), timeout=2)
+                dispatch.cancel()
+                await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+                self.assertFalse(dispatch.done())
+                self.assertEqual(cancellations, 1)
+                release_cleanup.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(dispatch, timeout=2)
+                await asyncio.sleep(0)
+                leaked = [
+                    task
+                    for task in asyncio.all_tasks()
+                    if task not in baseline and task is not asyncio.current_task() and not task.done()
+                ]
+                self.assertEqual(leaked, [])
+                self.assertFalse(cleanup_interrupted)
+                self.assertEqual(cancellations, 1)
+            finally:
+                release_cleanup.set()
+                if not dispatch.done():
+                    dispatch.cancel()
+                    await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_fallback_cancel_then_supervisor_cancel_joins_finally_once(self) -> None:
+        async def run() -> None:
+            app_waiting = asyncio.Event()
+            cleanup_started = asyncio.Event()
+            release_cleanup = asyncio.Event()
+            cancellations = 0
+            cleanup_interrupted = False
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                nonlocal cancellations, cleanup_interrupted
+                try:
+                    await receive()
+                    app_waiting.set()
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancellations += 1
+                    raise
+                finally:
+                    cleanup_started.set()
+                    try:
+                        await release_cleanup.wait()
+                    except asyncio.CancelledError:
+                        cleanup_interrupted = True
+                        raise
+
+            with patch.object(
+                guest_module, "_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS", 0.01, create=True
+            ):
+                guest, _conn, events, dispatch = await self._dispatch(app, 97)
+                try:
+                    await events.put(h2.events.StreamEnded(stream_id=97))
+                    await asyncio.wait_for(app_waiting.wait(), timeout=2)
+                    await events.put(h2.events.StreamReset(stream_id=97, error_code=8))
+                    await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+                    self.assertEqual(cancellations, 1)
+
+                    dispatch.cancel()
+                    await asyncio.sleep(0)
+                    self.assertFalse(dispatch.done())
+                    self.assertEqual(cancellations, 1)
+                    self.assertFalse(cleanup_interrupted)
+
+                    release_cleanup.set()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await asyncio.wait_for(dispatch, timeout=2)
+                    self.assertEqual(cancellations, 1)
+                    self.assertFalse(cleanup_interrupted)
+                finally:
+                    release_cleanup.set()
+                    if not dispatch.done():
+                        dispatch.cancel()
+                        await asyncio.gather(dispatch, return_exceptions=True)
+
+        asyncio.run(run())
+
+    def test_supervisor_cancellation_during_fallback_join_does_not_cancel_app_twice(self) -> None:
+        async def run() -> None:
+            app_waiting = asyncio.Event()
+            cleanup_started = asyncio.Event()
+            release_cleanup = asyncio.Event()
+            cancellations = 0
+            cleanup_interrupted = False
+
+            async def app(scope: Any, receive: Any, send: Any) -> None:
+                nonlocal cancellations, cleanup_interrupted
+                try:
+                    await receive()
+                    app_waiting.set()
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancellations += 1
+                    raise
+                finally:
+                    cleanup_started.set()
+                    try:
+                        await release_cleanup.wait()
+                    except asyncio.CancelledError:
+                        cleanup_interrupted = True
+                        raise
+
+            with patch.object(
+                guest_module, "_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS", 0.01, create=True
+            ):
+                guest, _conn, events, dispatch = await self._dispatch(app, 96)
+                try:
+                    await events.put(h2.events.StreamEnded(stream_id=96))
+                    await asyncio.wait_for(app_waiting.wait(), timeout=2)
+                    await events.put(h2.events.StreamReset(stream_id=96, error_code=8))
+                    await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+                    self.assertEqual(cancellations, 1)
+
+                    dispatch.cancel()
+                    await asyncio.sleep(0)
+                    self.assertFalse(dispatch.done())
+                    self.assertEqual(cancellations, 1)
+                    self.assertFalse(cleanup_interrupted)
+
+                    release_cleanup.set()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await asyncio.wait_for(dispatch, timeout=2)
+                    self.assertEqual(cancellations, 1)
+                    self.assertFalse(cleanup_interrupted)
+                finally:
+                    release_cleanup.set()
+                    if not dispatch.done():
+                        dispatch.cancel()
+                        await asyncio.gather(dispatch, return_exceptions=True)
 
         asyncio.run(run())
 

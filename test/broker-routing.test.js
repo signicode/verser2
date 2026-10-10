@@ -51,6 +51,43 @@ function once(emitter, eventName) {
   });
 }
 
+function waitForClose(emitter) {
+  if (emitter.closed) return Promise.resolve();
+  return new Promise((resolve) => emitter.once('close', resolve));
+}
+
+function observeBrokerRequestStreams(broker) {
+  const session = broker.session;
+  const request = session.request.bind(session);
+  const streams = [];
+  session.request = (headers, ...options) => {
+    const stream = request(headers, ...options);
+    if (headers[':path'] === '/verser/request') streams.push(stream);
+    return stream;
+  };
+  return {
+    streams,
+    restore() {
+      session.request = request;
+    },
+  };
+}
+
+function trackAbortListeners(signal) {
+  const listeners = new Set();
+  const add = signal.addEventListener;
+  const remove = signal.removeEventListener;
+  signal.addEventListener = function (type, listener, options) {
+    if (type === 'abort') listeners.add(listener);
+    return add.call(this, type, listener, options);
+  };
+  signal.removeEventListener = function (type, listener, options) {
+    if (type === 'abort') listeners.delete(listener);
+    return remove.call(this, type, listener, options);
+  };
+  return () => listeners.size;
+}
+
 async function connectRawClient(port) {
   const session = http2.connect(`https://127.0.0.1:${port}`, { ca: trusted.certificate });
   await once(session, 'connect');
@@ -259,6 +296,411 @@ test('Broker request rejects when a Readable upload body errors', async () => {
     await host.close('test-complete');
   }
 });
+
+test(
+  'Broker cancellation closes only its stream while an already-active sibling survives',
+  { timeout: 7000 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    let broker;
+    let guest;
+    let enteredResolve;
+    let cleanupResolve;
+    let siblingEnteredResolve;
+    let releaseSiblingResolve;
+    let remoteCloseCount = 0;
+    let sibling;
+    const entered = new Promise((resolve) => {
+      enteredResolve = resolve;
+    });
+    const cleaned = new Promise((resolve) => {
+      cleanupResolve = resolve;
+    });
+    const siblingEntered = new Promise((resolve) => {
+      siblingEnteredResolve = resolve;
+    });
+    const releaseSibling = new Promise((resolve) => {
+      releaseSiblingResolve = resolve;
+    });
+    let captured;
+
+    try {
+      broker = createBroker({ hostUrl, brokerId: 'broker-cancel-isolation' });
+      guest = createGuest({
+        hostUrl,
+        guestId: 'guest-cancel-isolation',
+        minWaitingStreams: 2,
+      });
+      guest.attach((request, response) => {
+        if (request.url === '/cancel') {
+          enteredResolve();
+          response.on('close', () => {
+            remoteCloseCount += 1;
+            cleanupResolve();
+          });
+          return;
+        }
+        siblingEnteredResolve();
+        releaseSibling.then(() => response.end('unrelated request survived'));
+      }, 'cancel-isolation.local.test');
+      await broker.connect();
+      await guest.connect();
+      await broker.waitForRoute('cancel-isolation.local.test');
+
+      captured = observeBrokerRequestStreams(broker);
+      sibling = broker.request({
+        targetId: 'guest-cancel-isolation',
+        method: 'GET',
+        path: '/control',
+      });
+      await siblingEntered;
+
+      const controller = new AbortController();
+      const listenerCount = trackAbortListeners(controller.signal);
+      const pending = broker.request({
+        targetId: 'guest-cancel-isolation',
+        method: 'GET',
+        path: '/cancel',
+        signal: controller.signal,
+      });
+      const cancellation = assert.rejects(pending, (error) => {
+        assert.equal(error.name, 'AbortError');
+        assert.equal(error.code, 'ABORT_ERR');
+        assert.equal(error.cause.message, 'cancel this routed request');
+        return true;
+      });
+      await entered;
+      assert.equal(captured.streams.length, 2);
+      const cancelledStreamClosed = waitForClose(captured.streams[1]);
+      controller.abort(new Error('cancel this routed request'));
+      await cancellation;
+      await cleaned;
+      assert.equal(remoteCloseCount, 1);
+      await cancelledStreamClosed;
+      assert.equal(captured.streams[1].rstCode, 8, 'cancelled stream uses NGHTTP2_CANCEL (8)');
+      assert.equal(listenerCount(), 0);
+
+      releaseSiblingResolve();
+      const unaffected = await sibling;
+      assert.equal((await readBody(unaffected.body)).toString(), 'unrelated request survived');
+      assert.equal(broker.sessionCount, 1);
+    } finally {
+      releaseSiblingResolve();
+      captured?.restore();
+      if (sibling !== undefined) {
+        try {
+          const response = await sibling;
+          response.body.destroy();
+        } catch {}
+      }
+      if (broker !== undefined) await broker.close('test-complete');
+      if (guest !== undefined) await guest.close('test-complete');
+      await host.close('test-complete');
+    }
+  },
+);
+
+test(
+  'Broker signal cancellation resets pre-header GET, HEAD, and streaming requests with CANCEL',
+  { timeout: 7000 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    let broker;
+    let guest;
+    const entered = new Map();
+    const closed = new Map();
+    const uploadReceived = new Map();
+    let captured;
+    const barrier = (map, path) => {
+      if (!map.has(path)) {
+        let resolve;
+        const promise = new Promise((complete) => {
+          resolve = complete;
+        });
+        map.set(path, { promise, resolve });
+      }
+      return map.get(path);
+    };
+
+    try {
+      broker = createBroker({ hostUrl, brokerId: 'broker-cancel-reset-codes' });
+      guest = createGuest({ hostUrl, guestId: 'guest-cancel-reset-codes' });
+      guest.attach((request, response) => {
+        if (request.url === '/complete') {
+          response.end('completed');
+          return;
+        }
+        barrier(entered, request.url).resolve();
+        response.on('close', () => barrier(closed, request.url).resolve());
+        if (request.url === '/stream') {
+          request.on('data', () => barrier(uploadReceived, request.url).resolve());
+        }
+      }, 'cancel-reset-codes.local.test');
+      await broker.connect();
+      await guest.connect();
+      await broker.waitForRoute('cancel-reset-codes.local.test');
+      captured = observeBrokerRequestStreams(broker);
+
+      for (const [method, path, body] of [
+        ['GET', '/get', undefined],
+        ['HEAD', '/head', undefined],
+        ['POST', '/stream', new PassThrough()],
+      ]) {
+        const controller = new AbortController();
+        const listenerCount = trackAbortListeners(controller.signal);
+        const request = broker.request({
+          targetId: 'guest-cancel-reset-codes',
+          method,
+          path,
+          body,
+          signal: controller.signal,
+        });
+        await barrier(entered, path).promise;
+        const stream = captured.streams.at(-1);
+        const streamClosed = waitForClose(stream);
+        if (body !== undefined) {
+          body.write(Buffer.from('bounded upload chunk'));
+          await barrier(uploadReceived, path).promise;
+        }
+        controller.abort(new Error(`cancel ${method}`));
+        await assert.rejects(request, (error) => error.name === 'AbortError');
+        await barrier(closed, path).promise;
+        await streamClosed;
+        assert.equal(stream.rstCode, 8, `${method} must use NGHTTP2_CANCEL (8)`);
+        assert.equal(listenerCount(), 0, `${method} abort listeners released`);
+        if (body !== undefined) assert.equal(body.destroyed, true);
+      }
+
+      const completedController = new AbortController();
+      const completionListenerCount = trackAbortListeners(completedController.signal);
+      const completedRequest = broker.request({
+        targetId: 'guest-cancel-reset-codes',
+        method: 'GET',
+        path: '/complete',
+        signal: completedController.signal,
+      });
+      const completedResponse = await completedRequest;
+      const completedStream = captured.streams.at(-1);
+      const completedClose = once(completedStream, 'close');
+      assert.equal((await readBody(completedResponse.body)).toString(), 'completed');
+      await completedClose;
+      assert.equal(completionListenerCount(), 0, 'completed request abort listeners released');
+    } finally {
+      captured?.restore();
+      if (broker !== undefined) await broker.close('test-complete');
+      if (guest !== undefined) await guest.close('test-complete');
+      await host.close('test-complete');
+    }
+  },
+);
+
+test('Broker pre-abort allocates no routed request and leaves its upload source untouched', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const broker = createBroker({
+    hostUrl: `https://127.0.0.1:${host.address.port}`,
+    brokerId: 'broker-preabort-source',
+  });
+  const source = new PassThrough();
+  const controller = new AbortController();
+  const reason = new Error('already cancelled');
+  controller.abort(reason);
+  let captured;
+  try {
+    await broker.connect();
+    captured = observeBrokerRequestStreams(broker);
+    await assert.rejects(
+      broker.request({
+        targetId: 'unused-target',
+        method: 'POST',
+        path: '/',
+        body: source,
+        signal: controller.signal,
+      }),
+      (error) => {
+        assert.equal(error.name, 'AbortError');
+        assert.equal(error.code, 'ABORT_ERR');
+        assert.equal(error.cause, reason);
+        return true;
+      },
+    );
+    assert.equal(source.destroyed, false);
+    assert.equal(broker.routedRequestCount, 0);
+    assert.equal(captured.streams.length, 0, 'pre-abort allocates no native request stream');
+  } finally {
+    captured?.restore();
+    source.destroy();
+    await broker.close('test-complete');
+    await host.close('test-complete');
+  }
+});
+
+test(
+  'Broker cancellation interrupts an internal redirect replay hop',
+  { timeout: 7000 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    let broker;
+    let redirectGuest;
+    let targetGuest;
+    let targetEnteredResolve;
+    let targetClosedResolve;
+    let captured;
+    let targetCloseCount = 0;
+    const targetEntered = new Promise((resolve) => {
+      targetEnteredResolve = resolve;
+    });
+    const targetClosed = new Promise((resolve) => {
+      targetClosedResolve = resolve;
+    });
+
+    try {
+      broker = createBroker({ hostUrl, brokerId: 'broker-cancel-redirect' });
+      redirectGuest = createGuest({ hostUrl, guestId: 'guest-cancel-redirect-source' });
+      targetGuest = createGuest({ hostUrl, guestId: 'guest-cancel-redirect-target' });
+      redirectGuest.attach((_request, response) => {
+        response.writeHead(307, { location: 'http://cancel-target.local.test/final' });
+        response.end();
+      }, 'cancel-source.local.test');
+      targetGuest.attach((_request, response) => {
+        targetEnteredResolve();
+        response.on('close', () => {
+          targetCloseCount += 1;
+          targetClosedResolve();
+        });
+      }, 'cancel-target.local.test');
+      await broker.connect();
+      await redirectGuest.connect();
+      await targetGuest.connect();
+      await broker.waitForRoute('cancel-source.local.test');
+      await broker.waitForRoute('cancel-target.local.test');
+      captured = observeBrokerRequestStreams(broker);
+
+      const controller = new AbortController();
+      const listenerCount = trackAbortListeners(controller.signal);
+      const pending = broker.request({
+        targetId: 'guest-cancel-redirect-source',
+        method: 'POST',
+        path: '/start',
+        body: [Buffer.from('replayed-body')],
+        signal: controller.signal,
+      });
+      await targetEntered;
+      assert.equal(
+        captured.streams.length,
+        2,
+        'one original request and one redirect hop allocated',
+      );
+      const streamsClosed = captured.streams.map(waitForClose);
+      controller.abort(new Error('cancel redirected request'));
+      await assert.rejects(pending, (error) => error.name === 'AbortError');
+      await targetClosed;
+      assert.equal(targetCloseCount, 1);
+      await Promise.all(streamsClosed);
+      assert.equal(
+        captured.streams.length,
+        2,
+        'cancellation did not allocate a late redirect stream',
+      );
+      assert.equal(broker.routedRequestCount, 2);
+      assert.equal(listenerCount(), 0);
+      assert.equal(broker.sessionCount, 1);
+    } finally {
+      captured?.restore();
+      if (broker !== undefined) await broker.close('test-complete');
+      if (redirectGuest !== undefined) await redirectGuest.close('test-complete');
+      if (targetGuest !== undefined) await targetGuest.close('test-complete');
+      await host.close('test-complete');
+    }
+  },
+);
+
+test(
+  'Broker cancellation interrupts a redirect while waiting for a streaming-body replay decision',
+  { timeout: 7000 },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    let broker;
+    let redirectGuest;
+    let targetGuest;
+    let enteredResolve;
+    let replayWaitResolve;
+    let captured;
+    let originalAwaitReplay;
+    const entered = new Promise((resolve) => {
+      enteredResolve = resolve;
+    });
+    const replayWaitEntered = new Promise((resolve) => {
+      replayWaitResolve = resolve;
+    });
+    let targetHit = false;
+    const source = new PassThrough();
+
+    try {
+      broker = createBroker({ hostUrl, brokerId: 'broker-cancel-replay-wait' });
+      redirectGuest = createGuest({ hostUrl, guestId: 'guest-cancel-replay-source' });
+      targetGuest = createGuest({ hostUrl, guestId: 'guest-cancel-replay-target' });
+      redirectGuest.attach((_request, response) => {
+        enteredResolve();
+        response.writeHead(307, { location: 'http://replay-target.local.test/final' });
+        response.end();
+      }, 'replay-source.local.test');
+      targetGuest.attach((_request, response) => {
+        targetHit = true;
+        response.end('should not be replayed');
+      }, 'replay-target.local.test');
+      await broker.connect();
+      await redirectGuest.connect();
+      await targetGuest.connect();
+      await broker.waitForRoute('replay-source.local.test');
+      await broker.waitForRoute('replay-target.local.test');
+      originalAwaitReplay = broker.awaitReplayOrAbort;
+      broker.awaitReplayOrAbort = function (...args) {
+        replayWaitResolve();
+        return originalAwaitReplay.apply(this, args);
+      };
+      captured = observeBrokerRequestStreams(broker);
+
+      const controller = new AbortController();
+      const listenerCount = trackAbortListeners(controller.signal);
+      const pending = broker.request({
+        targetId: 'guest-cancel-replay-source',
+        method: 'POST',
+        path: '/start',
+        body: source,
+        signal: controller.signal,
+      });
+      await entered;
+      await replayWaitEntered;
+      assert.equal(captured.streams.length, 1, 'redirect response arrived before replay wait');
+      const sourceStreamClosed = waitForClose(captured.streams[0]);
+      controller.abort(new Error('cancel replay wait'));
+      await assert.rejects(pending, (error) => error.name === 'AbortError');
+      await sourceStreamClosed;
+      assert.equal(source.destroyed, true);
+      assert.equal(targetHit, false);
+      assert.equal(listenerCount(), 0);
+    } finally {
+      source.destroy();
+      captured?.restore();
+      if (broker !== undefined && originalAwaitReplay !== undefined) {
+        broker.awaitReplayOrAbort = originalAwaitReplay;
+      }
+      if (broker !== undefined) await broker.close('test-complete');
+      if (redirectGuest !== undefined) await redirectGuest.close('test-complete');
+      if (targetGuest !== undefined) await targetGuest.close('test-complete');
+      await host.close('test-complete');
+    }
+  },
+);
 
 test('Node Broker enforces remote H2 response metadata classification', async () => {
   const server = http2.createSecureServer({ cert: trusted.certificate, key: trusted.key });

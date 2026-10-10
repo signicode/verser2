@@ -193,8 +193,21 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
     });
 
     return new Promise((resolve, reject) => {
-      localResponse.once('error', reject);
+      let settled = false;
+      localResponse.on('error', (error) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+          return;
+        }
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.error,
+          requestId: envelope.requestId,
+          error: toVerserError(error),
+        });
+      });
       localResponse.once('finish', () => {
+        settled = true;
         const response = localResponse.toDispatchResponse(envelope.requestId);
         this.emitLifecycle({
           name: VERSER_LIFECYCLE_EVENTS.requestCompleted,
@@ -204,7 +217,8 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       });
 
       try {
-        listener(localRequest, localResponse);
+        const listenerResult: unknown = listener(localRequest, localResponse);
+        this.observeListenerResult(listenerResult, localResponse, envelope.requestId);
       } catch (error) {
         const verserError =
           error instanceof VerserError && error.code === 'protocol-error'
@@ -456,12 +470,14 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
 
     return new Promise((resolve, reject) => {
       let completed = false;
+      let transportTerminated = false;
       // Track whether we initiated the lease cancellation ourselves (e.g.
       // handler threw after response start). When we close the lease stream
       // with CANCEL, the same client-side H2 stream receives the RST and
       // triggers 'aborted', which would re-emit a spurious error on the
       // already-ended request. We suppress that case.
       let selfCancelled = false;
+      let requestFailureNotified = false;
       const complete = (): void => {
         if (completed) return;
         completed = true;
@@ -475,8 +491,21 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
         });
         complete();
       });
-      localResponse.once('error', (err) => {
-        if (completed) return;
+      localResponse.on('error', (err) => {
+        if (
+          lease.stream.rstCode !== undefined &&
+          lease.stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR
+        ) {
+          transportTerminated = true;
+        }
+        if (completed || transportTerminated) {
+          this.emitLifecycle({
+            name: VERSER_LIFECYCLE_EVENTS.error,
+            requestId: metadata.requestId,
+            error: toVerserError(err),
+          });
+          return;
+        }
         completed = true;
         const verserError =
           err instanceof VerserError && err.code === 'protocol-error'
@@ -518,7 +547,8 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
       // we detect the RST. We emit 'error' directly instead of calling
       // destroy() because destroy() on an already-ended stream is a no-op.
       lease.stream.once('aborted', () => {
-        if (completed || selfCancelled) return;
+        if (selfCancelled || requestFailureNotified) return;
+        transportTerminated = true;
         const rst = lease.stream.rstCode;
         if (rst !== undefined && rst !== http2.constants.NGHTTP2_NO_ERROR) {
           const cancelError = createVerserError(
@@ -530,15 +560,34 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
               rstCode: String(rst),
             },
           );
+          requestFailureNotified = true;
           localRequest.emit('error', cancelError);
         }
       });
       lease.stream.once('close', () => {
+        if (!localResponse.finished && !selfCancelled) {
+          transportTerminated = true;
+          if (!requestFailureNotified) {
+            requestFailureNotified = true;
+            localRequest.emit(
+              'error',
+              createVerserError(
+                'stream-failure',
+                'Request transport closed before response completion',
+                {
+                  requestId: metadata.requestId,
+                  leaseId: lease.leaseId,
+                },
+              ),
+            );
+          }
+        }
         complete();
       });
 
       try {
-        listener(localRequest, localResponse);
+        const listenerResult: unknown = listener(localRequest, localResponse);
+        this.observeListenerResult(listenerResult, localResponse, metadata.requestId);
       } catch (error) {
         const verserError =
           error instanceof VerserError && error.code === 'protocol-error'
@@ -571,6 +620,31 @@ export class Http2VerserNodeGuest implements VerserNodeGuest {
           }),
         );
         resolve();
+      }
+    });
+  }
+
+  private observeListenerResult(
+    result: unknown,
+    response: MinimalServerResponse,
+    requestId: string,
+  ): void {
+    if (
+      result === null ||
+      (typeof result !== 'object' && typeof result !== 'function') ||
+      typeof (result as { then?: unknown }).then !== 'function'
+    ) {
+      return;
+    }
+    void Promise.resolve(result).catch((error: unknown) => {
+      try {
+        response.emit('error', error instanceof Error ? error : new Error(String(error)));
+      } catch (emitError) {
+        this.emitLifecycle({
+          name: VERSER_LIFECYCLE_EVENTS.error,
+          requestId,
+          error: toVerserError(emitError),
+        });
       }
     });
   }
