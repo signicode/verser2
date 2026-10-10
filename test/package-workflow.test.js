@@ -149,6 +149,25 @@ test('workflow reuses existing build outputs for source tests and lint in valida
   );
 });
 
+test('package validation installs Bun before running cancellation integration tests', () => {
+  const content = loadWorkflow();
+  const validation = jobSection(content, 'package-validation');
+  const bunSetupIndex = validation.indexOf('uses: oven-sh/setup-bun@v2');
+  const integrationTestsIndex = validation.indexOf('npm run test:bounded:staged');
+
+  assert.notEqual(bunSetupIndex, -1, 'Expected Bun setup in package validation.');
+  assert.match(validation, /bun-version:\s*['"]?1\.3\.14['"]?/);
+  assert.ok(
+    integrationTestsIndex > bunSetupIndex,
+    'Expected Bun setup before the staged source and cancellation integration tests.',
+  );
+  assert.equal(
+    jobSection(content, 'github-packages-preview').includes('oven-sh/setup-bun@v2'),
+    false,
+    'Expected Bun setup only in validation, not in the package publishing job.',
+  );
+});
+
 test('workflow applies package version policy and publishes previews to GitHub Packages', () => {
   assertHas(
     /npm run package:version-policy -- --version/,
