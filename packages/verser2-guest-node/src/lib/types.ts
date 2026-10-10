@@ -143,6 +143,8 @@ export interface VerserBrokerRequest {
   readonly headers?: Record<string, string>;
   /** Request body — omitted for no body, Buffer array, or a Readable stream. */
   readonly body?: readonly Buffer[] | Readable;
+  /** Optional request-scoped cancellation signal. */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -336,6 +338,7 @@ export type NodeRequestListener = (
     on(event: string, handler: (...args: unknown[]) => void): unknown;
   },
   response: {
+    readonly destroyed: boolean;
     statusCode: number;
     statusMessage?: string;
     setHeader: (

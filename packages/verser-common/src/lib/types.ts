@@ -448,6 +448,8 @@ export interface VerserCommonBrokerRequest<TBody = unknown> {
   readonly headers?: VerserHeaders;
   /** Optional request body. Supports strings, Buffers, Readable streams, and iterables. */
   readonly body?: TBody;
+  /** Optional request-scoped cancellation signal. */
+  readonly signal?: AbortSignal;
 }
 
 /**

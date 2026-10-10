@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { PassThrough } from 'node:stream';
 import {
@@ -17,6 +18,61 @@ import {
 import type { NodeStyleRequest, NodeStyleResponse } from '../src/lib/adapter';
 
 type StreamEventHandler = (chunk?: unknown) => void;
+
+class AdapterRequest extends EventEmitter {
+  public destroyed = false;
+
+  public constructor(
+    public readonly method: string,
+    public readonly url: string,
+    public readonly headers: Record<string, string> = {},
+  ) {
+    super();
+  }
+
+  public pause(): void {}
+
+  public resume(): void {}
+
+  public destroy(error?: Error): void {
+    this.destroyed = true;
+    if (error !== undefined) this.emit('error', error);
+    this.emit('close');
+  }
+}
+
+class AdapterResponse extends EventEmitter {
+  public statusCode = 0;
+
+  public finished = false;
+
+  public destroyed = false;
+
+  public readonly chunks: Buffer[] = [];
+
+  public writeHead(statusCode: number): this {
+    this.statusCode = statusCode;
+    return this;
+  }
+
+  public write(chunk: string | Buffer): boolean {
+    this.chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk));
+    return true;
+  }
+
+  public end(chunk?: string | Buffer): this {
+    if (chunk !== undefined) this.write(chunk);
+    this.finished = true;
+    this.emit('finish');
+    this.emit('close');
+    return this;
+  }
+
+  public closePrematurely(): void {
+    this.destroyed = true;
+    this.emit('close');
+  }
+}
 
 const supportsRequestBody = (body: unknown): boolean => {
   try {
@@ -1119,12 +1175,14 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
   test('request body stream cancel destroys the Node source and removes specific listeners only', async () => {
     const removedEvents: string[] = [];
     let destroyed = false;
+    let closeHandler: (() => void) | undefined;
 
     const mockRequest = {
       method: 'POST',
       url: '/body-cancel',
       headers: {},
-      on() {
+      on(event: string, handler: (...args: readonly unknown[]) => void) {
+        if (event === 'close') closeHandler = () => handler();
         return undefined;
       },
       off(event: string) {
@@ -1135,6 +1193,7 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
       resume() {},
       destroy() {
         destroyed = true;
+        closeHandler?.();
       },
     };
 
@@ -1143,8 +1202,8 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     await reader.cancel('test-cancel');
 
     expect(destroyed).toBe(true);
-    // Should have removed data, end, and error listeners only
-    expect(removedEvents.sort()).toEqual(['data', 'end', 'error']);
+    // Flow listeners are removed at cancel; the error guard remains until close.
+    expect(removedEvents.sort()).toEqual(['close', 'data', 'end', 'error']);
   });
 
   test('Bun fetch response only pulls a bounded amount while the Web consumer is slow', async () => {
@@ -1316,5 +1375,456 @@ describe('Bun node-style HTTP adapter streaming contract', () => {
     errorHandler?.(new Error('sink-error'));
     await donePromise;
     expect(sourceCanceled).toBe(true);
+  });
+});
+
+describe('Bun adapter request cancellation lifecycle', () => {
+  test('forwards active fetch and route rejection(undefined) exactly once', async () => {
+    for (const mode of ['fetch', 'route'] as const) {
+      const response = new AdapterResponse();
+      let errorCount = 0;
+      const receivedError = new Promise<Error>((resolve) => {
+        response.once('error', (error: Error) => {
+          errorCount++;
+          resolve(error);
+        });
+      });
+      const handler =
+        mode === 'fetch'
+          ? { fetch: () => Promise.reject(undefined) }
+          : { routes: { '/reject': () => Promise.reject(undefined) } };
+      createNodeStyleHandler(`undefined-rejection-${mode}.test`, handler as never)(
+        new AdapterRequest('GET', '/reject'),
+        response,
+      );
+
+      const error = await receivedError;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(error.message).toBe('undefined');
+      expect(errorCount).toBe(1);
+      expect(response.finished).toBe(false);
+      expect(response.listenerCount('error')).toBe(0);
+    }
+  });
+
+  test('observes late rejection(undefined) after request termination without responding', async () => {
+    const request = new AdapterRequest('GET', '/late-undefined-rejection');
+    const response = new AdapterResponse();
+    let rejectHandler!: (reason: unknown) => void;
+    let resolveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const nodeHandler = createNodeStyleHandler('late-undefined-rejection.test', {
+      fetch: () => {
+        resolveEntered();
+        return new Promise<Response>((_resolve, reject) => {
+          rejectHandler = reject;
+        });
+      },
+    });
+    nodeHandler(request, response);
+    await entered;
+    request.emit('error', new Error('request ended first'));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    rejectHandler(undefined);
+    await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+
+    expect(response.statusCode).toBe(0);
+    expect(response.chunks).toHaveLength(0);
+    expect(response.finished).toBe(false);
+    expect(response.listenerCount('error')).toBe(0);
+    expect(response.listenerCount('close')).toBe(0);
+    expect(request.listenerCount('error')).toBe(0);
+  });
+
+  test('streams a long live response with bounded counters and cancels cleanly', async () => {
+    const request = new AdapterRequest('GET', '/long-live-stream');
+    const response = new AdapterResponse();
+    response.write = () => true;
+    let writes = 0;
+    let canceled = 0;
+    let pulled = 0;
+    let signal!: AbortSignal;
+    let resolveEntered!: () => void;
+    let resolveCanceled!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const sourceCanceled = new Promise<void>((resolve) => {
+      resolveCanceled = resolve;
+    });
+    response.write = () => {
+      writes++;
+      if (writes === 4096) request.emit('error', new Error('stop long stream'));
+      return true;
+    };
+    createNodeStyleHandler('long-live-stream.test', {
+      fetch: (webRequest) => {
+        signal = webRequest.signal;
+        resolveEntered();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pulled++;
+              controller.enqueue(new Uint8Array([pulled % 256]));
+            },
+            cancel() {
+              canceled++;
+              resolveCanceled();
+            },
+          }),
+        );
+      },
+    })(request, response);
+    await entered;
+    await sourceCanceled;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    expect(writes).toBe(4096);
+    expect(pulled).toBeLessThanOrEqual(writes + 2);
+    expect(canceled).toBe(1);
+    expect(signal.aborted).toBe(true);
+    expect(response.chunks).toHaveLength(0);
+    expect(request.listenerCount('error')).toBe(0);
+  });
+
+  test('request error wakes a backpressured writer without a sink event', async () => {
+    const request = new AdapterRequest('GET', '/drain-abort');
+    const response = new AdapterResponse();
+    let signal!: AbortSignal;
+    let cancelCount = 0;
+    let writeCount = 0;
+    let ended = false;
+    let resolveEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const originalWrite = response.write.bind(response);
+    response.write = (chunk) => {
+      writeCount++;
+      originalWrite(chunk);
+      return false;
+    };
+    response.end = () => {
+      ended = true;
+      return response;
+    };
+    const canceled = new Promise<void>((resolve) => {
+      createNodeStyleHandler('drain-abort.test', {
+        fetch: (webRequest) => {
+          signal = webRequest.signal;
+          resolveEntered();
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('first'));
+                controller.enqueue(new TextEncoder().encode('second'));
+              },
+              cancel() {
+                cancelCount++;
+                resolve();
+              },
+            }),
+          );
+        },
+      })(request, response);
+    });
+    await entered;
+    await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+    expect(writeCount).toBe(1);
+    request.emit('error', new Error('request reset while waiting for drain'));
+    await canceled;
+    await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+    expect(signal.aborted).toBe(true);
+    expect(cancelCount).toBe(1);
+    expect(writeCount).toBe(1);
+    expect(ended).toBe(false);
+    expect(response.listenerCount('drain')).toBe(0);
+    expect(response.listenerCount('close')).toBe(0);
+    expect(response.listenerCount('error')).toBe(0);
+    expect(request.listenerCount('error')).toBe(0);
+  });
+
+  test('aborts exactly at handler fulfillment without orphaning the response body', async () => {
+    const request = new AdapterRequest('GET', '/fulfillment-boundary');
+    const response = new AdapterResponse();
+    let cancelCount = 0;
+    let abortSignal!: AbortSignal;
+    let resolveEntered!: () => void;
+    let resolveHandler!: (value: Response) => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const handlerResult = new Promise<Response>((resolve) => {
+      resolveHandler = resolve;
+    });
+    const originalThen = Promise.prototype.then;
+    let injected = false;
+    createNodeStyleHandler('fulfillment-boundary.test', {
+      fetch: (webRequest) => {
+        abortSignal = webRequest.signal;
+        resolveEntered();
+        return handlerResult;
+      },
+    })(request, response);
+    await entered;
+    // biome-ignore lint/suspicious/noThenProperty: serial adoption-boundary instrumentation
+    Promise.prototype.then = function (onFulfilled, onRejected) {
+      return originalThen.call(
+        this,
+        (value: unknown) => {
+          const result = onFulfilled?.(value);
+          if (
+            !injected &&
+            typeof value === 'object' &&
+            value !== null &&
+            'headerPairs' in value &&
+            'body' in value
+          ) {
+            injected = true;
+            request.emit('error', new Error('abort at response handoff'));
+          }
+          return result;
+        },
+        onRejected,
+      );
+    } as typeof Promise.prototype.then;
+    try {
+      resolveHandler(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('owned once'));
+            },
+            cancel() {
+              cancelCount++;
+            },
+          }),
+        ),
+      );
+      await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+    } finally {
+      // biome-ignore lint/suspicious/noThenProperty: restore serial test instrumentation
+      Promise.prototype.then = originalThen;
+    }
+    expect(injected).toBe(true);
+    expect(abortSignal.aborted).toBe(true);
+    expect(cancelCount).toBe(1);
+    expect(response.statusCode).toBe(0);
+    expect(response.chunks).toHaveLength(0);
+    expect(response.listenerCount('error')).toBe(0);
+    expect(request.listenerCount('error')).toBe(0);
+  });
+
+  test('aborts pending route handlers, observes late rejection, and discards a late Response', async () => {
+    const request = new AdapterRequest('GET', '/pending');
+    const response = new AdapterResponse();
+    let resolveEntered!: () => void;
+    let resolveCleanup!: () => void;
+    let resolveHandler!: (value: Response) => void;
+    let resolveBodyCanceled!: () => void;
+    let signal!: AbortSignal;
+    let abortEvents = 0;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const cleanup = new Promise<void>((resolve) => {
+      resolveCleanup = resolve;
+    });
+    const handlerCompletion = new Promise<Response>((resolve) => {
+      resolveHandler = resolve;
+    });
+    const bodyCanceled = new Promise<void>((resolve) => {
+      resolveBodyCanceled = resolve;
+    });
+    const nodeHandler = createNodeStyleHandler('pending-bun.test', {
+      routes: {
+        '/pending': (webRequest) => {
+          signal = webRequest.signal;
+          signal.addEventListener(
+            'abort',
+            () => {
+              abortEvents += 1;
+              resolveCleanup();
+            },
+            { once: true },
+          );
+          resolveEntered();
+          return handlerCompletion;
+        },
+      },
+    });
+
+    nodeHandler(request, response);
+    await entered;
+    const transportError = new Error('remote request reset');
+    request.emit('error', transportError);
+    request.emit('close');
+    await cleanup;
+    expect(signal.aborted).toBe(true);
+    expect(abortEvents).toBe(1);
+
+    resolveHandler(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('late response'));
+          },
+          cancel() {
+            resolveBodyCanceled();
+          },
+        }),
+      ),
+    );
+    await bodyCanceled;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(response.statusCode).toBe(0);
+    expect(response.chunks).toHaveLength(0);
+    expect(response.listenerCount('error')).toBe(0);
+    expect(response.listenerCount('close')).toBe(0);
+    expect(request.listenerCount('error')).toBe(0);
+  });
+
+  test('aborts a streaming response on premature sink close and cancels its producer', async () => {
+    const request = new AdapterRequest('GET', '/stream');
+    const response = new AdapterResponse();
+    let signal!: AbortSignal;
+    let abortEvents = 0;
+    let resolveEntered!: () => void;
+    let resolveFirstWrite!: () => void;
+    let resolveSourceCanceled!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const firstWrite = new Promise<void>((resolve) => {
+      resolveFirstWrite = resolve;
+    });
+    const sourceCanceled = new Promise<void>((resolve) => {
+      resolveSourceCanceled = resolve;
+    });
+    const nodeHandler = createNodeStyleHandler('streaming-bun.test', {
+      fetch: (webRequest) => {
+        signal = webRequest.signal;
+        signal.addEventListener('abort', () => {
+          abortEvents += 1;
+        });
+        resolveEntered();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('first'));
+            },
+            cancel() {
+              resolveSourceCanceled();
+            },
+          }),
+        );
+      },
+    });
+    const originalWrite = response.write.bind(response);
+    response.write = (chunk) => {
+      const result = originalWrite(chunk);
+      resolveFirstWrite();
+      return result;
+    };
+
+    nodeHandler(request, response);
+    await entered;
+    await firstWrite;
+    response.closePrematurely();
+    await sourceCanceled;
+    await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+    expect(signal.aborted).toBe(true);
+    expect(abortEvents).toBe(1);
+    expect(response.finished).toBe(false);
+    expect(response.chunks).toHaveLength(1);
+    expect(response.listenerCount('close')).toBe(0);
+    expect(response.listenerCount('error')).toBe(0);
+  });
+
+  test('observes a pending handler rejection after response transport error', async () => {
+    const request = new AdapterRequest('GET', '/pending-rejection');
+    const response = new AdapterResponse();
+    let rejectHandler!: (error: Error) => void;
+    let resolveEntered!: () => void;
+    let signal!: AbortSignal;
+    let abortEvents = 0;
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const nodeHandler = createNodeStyleHandler('pending-rejection-bun.test', {
+      fetch: (webRequest) => {
+        signal = webRequest.signal;
+        signal.addEventListener('abort', () => {
+          abortEvents += 1;
+        });
+        resolveEntered();
+        return new Promise<Response>((_resolve, reject) => {
+          rejectHandler = reject;
+        });
+      },
+    });
+
+    nodeHandler(request, response);
+    await entered;
+    response.emit('error', new Error('remote response stream failed'));
+    expect(signal.aborted).toBe(true);
+    request.emit('close');
+    rejectHandler(new Error('handler rejected after disconnect'));
+    await new Promise<void>((resolve) => setImmediate(() => setImmediate(resolve)));
+
+    expect(abortEvents).toBe(1);
+    expect(response.statusCode).toBe(0);
+    expect(response.chunks).toHaveLength(0);
+    expect(response.listenerCount('error')).toBe(0);
+    expect(request.listenerCount('error')).toBe(0);
+  });
+
+  test('does not abort on GET/HEAD completion or POST upload EOF and normal finish/close', async () => {
+    for (const method of ['GET', 'HEAD']) {
+      const request = new AdapterRequest(method, '/bodyless');
+      const response = new AdapterResponse();
+      let signal!: AbortSignal;
+      let bodyIsNull = false;
+      const finished = new Promise<void>((resolve) => response.once('finish', resolve));
+      createNodeStyleHandler('bodyless-bun.test', {
+        fetch: (webRequest) => {
+          signal = webRequest.signal;
+          bodyIsNull = webRequest.body === null;
+          return new Response(null, { status: 204 });
+        },
+      })(request, response);
+      await finished;
+      expect(bodyIsNull).toBe(true);
+      expect(signal.aborted).toBe(false);
+      request.emit('close');
+      expect(signal.aborted).toBe(false);
+    }
+
+    const request = new AdapterRequest('POST', '/upload');
+    const response = new AdapterResponse();
+    let signal!: AbortSignal;
+    let resolveEntered!: () => void;
+    let observedBody = '';
+    const entered = new Promise<void>((resolve) => {
+      resolveEntered = resolve;
+    });
+    const finished = new Promise<void>((resolve) => response.once('finish', resolve));
+    createNodeStyleHandler('upload-bun.test', {
+      fetch: async (webRequest) => {
+        signal = webRequest.signal;
+        resolveEntered();
+        observedBody = await webRequest.text();
+        return new Response(observedBody);
+      },
+    })(request, response);
+    await entered;
+    request.emit('data', new TextEncoder().encode('upload-data'));
+    request.emit('end');
+    request.emit('close');
+    await finished;
+    expect(observedBody).toBe('upload-data');
+    expect(response.chunks.map((chunk) => chunk.toString()).join('')).toBe('upload-data');
+    expect(signal.aborted).toBe(false);
   });
 });

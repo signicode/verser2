@@ -3,6 +3,8 @@ import type { Readable } from 'node:stream';
 import type { Dispatcher } from 'undici';
 
 export class VerserDispatchController {
+  private terminalState: 'active' | 'failed' | 'completed' = 'active';
+  private readonly abortController = new AbortController();
   public rawHeaders?: Buffer[] | string[] | http.IncomingHttpHeaders | null;
 
   public rawTrailers?: Buffer[] | string[] | http.IncomingHttpHeaders | null;
@@ -11,20 +13,24 @@ export class VerserDispatchController {
 
   private requestBody?: Readable;
 
-  private abortedState = false;
-
   private pausedState = false;
 
   private abortReason: Error | null = null;
 
-  private errorEmitted = false;
+  private failureNotified = false;
 
   private totalBytesSent = 0;
+
+  private readonly cleanupCallbacks = new Set<() => void>();
 
   public constructor(private readonly handler: Dispatcher.DispatchHandler) {}
 
   public get aborted(): boolean {
-    return this.abortedState;
+    return this.terminalState === 'failed';
+  }
+
+  public get signal(): AbortSignal {
+    return this.abortController.signal;
   }
 
   public get paused(): boolean {
@@ -44,20 +50,45 @@ export class VerserDispatchController {
 
   /** Track the request body stream so it can be destroyed when the controller is aborted. */
   public attachRequestBody(body: Readable): void {
+    if (this.terminalState !== 'active') return;
     this.requestBody = body;
+    const onError = (error: Error): void => {
+      if (this.terminalState === 'active') this.abort(error);
+    };
+    const onClose = (): void => {
+      body.off('error', onError);
+      body.off('close', onClose);
+    };
+    body.on('error', onError);
+    body.once('close', onClose);
+  }
+
+  public onTerminal(cleanup: () => void): () => void {
+    if (this.terminalState !== 'active') {
+      cleanup();
+      return () => {};
+    }
+    this.cleanupCallbacks.add(cleanup);
+    return () => this.cleanupCallbacks.delete(cleanup);
+  }
+
+  public complete(): void {
+    if (this.terminalState !== 'active') return;
+    this.terminalState = 'completed';
+    this.cleanup();
   }
 
   public abort(reason: Error): void {
-    if (this.abortedState) {
-      return;
-    }
-    this.abortedState = true;
+    if (this.terminalState !== 'active') return;
+    this.terminalState = 'failed';
     this.abortReason = reason;
+    this.abortController.abort(reason);
+    this.cleanup();
     // Destroy the request body to stop sending data upstream when abort fires
     // mid-upload. Destroy the response body to stop consuming downstream data.
     this.requestBody?.destroy(reason);
-    this.responseBody?.destroy(reason);
-    this.fail(reason);
+    this.responseBody?.destroy();
+    this.notifyFailure(reason);
   }
 
   public pause(): void {
@@ -71,10 +102,12 @@ export class VerserDispatchController {
   }
 
   public fail(error: Error): void {
-    if (this.errorEmitted) {
-      return;
-    }
-    this.errorEmitted = true;
+    this.abort(error);
+  }
+
+  private notifyFailure(error: Error): void {
+    if (this.failureNotified) return;
+    this.failureNotified = true;
     if (this.handler.onResponseError !== undefined) {
       this.handler.onResponseError(this, error);
       return;
@@ -82,8 +115,19 @@ export class VerserDispatchController {
     this.handler.onError?.(error);
   }
 
+  private cleanup(): void {
+    for (const cleanup of this.cleanupCallbacks) {
+      try {
+        cleanup();
+      } catch {
+        // Cleanup must not interfere with the one terminal notification.
+      }
+    }
+    this.cleanupCallbacks.clear();
+  }
+
   public failFromUnknown(error: unknown): void {
-    this.fail(error instanceof Error ? error : new Error(String(error)));
+    this.abort(error instanceof Error ? error : new Error(String(error)));
   }
 
   public invoke(callback: () => void): boolean {
@@ -91,14 +135,20 @@ export class VerserDispatchController {
       callback();
       return true;
     } catch (error) {
-      this.failFromUnknown(error);
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.abort(failure);
       return false;
     }
   }
 
   public emitBodySent(chunk: Buffer): void {
+    if (this.terminalState !== 'active') return;
     this.totalBytesSent += chunk.byteLength;
-    this.handler.onBodySent?.(chunk.byteLength, this.totalBytesSent);
+    try {
+      this.handler.onBodySent?.(chunk.byteLength, this.totalBytesSent);
+    } catch (error) {
+      this.abort(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   public emitRequestSent(): void {

@@ -439,6 +439,216 @@ test('Broker Dispatcher propagates fetch aborts without dangling response stream
   }
 });
 
+test('Broker Dispatcher callback abort stops body setup and reports one terminal failure', async () => {
+  const broker = createVerserBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'pre-abort-dispatcher',
+  });
+  const dispatcher = broker.createDispatcher();
+  const source = new PassThrough();
+  const reason = new Error('callback-abort');
+  let failures = 0;
+  dispatcher.dispatch(
+    { origin: 'http://unused.local.test', path: '/', method: 'POST', body: source },
+    {
+      onRequestStart(controller) {
+        controller.abort(reason);
+      },
+      onResponseError(_controller, error) {
+        failures += 1;
+        assert.equal(error, reason);
+        _controller.abort(new Error('reentrant-abort'));
+        _controller.fail(new Error('reentrant-fail'));
+      },
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(failures, 1);
+  assert.equal(source.destroyed, false);
+  source.destroy();
+});
+
+test('Broker Dispatcher accepts modern and legacy response callbacks and drains their bodies', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-callback-drain.local.test',
+    (_request, response) => response.end('callback-body'),
+    { brokerId: 'broker-dispatcher-callback-drain', guestId: 'guest-dispatcher-callback-drain' },
+  );
+  try {
+    const dispatcher = route.broker.createDispatcher();
+    let modernController;
+    let lateFailures = 0;
+    let modernEnds = 0;
+    const modernBody = await new Promise((resolve, reject) => {
+      let body = '';
+      dispatcher.dispatch(
+        { origin: 'http://dispatcher-callback-drain.local.test', path: '/', method: 'GET' },
+        {
+          onRequestStart() {},
+          onResponseStart(controller) {
+            modernController = controller;
+            controller.pause();
+            setImmediate(() => controller.resume());
+          },
+          onResponseData(_controller, chunk) {
+            body += chunk.toString();
+          },
+          onResponseEnd(controller) {
+            modernEnds += 1;
+            controller.abort(new Error('reentrant-modern-abort'));
+            resolve(body);
+          },
+          onResponseError(_controller, error) {
+            lateFailures += 1;
+            reject(error);
+          },
+        },
+      );
+    });
+    assert.equal(modernBody, 'callback-body');
+    assert.equal(modernEnds, 1);
+    modernController.abort(new Error('after-complete'));
+    modernController.fail(new Error('after-complete-fail'));
+    assert.equal(modernController.signal.aborted, false);
+    assert.equal(lateFailures, 0);
+
+    const originalRequest = route.broker.request.bind(route.broker);
+    let legacySignal;
+    route.broker.request = (request) => {
+      legacySignal = request.signal;
+      return originalRequest(request);
+    };
+    let legacyAbort;
+    let legacyCompletes = 0;
+    let legacyErrors = 0;
+    const legacyBody = await new Promise((resolve, reject) => {
+      let body = '';
+      dispatcher.dispatch(
+        { origin: 'http://dispatcher-callback-drain.local.test', path: '/', method: 'GET' },
+        {
+          onConnect(abort) {
+            legacyAbort = abort;
+          },
+          onHeaders(_status, _headers, resume) {
+            setImmediate(resume);
+            return false;
+          },
+          onData(chunk) {
+            body += chunk.toString();
+            return true;
+          },
+          onComplete() {
+            legacyCompletes += 1;
+            legacyAbort(new Error('reentrant-legacy-abort'));
+            resolve(body);
+          },
+          onError(error) {
+            legacyErrors += 1;
+            reject(error);
+          },
+        },
+      );
+    });
+    assert.equal(legacyBody, 'callback-body');
+    assert.equal(legacyCompletes, 1);
+    legacyAbort(new Error('after-complete-legacy-abort'));
+    assert.equal(legacySignal.aborted, false);
+    assert.equal(legacyErrors, 0);
+  } finally {
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher owns request-body errors when header normalization fails', async () => {
+  const route = await createConnectedRoute(
+    'dispatcher-invalid-headers.local.test',
+    (_request, response) => response.end('unreachable'),
+    { brokerId: 'broker-dispatcher-invalid-headers', guestId: 'guest-dispatcher-invalid-headers' },
+  );
+  const source = new PassThrough();
+  const sourceErrors = [];
+  source.on('error', (error) => sourceErrors.push(error));
+  const sourceClosed = new Promise((resolve) => source.once('close', resolve));
+  try {
+    const dispatcher = route.broker.createDispatcher();
+    const failure = await new Promise((resolve) => {
+      let count = 0;
+      dispatcher.dispatch(
+        {
+          origin: 'http://dispatcher-invalid-headers.local.test',
+          path: '/',
+          method: 'POST',
+          headers: { 'bad header': 'value' },
+          body: source,
+        },
+        {
+          onRequestStart() {},
+          onError(error) {
+            count += 1;
+            resolve({ error, count });
+          },
+        },
+      );
+    });
+    assert.equal(failure.error instanceof TypeError, true);
+    assert.equal(failure.count, 1);
+    await sourceClosed;
+    assert.equal(source.destroyed, true);
+    assert.equal(sourceErrors.length, 1);
+  } finally {
+    source.destroy();
+    await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher pre-header GET and HEAD aborts wait for remote cleanup', async () => {
+  const gates = new Map();
+  for (const path of ['/get', '/head']) {
+    let enteredResolve;
+    let cleanedResolve;
+    gates.set(path, {
+      entered: new Promise((resolve) => {
+        enteredResolve = resolve;
+      }),
+      cleaned: new Promise((resolve) => {
+        cleanedResolve = resolve;
+      }),
+      enter: () => enteredResolve(),
+      clean: () => cleanedResolve(),
+    });
+  }
+  const route = await createConnectedRoute(
+    'dispatcher-head-abort.local.test',
+    (request) => {
+      const gate = gates.get(request.url);
+      gate.enter();
+      request.once('error', gate.clean);
+      request.resume();
+    },
+    { brokerId: 'broker-dispatcher-head-abort', guestId: 'guest-dispatcher-head-abort' },
+  );
+  try {
+    for (const [method, path] of [
+      ['GET', '/get'],
+      ['HEAD', '/head'],
+    ]) {
+      const gate = gates.get(path);
+      const controller = new AbortController();
+      const pending = fetch(`http://dispatcher-head-abort.local.test${path}`, {
+        method,
+        signal: controller.signal,
+        dispatcher: route.broker.createDispatcher(),
+      });
+      await withTimeout(gate.entered, `${method} remote entry`);
+      controller.abort();
+      await assert.rejects(pending, /abort/i);
+      await withTimeout(gate.cleaned, `${method} remote cleanup`);
+    }
+  } finally {
+    await closeRoute(route);
+  }
+});
+
 // ================ Characterization: Slow Consumer Backpressure ================
 
 test('Broker Dispatcher streams large response bodies with controlled backpressure', async () => {

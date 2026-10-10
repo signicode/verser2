@@ -21,6 +21,7 @@ import type { Dispatcher } from 'undici';
 import { fetch as undiciFetch } from 'undici';
 import { VerserBrokerAgent } from './broker-agent';
 import { VerserBrokerDispatcher } from './broker-dispatcher';
+import { createAbortError } from './error-utils';
 import { NativeVerserWebSocket } from './native-websocket';
 import type {
   BrokerControlFrame,
@@ -178,6 +179,9 @@ export class Http2VerserBroker implements VerserBroker {
   }
 
   public request(request: VerserBrokerRequest): Promise<VerserBrokerResponse> {
+    if (request.signal?.aborted) {
+      return Promise.reject(createAbortError(request.signal.reason));
+    }
     let headers: Record<string, string>;
     try {
       headers = flattenVerserHeaders(validateLocalHeaders(request.headers ?? {}));
@@ -210,7 +214,12 @@ export class Http2VerserBroker implements VerserBroker {
     maxInternalRedirects: number,
     hopCount = 0,
   ): Promise<VerserBrokerResponse> {
+    if (request.signal?.aborted) throw createAbortError(request.signal.reason);
     const response = await this.requestOnce(request);
+    if (request.signal?.aborted) {
+      response.body.destroy();
+      throw createAbortError(request.signal.reason);
+    }
     const redirectTarget = this.resolveInternalRedirect(response, request.path);
     if (redirectTarget === undefined) {
       return response;
@@ -224,7 +233,11 @@ export class Http2VerserBroker implements VerserBroker {
       });
     }
 
-    const replayBody = await replayableBody.getReplayBody();
+    const replayBody = await this.awaitReplayOrAbort(replayableBody, request.signal);
+    if (request.signal?.aborted) {
+      response.body.destroy();
+      throw createAbortError(request.signal.reason);
+    }
     if (replayBody === undefined) {
       return response;
     }
@@ -239,6 +252,7 @@ export class Http2VerserBroker implements VerserBroker {
         path: `${redirectTarget.url.pathname}${redirectTarget.url.search}`,
         headers: redirectedHeaders,
         body: replayBody,
+        signal: request.signal,
       },
       replayableBody,
       maxInternalRedirects,
@@ -246,7 +260,28 @@ export class Http2VerserBroker implements VerserBroker {
     );
   }
 
+  private async awaitReplayOrAbort(
+    replayableBody: ReplayableRequestBody,
+    signal: AbortSignal | undefined,
+  ): Promise<readonly Buffer[] | undefined> {
+    if (signal === undefined) return replayableBody.getReplayBody();
+    if (signal.aborted) throw createAbortError(signal.reason);
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(createAbortError(signal.reason));
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([replayableBody.getReplayBody(), aborted]);
+    } finally {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
+    }
+  }
+
   private requestOnce(request: VerserBrokerRequest): Promise<VerserBrokerResponse> {
+    if (request.signal?.aborted) {
+      return Promise.reject(createAbortError(request.signal.reason));
+    }
     const session = this.session;
     if (session === undefined) {
       return Promise.reject(createVerserError('disconnected-target', 'Broker is not connected'));
@@ -273,8 +308,40 @@ export class Http2VerserBroker implements VerserBroker {
         );
       }
 
-      const stream = session.request(requestHeaders);
+      let stream: http2.ClientHttp2Stream;
+      try {
+        if (request.signal?.aborted) {
+          reject(createAbortError(request.signal.reason));
+          return;
+        }
+        stream = session.request(
+          requestHeaders,
+          request.signal === undefined ? undefined : { signal: request.signal },
+        );
+      } catch (error) {
+        reject(request.signal?.aborted ? createAbortError(request.signal.reason) : error);
+        return;
+      }
       let statusCode = 200;
+      let settled = false;
+      const settleReject = (error: unknown): void => {
+        if (settled) return;
+        settled = true;
+        reject(request.signal?.aborted ? createAbortError(request.signal.reason) : error);
+      };
+      stream.once('close', () => {
+        if (!settled) {
+          settleReject(
+            request.signal?.aborted
+              ? createAbortError(request.signal.reason)
+              : createVerserError('stream-failure', 'Stream closed before response headers', {
+                  targetId: request.targetId,
+                }),
+          );
+        }
+      });
+      // The native stream owns the AbortSignal listener until close (Node's
+      // native signal support handles CANCEL and preserves native cause).
       stream.on('response', (headers) => {
         statusCode = Number(headers[':status'] ?? 200);
         try {
@@ -297,6 +364,7 @@ export class Http2VerserBroker implements VerserBroker {
               ),
             );
             const metadata = classification.metadata;
+            if (!settled) settled = true;
             resolve({
               requestId,
               statusCode: metadata?.statusCode ?? statusCode,
@@ -310,17 +378,17 @@ export class Http2VerserBroker implements VerserBroker {
           }
           buffer(stream).then((body) => {
             try {
-              reject(verserErrorFromResponseBody(body, request.targetId));
+              settleReject(verserErrorFromResponseBody(body, request.targetId));
             } catch (error) {
-              reject(error);
+              settleReject(error);
             }
-          }, reject);
+          }, settleReject);
         } catch (error) {
           stream.close(http2.constants.NGHTTP2_PROTOCOL_ERROR);
-          reject(error);
+          settleReject(error);
         }
       });
-      stream.on('error', reject);
+      stream.on('error', settleReject);
       stream.on('end', () => {
         if (statusCode >= 400) {
           return;
@@ -333,24 +401,32 @@ export class Http2VerserBroker implements VerserBroker {
       }
 
       if (body instanceof nodeStream.Readable) {
-        const cleanupBodyPipe = (): void => {
-          body.unpipe(stream);
-          body.destroy();
-        };
-        body.once('error', (error) => {
+        const bodyErrorListener = (error: Error): void => {
           cleanupBodyPipe();
           if (!stream.closed && !stream.destroyed) {
             stream.close(http2.constants.NGHTTP2_CANCEL);
           }
-          reject(error);
-        });
+          settleReject(error);
+        };
+        const cleanupBodyPipe = (): void => {
+          body.unpipe(stream);
+          if (!body.destroyed && !body.readableEnded) {
+            body.once('close', () => {
+              body.off('error', bodyErrorListener);
+            });
+            body.destroy();
+          } else {
+            body.off('error', bodyErrorListener);
+          }
+        };
+        body.once('error', bodyErrorListener);
         // If the H2 stream is closed (e.g. by remote RST) while the body
         // is still being piped, stop forwarding body data to the closed
         // stream and reject the pending promise if no response arrived.
         stream.once('close', () => {
           cleanupBodyPipe();
           if (stream.rstCode !== undefined && stream.rstCode !== http2.constants.NGHTTP2_NO_ERROR) {
-            reject(
+            settleReject(
               createVerserError('stream-failure', 'Stream was reset by remote peer', {
                 targetId: request.targetId,
                 rstCode: String(stream.rstCode),
@@ -363,6 +439,11 @@ export class Http2VerserBroker implements VerserBroker {
       }
 
       for (const chunk of body) {
+        if (request.signal?.aborted) {
+          stream.close(http2.constants.NGHTTP2_CANCEL);
+          settleReject(createAbortError(request.signal.reason));
+          return;
+        }
         stream.write(chunk);
       }
       stream.end();

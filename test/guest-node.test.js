@@ -173,6 +173,88 @@ test('Node Guest dispatches a routed request to an attached request listener', a
   });
 });
 
+test('Node Guest response emits close once after finish and exposes destroyed before close', async () => {
+  const guest = createGuest({ hostUrl: 'https://localhost:1', guestId: 'guest-response-close' });
+  let response;
+  let closeCount = 0;
+  let destroyedAtClose = false;
+  guest.attach((_request, res) => {
+    response = res;
+    res.on('close', () => {
+      closeCount += 1;
+      destroyedAtClose = res.destroyed;
+    });
+    res.end('done');
+    res.end('ignored');
+  });
+  const result = await guest.dispatchRoutedRequest({
+    requestId: 'response-close',
+    sourceId: 'broker',
+    targetId: 'guest-response-close',
+    method: 'GET',
+    path: '/',
+    headers: {},
+    body: [],
+  });
+  assert.equal(result.body.toString(), 'done');
+  assert.equal(response.finished, true);
+  assert.equal(response.destroyed, true);
+  assert.equal(closeCount, 1);
+  assert.equal(destroyedAtClose, true);
+});
+
+test('Node Guest keeps a safe response error owner through transport-close cleanup rejection', async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const guest = createGuest({
+    hostUrl: `https://127.0.0.1:${host.address.port}`,
+    guestId: 'guest-close-cleanup-rejection',
+  });
+  const broker = await host.attachLocalBroker({ brokerId: 'broker-close-cleanup-rejection' });
+  let cleanupTimeout;
+  let cleanupErrorResolve;
+  const cleanupError = new Promise((resolve) => {
+    cleanupErrorResolve = resolve;
+  });
+  guest.onLifecycle((event) => {
+    if (event.error?.message.includes('async-close-cleanup-failed')) cleanupErrorResolve(event);
+  });
+  guest.attach((_request, response) => {
+    response.on('close', async () => {
+      await Promise.resolve();
+      throw new Error('async-close-cleanup-failed');
+    });
+    response.write('partial');
+    response.flushHeaders();
+  }, 'close-cleanup-rejection.local.test');
+
+  try {
+    await guest.connect();
+    await broker.waitForRoute('close-cleanup-rejection.local.test');
+    const response = await broker.request({
+      targetId: 'guest-close-cleanup-rejection',
+      method: 'GET',
+      path: '/',
+    });
+    response.body.destroy();
+    const event = await Promise.race([
+      cleanupError,
+      new Promise((_, reject) => {
+        cleanupTimeout = setTimeout(
+          () => reject(new Error('async close cleanup error was not observed')),
+          1000,
+        );
+      }),
+    ]);
+    assert.equal(event.error.message.includes('async-close-cleanup-failed'), true);
+  } finally {
+    clearTimeout(cleanupTimeout);
+    await broker.close('test-complete');
+    await host.close('test-complete');
+    await guest.close('test-complete');
+  }
+});
+
 test('Node Guest preserves response status text and ordered repeated headers on direct dispatch', async () => {
   const guest = createGuest({
     hostUrl: 'https://localhost:1',
