@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.9.3
+
+- Fixes request-scoped cancellation in Node Broker, Agent, and Fetch/Dispatcher
+  paths before response headers and during streaming, including internal redirects
+  and upload replay. Shared sessions and unrelated requests remain usable; normal
+  upload EOF is not cancellation.
+- Adds receiving Guest cleanup signals: Node response `close`/`destroyed` state, Bun
+  handler `Request.signal`, and Python ASGI `http.disconnect` monitoring after upload EOF.
+  Handler resource cleanup remains cooperative.
+- Adds deterministic response-arrival race tests and cross-runtime TLS cancellation
+  coverage. CI now provisions Bun for the runtime integration suite.
+- Removes obsolete Conductor repository files and references.
+
 ## v0.9.2
 
 - Hosts accept multiple independently authenticated Broker HTTP/2 sessions under
