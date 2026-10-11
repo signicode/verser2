@@ -70,6 +70,188 @@ async function closeRoute(route) {
   await withTimeout(route.host.close('test-complete'), 'host close');
 }
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createControlledResponseBody() {
+  let readCount = 0;
+  let pipeCount = 0;
+  let destroyCount = 0;
+  let closeCount = 0;
+  const closed = createDeferred();
+  const body = new Readable({
+    read() {
+      readCount++;
+    },
+    destroy(error, callback) {
+      destroyCount++;
+      queueMicrotask(() => callback(error ?? null));
+    },
+  });
+  const originalPipe = body.pipe;
+  body.pipe = function (...args) {
+    pipeCount++;
+    return originalPipe.apply(this, args);
+  };
+  body.once('close', () => {
+    closeCount++;
+    closed.resolve();
+  });
+  return {
+    body,
+    closed: closed.promise,
+    releaseChunk() {
+      body.push(Buffer.from('controlled-dispatcher-chunk'));
+    },
+    end() {
+      body.push(null);
+    },
+    get readCount() {
+      return readCount;
+    },
+    get pipeCount() {
+      return pipeCount;
+    },
+    get destroyCount() {
+      return destroyCount;
+    },
+    get closeCount() {
+      return closeCount;
+    },
+  };
+}
+
+function createDeferredDispatcherBroker() {
+  const pendingResponse = createDeferred();
+  const admitted = createDeferred();
+  const broker = createVerserBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'deferred-dispatcher-race',
+  });
+  broker.getRoutes = () => [
+    { targetId: 'deferred-dispatcher-target', domain: 'dispatcher-race.local.test' },
+  ];
+  let capturedRequest;
+  let requestCount = 0;
+  broker.request = (request) => {
+    requestCount++;
+    if (requestCount === 1) {
+      capturedRequest = request;
+      admitted.resolve();
+      return pendingResponse.promise;
+    }
+    return Promise.resolve({
+      statusCode: 200,
+      headers: {},
+      body: Readable.from([Buffer.from('dispatcher-followup')]),
+    });
+  };
+  return {
+    broker,
+    dispatcher: broker.createDispatcher(),
+    admitted: admitted.promise,
+    pendingResponse,
+    get capturedRequest() {
+      return capturedRequest;
+    },
+  };
+}
+
+function dispatchDeferredResponse(fixture, style, onEvents = {}) {
+  const events = {
+    starts: 0,
+    headers: 0,
+    data: 0,
+    errors: [],
+    completions: 0,
+    cleanupCalls: 0,
+  };
+  let controller;
+  let legacyAbort;
+  const handler =
+    style === 'modern'
+      ? {
+          onRequestStart(currentController) {
+            controller = currentController;
+            events.starts++;
+            const removeCleanup = currentController.onTerminal(() => {
+              events.cleanupCalls++;
+            });
+            onEvents.onController?.(currentController);
+            events.removeCleanup = removeCleanup;
+          },
+          onResponseStart(currentController) {
+            events.headers++;
+            onEvents.onHeaders?.(currentController);
+          },
+          onResponseData(currentController, chunk) {
+            events.data++;
+            onEvents.onData?.(currentController, chunk);
+          },
+          onResponseEnd(currentController) {
+            events.completions++;
+            onEvents.onComplete?.(currentController);
+          },
+          onResponseError(currentController, error) {
+            events.errors.push({ controller: currentController, error });
+            onEvents.onError?.(currentController, error);
+          },
+        }
+      : {
+          onConnect(abort) {
+            legacyAbort = abort;
+            events.starts++;
+          },
+          onHeaders() {
+            events.headers++;
+            onEvents.onHeaders?.();
+            return true;
+          },
+          onData(chunk) {
+            events.data++;
+            onEvents.onData?.(chunk);
+            return true;
+          },
+          onComplete() {
+            events.completions++;
+            onEvents.onComplete?.();
+          },
+          onError(error) {
+            events.errors.push({ error });
+            onEvents.onError?.(error);
+          },
+        };
+  fixture.dispatcher.dispatch(
+    {
+      origin: 'http://dispatcher-race.local.test',
+      path: '/arrival-race',
+      method: 'GET',
+    },
+    handler,
+  );
+  return {
+    events,
+    get controller() {
+      return controller;
+    },
+    get legacyAbort() {
+      return legacyAbort;
+    },
+  };
+}
+
+function abortDeferredDispatch(dispatch, style, reason) {
+  if (style === 'modern') dispatch.controller.abort(reason);
+  else dispatch.legacyAbort(reason);
+}
+
 // Warm up TLS/HTTP2/Undici infrastructure so individual tests don't pay
 // the one-time initialization cost of TLS contexts, HTTP/2 sessions, and
 // Undici dispatcher internals.
@@ -646,6 +828,133 @@ test('Broker Dispatcher pre-header GET and HEAD aborts wait for remote cleanup',
     }
   } finally {
     await closeRoute(route);
+  }
+});
+
+test('Broker Dispatcher discards late responses when abort wins handoff', async () => {
+  for (const style of ['modern', 'legacy']) {
+    for (const ordering of ['abort-first', 'fulfill-then-abort-same-turn']) {
+      const fixture = createDeferredDispatcherBroker();
+      const notified = createDeferred();
+      const dispatch = dispatchDeferredResponse(fixture, style, {
+        onError: () => notified.resolve(),
+      });
+      const reason = new Error(`${style}-${ordering}-reason`);
+      const body = createControlledResponseBody();
+      try {
+        await withTimeout(fixture.admitted, `${style}/${ordering} Broker admission`);
+        if (ordering === 'fulfill-then-abort-same-turn') {
+          fixture.pendingResponse.resolve({ statusCode: 200, headers: {}, body: body.body });
+        }
+        abortDeferredDispatch(dispatch, style, reason);
+        await withTimeout(notified.promise, `${style}/${ordering} failure callback`);
+        if (ordering === 'abort-first') {
+          fixture.pendingResponse.resolve({ statusCode: 200, headers: {}, body: body.body });
+        }
+        await withTimeout(body.closed, `${style}/${ordering} late body disposal`);
+        await new Promise((resolve) => setImmediate(resolve));
+
+        assert.equal(fixture.capturedRequest.signal.aborted, true);
+        assert.equal(dispatch.events.starts, 1);
+        assert.equal(dispatch.events.headers, 0);
+        assert.equal(dispatch.events.data, 0);
+        assert.equal(dispatch.events.completions, 0);
+        assert.equal(dispatch.events.errors.length, 1);
+        assert.equal(dispatch.events.errors[0].error, reason);
+        assert.equal(body.pipeCount, 0);
+        assert.equal(body.readCount, 0);
+        assert.equal(body.destroyCount, 1);
+        assert.equal(body.closeCount, 1);
+        if (style === 'modern') {
+          assert.equal(dispatch.controller.signal.aborted, true);
+          assert.equal(dispatch.events.cleanupCalls, 1);
+          dispatch.controller.abort(new Error('reentrant abort after terminal'));
+          dispatch.controller.fail(new Error('reentrant failure after terminal'));
+          dispatch.events.removeCleanup();
+          dispatch.controller.onTerminal(() => {
+            dispatch.events.cleanupCalls++;
+          });
+          assert.equal(dispatch.events.cleanupCalls, 2);
+          assert.equal(dispatch.events.errors.length, 1);
+        }
+      } finally {
+        if (!body.body.destroyed) body.body.destroy();
+        await fixture.broker.close('arrival-race-complete');
+      }
+    }
+  }
+});
+
+test('Broker Dispatcher owns late Broker rejection without replacing abort failure', async () => {
+  for (const style of ['modern', 'legacy']) {
+    const fixture = createDeferredDispatcherBroker();
+    const notified = createDeferred();
+    const dispatch = dispatchDeferredResponse(fixture, style, {
+      onError: () => notified.resolve(),
+    });
+    const reason = new Error(`${style}-abort-before-rejection`);
+    try {
+      await withTimeout(fixture.admitted, `${style} late rejection admission`);
+      abortDeferredDispatch(dispatch, style, reason);
+      await withTimeout(notified.promise, `${style} first failure notification`);
+      fixture.pendingResponse.reject(new Error('late Broker request rejection'));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.equal(fixture.capturedRequest.signal.aborted, true);
+      assert.equal(dispatch.events.errors.length, 1);
+      assert.equal(dispatch.events.errors[0].error, reason);
+      assert.equal(dispatch.events.headers, 0);
+      assert.equal(dispatch.events.data, 0);
+      assert.equal(dispatch.events.completions, 0);
+      if (style === 'modern') assert.equal(dispatch.events.cleanupCalls, 1);
+    } finally {
+      await fixture.broker.close('arrival-race-complete');
+    }
+  }
+});
+
+test('Broker Dispatcher abort after response data reports one failure and no completion', async () => {
+  for (const style of ['modern', 'legacy']) {
+    const fixture = createDeferredDispatcherBroker();
+    const headers = createDeferred();
+    const firstData = createDeferred();
+    const notified = createDeferred();
+    const dispatch = dispatchDeferredResponse(fixture, style, {
+      onHeaders: () => headers.resolve(),
+      onData: () => firstData.resolve(),
+      onError: () => notified.resolve(),
+    });
+    const reason = new Error(`${style}-abort-after-data`);
+    const body = createControlledResponseBody();
+    try {
+      await withTimeout(fixture.admitted, `${style} response-first admission`);
+      fixture.pendingResponse.resolve({ statusCode: 200, headers: {}, body: body.body });
+      await withTimeout(headers.promise, `${style} response headers`);
+      body.releaseChunk();
+      await withTimeout(firstData.promise, `${style} first response chunk`);
+      abortDeferredDispatch(dispatch, style, reason);
+      await withTimeout(notified.promise, `${style} response body abort failure`);
+      await withTimeout(body.closed, `${style} response body cleanup`);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.equal(fixture.capturedRequest.signal.aborted, true);
+      assert.equal(dispatch.events.headers, 1);
+      assert.equal(dispatch.events.data, 1);
+      assert.equal(dispatch.events.completions, 0);
+      assert.equal(dispatch.events.errors.length, 1);
+      assert.equal(dispatch.events.errors[0].error, reason);
+      assert.equal(body.readCount > 0, true);
+      assert.equal(body.pipeCount, 0, 'Dispatcher consumes through data callbacks, not pipe()');
+      assert.equal(body.destroyCount, 1);
+      assert.equal(body.closeCount, 1);
+      if (style === 'modern') {
+        assert.equal(dispatch.controller.signal.aborted, true);
+        assert.equal(dispatch.events.cleanupCalls, 1);
+      }
+    } finally {
+      if (!body.body.destroyed) body.body.destroy();
+      await fixture.broker.close('arrival-race-complete');
+    }
   }
 });
 

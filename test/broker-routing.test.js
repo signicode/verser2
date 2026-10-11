@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const http2 = require('node:http2');
-const { PassThrough } = require('node:stream');
+const { PassThrough, Readable, Writable } = require('node:stream');
 const test = require('node:test');
 const { test: guardedTest } = require('./support/guarded-test.cjs');
 
@@ -56,25 +56,35 @@ function waitForClose(emitter) {
   return new Promise((resolve) => emitter.once('close', resolve));
 }
 
-function observeBrokerRequestStreams(broker) {
-  const session = broker.session;
-  const request = session.request.bind(session);
-  const streams = [];
-  session.request = (headers, ...options) => {
-    const stream = request(headers, ...options);
-    if (headers[':path'] === '/verser/request') streams.push(stream);
-    return stream;
-  };
-  return {
-    streams,
-    restore() {
-      session.request = request;
-    },
-  };
+function deferred() {
+  let resolve;
+  const promise = new Promise((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+function withTimeout(promise, label, timeoutMs = 5000) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function observeOutcome(promise) {
+  return promise.then(
+    (value) => ({ type: 'fulfilled', value }),
+    (error) => ({ type: 'rejected', error }),
+  );
 }
 
 function trackAbortListeners(signal) {
   const listeners = new Set();
+  const addDescriptor = Object.getOwnPropertyDescriptor(signal, 'addEventListener');
+  const removeDescriptor = Object.getOwnPropertyDescriptor(signal, 'removeEventListener');
   const add = signal.addEventListener;
   const remove = signal.removeEventListener;
   signal.addEventListener = function (type, listener, options) {
@@ -85,7 +95,577 @@ function trackAbortListeners(signal) {
     if (type === 'abort') listeners.delete(listener);
     return remove.call(this, type, listener, options);
   };
-  return () => listeners.size;
+  const count = () => listeners.size;
+  count.restore = () => {
+    if (addDescriptor === undefined) Reflect.deleteProperty(signal, 'addEventListener');
+    else Object.defineProperty(signal, 'addEventListener', addDescriptor);
+    if (removeDescriptor === undefined) Reflect.deleteProperty(signal, 'removeEventListener');
+    else Object.defineProperty(signal, 'removeEventListener', removeDescriptor);
+  };
+  return count;
+}
+
+function createControlledBody() {
+  const chunk = Buffer.from('bounded-response-chunk');
+  const chunkConsumed = deferred();
+  const bodyChunkConsumed = deferred();
+  const destroyed = deferred();
+  const closed = deferred();
+  const pumpFinished = deferred();
+  const counters = {
+    readCalls: 0,
+    bytesProduced: 0,
+    bytesConsumed: 0,
+    pipeCalls: 0,
+    destroyCalls: 0,
+    closeCalls: 0,
+  };
+  let chunkReleased = false;
+  let chunkPushed = false;
+  let sourceEnded = false;
+  let eofPushed = false;
+  const pushAvailable = () => {
+    if (chunkReleased && !chunkPushed && !source.destroyed) {
+      chunkPushed = true;
+      counters.bytesProduced += chunk.byteLength;
+      source.push(Buffer.from(chunk));
+      chunkConsumed.resolve();
+    }
+    if (sourceEnded && chunkPushed && !eofPushed && !source.destroyed) {
+      eofPushed = true;
+      source.push(null);
+    }
+  };
+  const source = new Readable({
+    read() {
+      counters.readCalls += 1;
+      pushAvailable();
+    },
+    destroy(error, callback) {
+      counters.destroyCalls += 1;
+      setImmediate(() => {
+        destroyed.resolve();
+        callback(error);
+      });
+    },
+  });
+  const originalPipe = source.pipe;
+  source.pipe = function (...args) {
+    counters.pipeCalls += 1;
+    return originalPipe.apply(this, args);
+  };
+  source.once('close', () => {
+    counters.closeCalls += 1;
+    closed.resolve();
+  });
+
+  return {
+    source,
+    counters,
+    chunkLength: chunk.byteLength,
+    chunkConsumed: chunkConsumed.promise,
+    bodyChunkConsumed: bodyChunkConsumed.promise,
+    markChunkConsumed() {
+      bodyChunkConsumed.resolve();
+    },
+    destroyed: destroyed.promise,
+    closed: closed.promise,
+    pumpFinished: pumpFinished.promise,
+    markPumpFinished() {
+      pumpFinished.resolve();
+    },
+    releaseChunk() {
+      chunkReleased = true;
+      pushAvailable();
+    },
+    end() {
+      chunkReleased = true;
+      sourceEnded = true;
+      pushAvailable();
+    },
+    destroy() {
+      source.destroy();
+    },
+  };
+}
+
+function pumpControlledBody(controlled, response) {
+  return (async () => {
+    try {
+      for await (const chunk of controlled.source) {
+        controlled.counters.bytesConsumed += chunk.byteLength;
+        controlled.markChunkConsumed();
+        if (!response.write(chunk)) {
+          await new Promise((resolve, reject) => {
+            const cleanup = () => {
+              response.off('drain', onDrain);
+              response.off('close', onClose);
+              response.off('error', onError);
+            };
+            const onDrain = () => {
+              cleanup();
+              resolve();
+            };
+            const onClose = () => {
+              cleanup();
+              resolve();
+            };
+            const onError = (error) => {
+              cleanup();
+              reject(error);
+            };
+            response.once('drain', onDrain);
+            response.once('close', onClose);
+            response.once('error', onError);
+          });
+        }
+        if (response.destroyed) return;
+      }
+      if (!response.destroyed && !response.finished) response.end();
+    } catch (error) {
+      if (!controlled.source.destroyed && !response.destroyed) throw error;
+    } finally {
+      controlled.markPumpFinished();
+    }
+  })();
+}
+
+function createNativeRequestObserver(broker, requestPath, onStream) {
+  const observed = observeBrokerRequestStreams(broker, (headers, stream) => {
+    if (headers['x-verser-path'] === requestPath) onStream(stream);
+  });
+  return observed;
+}
+
+function createArrivalCounters() {
+  return {
+    requestOnceCalls: 0,
+    requestOnceFulfilled: 0,
+    requestOnceRejected: 0,
+    settled: deferred(),
+    observations: [],
+    responseEmits: 0,
+    responseEmitsForwarded: 0,
+    nativeCloseCount: 0,
+    destroyWithoutErrorAfterFulfillment: 0,
+    destroyWithErrorAfterFulfillment: 0,
+  };
+}
+
+function installArrivalObservers(broker, requestPath, mode, controller, reason, counters) {
+  let stream;
+  let nativeClose;
+  let responseDelivery;
+  let restoreStreamDestroy;
+  const restoreRequestOnce = observeRequestOnce(broker, requestPath, counters);
+  const nativeRequestObserver = createNativeRequestObserver(broker, requestPath, (nativeStream) => {
+    stream = nativeStream;
+    const native = observeNativeStream(nativeStream, counters, counters);
+    nativeClose = native.closed;
+    restoreStreamDestroy = native.restoreDestroy;
+    responseDelivery = holdNativeResponseDelivery(nativeStream, mode, controller, counters, reason);
+  });
+  return {
+    counters,
+    streams: nativeRequestObserver.streams,
+    get stream() {
+      return stream;
+    },
+    get nativeClose() {
+      return nativeClose;
+    },
+    get responseDelivery() {
+      return responseDelivery;
+    },
+    restore() {
+      responseDelivery?.restore();
+      restoreStreamDestroy?.();
+      nativeRequestObserver.restore();
+      restoreRequestOnce();
+    },
+  };
+}
+
+async function createNativeArrivalScenario({ brokerId, guestId, domain, path }) {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId });
+  const guest = createGuest({ hostUrl, guestId, minWaitingStreams: 2 });
+  const entered = deferred();
+  const uploadEnded = deferred();
+  const allowHeaders = deferred();
+  const cleanup = deferred();
+  const controlledBody = createControlledBody();
+  let handlerEntered = false;
+
+  guest.attach(async (request, response) => {
+    if (request.url === '/followup') {
+      await waitForRequestEnd(request);
+      response.end('followup-ok');
+      return;
+    }
+    if (request.url !== path) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+
+    handlerEntered = true;
+    entered.resolve();
+    const termination = deferred();
+    const onTermination = () => termination.resolve();
+    request.on('error', onTermination);
+    response.on('error', onTermination);
+    response.on('close', onTermination);
+    let pumpTask;
+    try {
+      await waitForRequestEnd(request);
+      uploadEnded.resolve();
+      await allowHeaders.promise;
+      response.writeHead(200, { 'content-type': 'application/octet-stream' });
+      response.flushHeaders();
+      pumpTask = pumpControlledBody(controlledBody, response);
+      await termination.promise;
+    } finally {
+      request.off('error', onTermination);
+      response.off('error', onTermination);
+      response.off('close', onTermination);
+      controlledBody.destroy();
+      await controlledBody.destroyed;
+      await controlledBody.closed;
+      if (pumpTask !== undefined) await pumpTask;
+      cleanup.resolve();
+    }
+  }, domain);
+
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute(domain);
+    return {
+      host,
+      broker,
+      guest,
+      session: broker.session,
+      entered: entered.promise,
+      hasHandlerEntered: () => handlerEntered,
+      uploadEnded: uploadEnded.promise,
+      allowHeaders,
+      cleanup: cleanup.promise,
+      controlledBody,
+    };
+  } catch (error) {
+    await broker.close('arrival setup failed').catch(() => {});
+    await guest.close('arrival setup failed').catch(() => {});
+    await host.close('arrival setup failed').catch(() => {});
+    throw error;
+  }
+}
+
+function observeNativeStream(stream, counters, requestOnceCounters) {
+  const closed = deferred();
+  const restoreDestroy = trackNativeStreamDestroy(stream, requestOnceCounters);
+  stream.once('close', () => {
+    counters.nativeCloseCount += 1;
+    closed.resolve();
+  });
+  return { closed: closed.promise, restoreDestroy };
+}
+
+async function assertNativeFollowup(arrival) {
+  assert.equal(arrival.broker.session, arrival.session);
+  assert.equal(arrival.session.closed, false);
+  assert.equal(arrival.session.destroyed, false);
+  const response = await arrival.broker.request({
+    targetId: 'arrival-race-guest',
+    method: 'GET',
+    path: '/followup',
+  });
+  let responseText = '';
+  for await (const chunk of response.body) {
+    responseText += Buffer.from(chunk).toString('utf8');
+    assert.ok(responseText.length <= 32, 'arrival follow-up remains bounded');
+  }
+  assert.equal(responseText, 'followup-ok');
+  assert.equal(arrival.broker.session, arrival.session);
+  assert.equal(arrival.session.closed, false);
+  assert.equal(arrival.session.destroyed, false);
+}
+
+function createBoundedBodyConsumer(stream) {
+  const firstChunk = deferred();
+  const terminal = deferred();
+  let totalBytes = 0;
+  let settled = false;
+  const sink = new Writable({
+    write(chunk, _encoding, callback) {
+      totalBytes += Buffer.byteLength(chunk);
+      if (totalBytes > 1024) {
+        callback(new Error('arrival race body consumer exceeded its bound'));
+        return;
+      }
+      firstChunk.resolve(totalBytes);
+      callback();
+    },
+  });
+  const onError = (error) => {
+    if (settled) return;
+    settled = true;
+    terminal.resolve({ type: 'error', error });
+  };
+  const onEnd = () => {
+    if (settled) return;
+    settled = true;
+    terminal.resolve({ type: 'end' });
+  };
+  const onSinkError = (error) => {
+    if (settled) return;
+    settled = true;
+    terminal.resolve({ type: 'sink-error', error });
+  };
+  stream.on('error', onError);
+  stream.once('end', onEnd);
+  sink.on('error', onSinkError);
+  stream.pipe(sink);
+  return {
+    firstChunk: firstChunk.promise,
+    terminal: terminal.promise,
+    get bytesRead() {
+      return totalBytes;
+    },
+    cleanup() {
+      stream.unpipe(sink);
+      stream.off('error', onError);
+      stream.off('end', onEnd);
+      sink.off('error', onSinkError);
+      if (!sink.destroyed) sink.destroy();
+    },
+  };
+}
+
+function trackNativeStreamDestroy(stream, counters) {
+  const descriptor = Object.getOwnPropertyDescriptor(stream, 'destroy');
+  const original = stream.destroy;
+  stream.destroy = function (...args) {
+    if (counters.requestOnceFulfilled > 0) {
+      if (args.length === 0 || args[0] === undefined || args[0] === null) {
+        counters.destroyWithoutErrorAfterFulfillment += 1;
+      } else {
+        counters.destroyWithErrorAfterFulfillment += 1;
+      }
+    }
+    return original.apply(this, args);
+  };
+  return () => {
+    if (descriptor === undefined) Reflect.deleteProperty(stream, 'destroy');
+    else Object.defineProperty(stream, 'destroy', descriptor);
+  };
+}
+
+function holdNativeResponseDelivery(stream, mode, controller, counters, abortReason) {
+  const descriptor = Object.getOwnPropertyDescriptor(stream, 'emit');
+  const original = stream.emit;
+  const captured = deferred();
+  let savedArgs;
+  let held = false;
+  let delivered = false;
+  stream.emit = function (event, ...args) {
+    if (event !== 'response' || delivered) return original.call(this, event, ...args);
+    delivered = true;
+    counters.responseEmits += 1;
+    if (mode === 'hold') {
+      held = true;
+      savedArgs = args;
+      captured.resolve(args[0]);
+      return true;
+    }
+    const result = original.call(this, event, ...args);
+    counters.responseEmitsForwarded += 1;
+    captured.resolve(args[0]);
+    if (mode === 'forward-abort-same-turn') {
+      controller.abort(abortReason);
+    }
+    return result;
+  };
+  return {
+    captured: captured.promise,
+    get held() {
+      return held;
+    },
+    releaseLate() {
+      if (!held || savedArgs === undefined) return false;
+      held = false;
+      counters.responseEmitsForwarded += 1;
+      return original.call(stream, 'response', ...savedArgs);
+    },
+    restore() {
+      if (descriptor === undefined) Reflect.deleteProperty(stream, 'emit');
+      else Object.defineProperty(stream, 'emit', descriptor);
+    },
+  };
+}
+
+test.before(async () => {
+  const host = createHost({ port: 0 });
+  await host.start();
+  const hostUrl = `https://127.0.0.1:${host.address.port}`;
+  const broker = createBroker({ hostUrl, brokerId: 'arrival-race-warmup-broker' });
+  const guest = createGuest({
+    hostUrl,
+    guestId: 'arrival-race-warmup-guest',
+    minWaitingStreams: 2,
+  });
+  guest.attach((_request, response) => response.end('followup-ok'), 'arrival-warmup.local.test');
+  try {
+    await broker.connect();
+    await guest.connect();
+    await broker.waitForRoute('arrival-warmup.local.test');
+    await assertBrokerFollowup({ broker, session: broker.session }, 'arrival-race-warmup-guest');
+  } finally {
+    await broker.close('arrival warmup complete');
+    await guest.close('arrival warmup complete');
+    await host.close('arrival warmup complete');
+  }
+});
+
+function observeRequestOnce(broker, requestPath, counters) {
+  const descriptor = Object.getOwnPropertyDescriptor(broker, 'requestOnce');
+  const original = broker.requestOnce;
+  broker.requestOnce = function (request) {
+    if (request.path !== requestPath) return original.call(this, request);
+    counters.requestOnceCalls += 1;
+    const originalPromise = original.call(this, request);
+    const observation = originalPromise.then(
+      (response) => {
+        counters.requestOnceFulfilled += 1;
+        counters.settled.resolve({ type: 'fulfilled' });
+        return { type: 'fulfilled' };
+      },
+      (error) => {
+        counters.requestOnceRejected += 1;
+        counters.settled.resolve({ type: 'rejected', error });
+        return { type: 'rejected', error };
+      },
+    );
+    counters.observations.push(observation);
+    return originalPromise;
+  };
+  return () => {
+    if (descriptor === undefined) Reflect.deleteProperty(broker, 'requestOnce');
+    else Object.defineProperty(broker, 'requestOnce', descriptor);
+  };
+}
+
+function waitForRequestEnd(request) {
+  return new Promise((resolve, reject) => {
+    const onEnd = () => {
+      request.off('error', onError);
+      resolve();
+    };
+    const onError = (error) => {
+      request.off('end', onEnd);
+      reject(error);
+    };
+    request.once('end', onEnd);
+    request.once('error', onError);
+    request.resume();
+  });
+}
+
+async function assertArrivalCleanup(arrival, { responseBytes }) {
+  await withTimeout(arrival.cleanup, 'arrival Guest resource cleanup');
+  await withTimeout(arrival.controlledBody.pumpFinished, 'arrival response pump completion');
+  const counters = arrival.controlledBody.counters;
+  assert.equal(counters.destroyCalls, 1);
+  assert.equal(counters.closeCalls, 1);
+  assert.equal(counters.bytesProduced, responseBytes);
+  assert.equal(counters.bytesConsumed, responseBytes);
+  assert.equal(counters.pipeCalls, 0);
+  assert.ok(counters.readCalls < 16, 'controlled source remained bounded');
+}
+
+async function assertBrokerFollowup(arrival, targetId = 'arrival-race-guest') {
+  assert.equal(arrival.broker.sessionCount, 1);
+  const response = await withTimeout(
+    arrival.broker.request({
+      targetId,
+      method: 'GET',
+      path: '/followup',
+    }),
+    'same-session Broker follow-up',
+  );
+  await withTimeout(
+    new Promise((resolve, reject) => {
+      let body = '';
+      response.body.setEncoding('utf8');
+      response.body.on('data', (chunk) => {
+        body += chunk;
+        assert.ok(body.length <= 32);
+      });
+      response.body.once('error', reject);
+      response.body.once('end', () => {
+        assert.equal(body, 'followup-ok');
+        resolve();
+      });
+    }),
+    'same-session Broker follow-up body',
+  );
+  assert.equal(arrival.broker.sessionCount, 1);
+}
+
+async function closeArrivalScenario(
+  arrival,
+  { controller, publicOutcome, observer, listenerCount, bodyConsumer } = {},
+) {
+  arrival.allowHeaders.resolve();
+  if (controller !== undefined && !controller.signal.aborted) {
+    controller.abort(new Error('arrival race test cleanup'));
+  }
+  if (observer?.nativeClose !== undefined) {
+    await withTimeout(observer.nativeClose, 'arrival native stream cleanup', 2_000).catch(() => {});
+    observer.responseDelivery?.releaseLate();
+  }
+  if (publicOutcome !== undefined) {
+    await withTimeout(publicOutcome, 'arrival public request cleanup', 2_000).catch(() => {});
+  }
+  bodyConsumer?.cleanup();
+  if (arrival.hasHandlerEntered()) {
+    await withTimeout(arrival.cleanup, 'arrival Guest cleanup', 2_000).catch(() => {});
+  }
+  if (!arrival.controlledBody.source.destroyed) arrival.controlledBody.destroy();
+  await withTimeout(
+    arrival.controlledBody.destroyed,
+    'controlled response source destroy',
+    2_000,
+  ).catch(() => {});
+  observer?.restore();
+  listenerCount?.restore();
+  await arrival.broker.close('arrival race test complete').catch(() => {});
+  await arrival.guest.close('arrival race test complete').catch(() => {});
+  await arrival.host.close('arrival race test complete').catch(() => {});
+}
+
+function observeBrokerRequestStreams(broker, onRequestStream = () => {}) {
+  const session = broker.session;
+  const descriptor = Object.getOwnPropertyDescriptor(session, 'request');
+  const request = session.request;
+  const streams = [];
+  session.request = function (headers, ...options) {
+    const stream = request.call(this, headers, ...options);
+    if (headers[':path'] === '/verser/request') {
+      streams.push(stream);
+      onRequestStream(headers, stream);
+    }
+    return stream;
+  };
+  return {
+    streams,
+    restore() {
+      if (descriptor === undefined) Reflect.deleteProperty(session, 'request');
+      else Object.defineProperty(session, 'request', descriptor);
+    },
+  };
 }
 
 async function connectRawClient(port) {
@@ -3698,5 +4278,279 @@ test('Broker request abort propagates as an error event to Guest handler request
   } finally {
     await host.close('test-complete');
     await guest.close('test-complete');
+  }
+});
+
+guardedTest(
+  'Broker arrival race: abort before held native headers preserves rejection after late delivery',
+  async () => {
+    const requestPath = '/arrival-held';
+    const arrival = await createNativeArrivalScenario({
+      brokerId: 'broker-arrival-held',
+      guestId: 'arrival-race-guest',
+      domain: 'arrival-held.local.test',
+      path: requestPath,
+    });
+    const controller = new AbortController();
+    const listenerCount = trackAbortListeners(controller.signal);
+    const reason = new Error('abort before native response delivery');
+    const counters = createArrivalCounters();
+    let observer;
+    let publicSettlementCount = 0;
+    let publicOutcomePromise;
+    let responseOutcome;
+
+    try {
+      observer = installArrivalObservers(
+        arrival.broker,
+        requestPath,
+        'hold',
+        controller,
+        reason,
+        counters,
+      );
+      publicOutcomePromise = observeOutcome(
+        arrival.broker.request({
+          targetId: 'arrival-race-guest',
+          method: 'GET',
+          path: requestPath,
+          signal: controller.signal,
+        }),
+      ).then((outcome) => {
+        publicSettlementCount += 1;
+        responseOutcome = outcome;
+        return outcome;
+      });
+
+      await withTimeout(arrival.entered, 'held-race Guest entry');
+      await withTimeout(arrival.uploadEnded, 'held-race upload EOF');
+      arrival.allowHeaders.resolve();
+      const headers = await withTimeout(
+        observer.responseDelivery.captured,
+        'actual native response header capture',
+      );
+      assert.equal(Number(headers[':status']), 200);
+      assert.equal(observer.responseDelivery.held, true);
+      assert.equal(counters.responseEmits, 1);
+      assert.equal(counters.responseEmitsForwarded, 0);
+      assert.equal(counters.requestOnceCalls, 1);
+      assert.equal(counters.requestOnceFulfilled, 0);
+      assert.equal(counters.requestOnceRejected, 0);
+      assert.equal(publicSettlementCount, 0);
+
+      controller.abort(reason);
+
+      const publicOutcome = await withTimeout(publicOutcomePromise, 'held-race public rejection');
+      assert.equal(publicOutcome.type, 'rejected');
+      assert.equal(publicOutcome.error.name, 'AbortError');
+      assert.equal(publicOutcome.error.code, 'ABORT_ERR');
+      assert.equal(publicOutcome.error.cause, reason);
+      const nativeOutcome = await withTimeout(
+        counters.settled.promise,
+        'held-race requestOnce rejection',
+      );
+      assert.equal(nativeOutcome.type, 'rejected');
+      assert.equal(counters.requestOnceRejected, 1);
+      assert.equal(counters.requestOnceFulfilled, 0);
+      await withTimeout(observer.nativeClose, 'held-race native close');
+      await assertArrivalCleanup(arrival, {
+        responseBytes: 0,
+      });
+      assert.equal(observer.stream.rstCode, http2.constants.NGHTTP2_CANCEL);
+      assert.equal(listenerCount(), 0);
+
+      assert.equal(observer.responseDelivery.releaseLate(), true);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(
+        publicSettlementCount,
+        1,
+        'late response delivery cannot resettle public request',
+      );
+      assert.equal(responseOutcome, publicOutcome);
+      assert.equal(counters.requestOnceRejected, 1);
+      assert.equal(counters.requestOnceFulfilled, 0);
+      assert.equal(counters.responseEmits, 1);
+      assert.equal(counters.responseEmitsForwarded, 1);
+      await assertBrokerFollowup(arrival);
+    } finally {
+      if (!controller.signal.aborted) controller.abort(reason);
+      await closeArrivalScenario(arrival, {
+        controller,
+        publicOutcome: publicOutcomePromise,
+        observer,
+        listenerCount,
+      });
+    }
+  },
+);
+
+guardedTest(
+  'Broker arrival race: accepted native headers abort before the public handoff continuation',
+  async () => {
+    const requestPath = '/arrival-abort-after-headers';
+    const arrival = await createNativeArrivalScenario({
+      brokerId: 'broker-arrival-after-headers',
+      guestId: 'arrival-race-guest',
+      domain: 'arrival-after-headers.local.test',
+      path: requestPath,
+    });
+    const controller = new AbortController();
+    const listenerCount = trackAbortListeners(controller.signal);
+    const reason = new Error('abort after native response classification');
+    const counters = createArrivalCounters();
+    let observer;
+    let publicOutcomePromise;
+
+    try {
+      observer = installArrivalObservers(
+        arrival.broker,
+        requestPath,
+        'forward-abort-same-turn',
+        controller,
+        reason,
+        counters,
+      );
+      publicOutcomePromise = observeOutcome(
+        arrival.broker.request({
+          targetId: 'arrival-race-guest',
+          method: 'GET',
+          path: requestPath,
+          signal: controller.signal,
+        }),
+      );
+
+      await withTimeout(arrival.entered, 'accepted-race Guest entry');
+      await withTimeout(arrival.uploadEnded, 'accepted-race upload EOF');
+      arrival.allowHeaders.resolve();
+      const headers = await withTimeout(
+        observer.responseDelivery.captured,
+        'native response accepted before same-turn abort',
+      );
+      assert.equal(Number(headers[':status']), 200);
+      const nativeOutcome = await withTimeout(
+        counters.settled.promise,
+        'requestOnce fulfillment after actual native classification',
+      );
+      assert.equal(nativeOutcome.type, 'fulfilled');
+      assert.equal(counters.requestOnceCalls, 1);
+      assert.equal(counters.requestOnceFulfilled, 1);
+      assert.equal(counters.requestOnceRejected, 0);
+
+      const publicOutcome = await withTimeout(
+        publicOutcomePromise,
+        'post-classification public abort rejection',
+      );
+      assert.equal(publicOutcome.type, 'rejected');
+      assert.equal(publicOutcome.error.name, 'AbortError');
+      assert.equal(publicOutcome.error.code, 'ABORT_ERR');
+      assert.equal(publicOutcome.error.cause, reason);
+      await withTimeout(observer.nativeClose, 'accepted-race native close');
+      await assertArrivalCleanup(arrival, { responseBytes: 0 });
+      assert.equal(observer.stream.rstCode, http2.constants.NGHTTP2_CANCEL);
+      assert.equal(counters.responseEmitsForwarded, 1);
+      assert.ok(
+        counters.destroyWithoutErrorAfterFulfillment > 0,
+        'the post-await abort guard must dispose its now-inaccessible fulfilled body',
+      );
+      assert.equal(listenerCount(), 0);
+      assert.equal(observer.streams.length, 1, 'abort admitted no redirect/second native request');
+      await assertBrokerFollowup(arrival);
+    } finally {
+      if (!controller.signal.aborted) controller.abort(reason);
+      await closeArrivalScenario(arrival, {
+        controller,
+        publicOutcome: publicOutcomePromise,
+        observer,
+        listenerCount,
+      });
+    }
+  },
+);
+
+guardedTest('Broker arrival race: delivered response body consumption fails on abort', async () => {
+  const requestPath = '/arrival-body-consumer';
+  const arrival = await createNativeArrivalScenario({
+    brokerId: 'broker-arrival-body-consumer',
+    guestId: 'arrival-race-guest',
+    domain: 'arrival-body-consumer.local.test',
+    path: requestPath,
+  });
+  const controller = new AbortController();
+  const listenerCount = trackAbortListeners(controller.signal);
+  const reason = new Error('abort during response body consumption');
+  const counters = createArrivalCounters();
+  let observer;
+  let bodyConsumer;
+  let publicOutcomePromise;
+
+  try {
+    observer = installArrivalObservers(
+      arrival.broker,
+      requestPath,
+      'forward',
+      controller,
+      reason,
+      counters,
+    );
+    publicOutcomePromise = observeOutcome(
+      arrival.broker.request({
+        targetId: 'arrival-race-guest',
+        method: 'GET',
+        path: requestPath,
+        signal: controller.signal,
+      }),
+    );
+
+    await withTimeout(arrival.entered, 'body-consumer Guest entry');
+    await withTimeout(arrival.uploadEnded, 'body-consumer upload EOF');
+    arrival.allowHeaders.resolve();
+    await withTimeout(observer.responseDelivery.captured, 'body-consumer native headers');
+    const publicOutcome = await withTimeout(
+      publicOutcomePromise,
+      'public response delivery before body abort',
+    );
+    assert.equal(publicOutcome.type, 'fulfilled');
+    assert.equal(counters.requestOnceFulfilled, 1);
+    assert.equal(counters.requestOnceRejected, 0);
+    assert.ok(listenerCount() > 0, 'native signal linkage stays active through response body');
+
+    bodyConsumer = createBoundedBodyConsumer(publicOutcome.value.body);
+    arrival.controlledBody.releaseChunk();
+    await withTimeout(arrival.controlledBody.chunkConsumed, 'body-consumer source chunk');
+    await withTimeout(arrival.controlledBody.bodyChunkConsumed, 'body-consumer remote write');
+    await withTimeout(bodyConsumer.firstChunk, 'public response body first chunk');
+    assert.ok(bodyConsumer.bytesRead <= 1024);
+
+    controller.abort(reason);
+    const bodyOutcome = await withTimeout(
+      bodyConsumer.terminal,
+      'actual response body consumer failure after abort',
+    );
+    assert.equal(
+      bodyOutcome.type,
+      'error',
+      'an already delivered body must reject/fail rather than silently end on abort',
+    );
+    assert.ok(bodyOutcome.error instanceof Error);
+    await withTimeout(observer.nativeClose, 'body-consumer native close');
+    await assertArrivalCleanup(arrival, {
+      responseBytes: arrival.controlledBody.chunkLength,
+    });
+    assert.equal(observer.stream.rstCode, http2.constants.NGHTTP2_CANCEL);
+    assert.equal(counters.requestOnceFulfilled, 1, 'native response promise stays fulfilled');
+    assert.equal(counters.requestOnceRejected, 0);
+    assert.equal(listenerCount(), 0);
+    bodyConsumer.cleanup();
+    await assertBrokerFollowup(arrival);
+  } finally {
+    bodyConsumer?.cleanup();
+    if (!controller.signal.aborted) controller.abort(reason);
+    await closeArrivalScenario(arrival, {
+      controller,
+      publicOutcome: publicOutcomePromise,
+      observer,
+      listenerCount,
+      bodyConsumer,
+    });
   }
 });
