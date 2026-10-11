@@ -149,6 +149,109 @@ using `fetch(url, { dispatcher: broker.createDispatcher() })` directly, pass
 `redirect: 'manual'` if you need to observe those fallback `307`/`308` responses
 unchanged.
 
+### Cancelling a Node Broker request
+
+Node Broker requests accept an optional request-scoped `AbortSignal`. The
+signal is preserved while request options are normalized and when an internal
+307/308 redirect is followed. An already-aborted signal rejects before the
+Broker allocates a native request stream or consumes a streamed upload body.
+Aborting after dispatch cancels that request, including while waiting for
+response headers or while streaming the response; it does not close the
+Broker's HTTP/2 session or cancel unrelated requests. Upload EOF is ordinary
+half-close behavior, not a cancellation signal.
+
+```ts
+import { pipeline } from 'node:stream/promises';
+
+const controller = new AbortController();
+const request = broker.request({
+  targetId: 'client-a',
+  method: 'GET',
+  path: '/report',
+  signal: controller.signal,
+});
+
+try {
+  const response = await request;
+  // Broker.request() resolves when response headers arrive. Consume the body
+  // incrementally; an abort after resolution interrupts body consumption.
+  await pipeline(response.body, process.stdout);
+} catch (error) {
+  if (controller.signal.aborted) {
+    console.info('The request or response-body transfer was cancelled');
+  } else {
+    throw error;
+  }
+}
+```
+
+The Node `Agent` and Broker `createFetch()` paths accept the standard
+`signal` request option. A Fetch call using `broker.createDispatcher()` also
+accepts Fetch's `signal` option. This works with `node-fetch` when it is given
+the Broker Agent:
+
+```ts
+import nodeFetch from 'node-fetch';
+import { pipeline } from 'node:stream/promises';
+
+const controller = new AbortController();
+try {
+  const response = await nodeFetch('http://client-a.local.test/report', {
+    agent: broker.createAgent(),
+    signal: controller.signal,
+  });
+  await pipeline(response.body, process.stdout);
+} catch (error) {
+  if (controller.signal.aborted) {
+    console.info('The request or response-body transfer was cancelled');
+  } else {
+    throw error;
+  }
+}
+```
+
+Fetch implementations and caller code may expose cancellation differently;
+the signal only scopes the routed request, not the Broker connection. Do not
+depend on a particular error name or rejection reason across adapters. Check
+whether your signal was aborted to recognize expected cancellation, and
+rethrow failures when it was not.
+
+The lower-level Undici `dispatcher.dispatch(options, handler)` callback API is
+different: it does not take Fetch's `signal` option. In the modern callback
+form, use the controller passed to `handler.onRequestStart(controller, origin)`
+and call `controller.abort(error)` to cancel. With the legacy callback form,
+call the abort function supplied to `handler.onConnect(abort)` instead.
+
+The Broker's Fetch helper and Fetch calls using its Dispatcher use Fetch's
+standard `signal` option:
+
+```ts
+import { pipeline } from 'node:stream/promises';
+
+const controller = new AbortController();
+const routedFetch = broker.createFetch();
+try {
+  const response = await routedFetch('http://client-a.local.test/report', {
+    signal: controller.signal,
+  });
+  // Fetch resolves at headers. If cancellation happens during body transfer,
+  // the body read is interrupted rather than rejecting this fulfilled promise.
+  if (response.body !== null) await pipeline(response.body, process.stdout);
+} catch (error) {
+  if (controller.signal.aborted) {
+    console.info('The request or response-body transfer was cancelled');
+  } else {
+    throw error;
+  }
+}
+```
+
+Arrange for the controller to be aborted by the application event or deadline
+that owns the operation. If response headers have already arrived, the request
+promise is already fulfilled; cancellation then stops response-body
+consumption, whose read/iteration can fail. The cancellation catch should
+therefore cover both the request await and incremental body consumption.
+
 ## Agent
 
 `createAgent()` returns a plain `http:` Agent that routes advertised hostnames

@@ -14,6 +14,7 @@ import { requireNonEmpty } from './utils';
  * @param request - The raw Broker request.
  * @returns A normalized Broker request ready for dispatch.
  * @throws {VerserError} If `targetId`, `method`, or required fields are empty.
+ * @throws {AbortSignal.reason} If cancellation has already been requested.
  * @throws {TypeError} If headers contain invalid local HTTP values.
  * @throws {Error} If the body type is not supported.
  * @public
@@ -21,6 +22,11 @@ import { requireNonEmpty } from './utils';
 export function createCommonBrokerRequest<TBody>(
   request: VerserCommonBrokerRequest<TBody>,
 ): VerserCommonBrokerRequest<TBody> {
+  // This must precede even reading/normalizing body: an iterable may have
+  // observable iterator side effects and a stream must remain caller-owned.
+  if (request.signal?.aborted) {
+    throw request.signal.reason;
+  }
   const normalizedBody =
     request.body === undefined ? undefined : normalizeBrokerRequestBody(request.body);
   const normalizedPath = normalizeBrokerRequestPath(request.path);
@@ -33,6 +39,7 @@ export function createCommonBrokerRequest<TBody>(
     path: normalizedPath,
     headers: normalizedHeaders as VerserHeaders,
     body: normalizedBody as unknown as TBody,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
   };
 }
 

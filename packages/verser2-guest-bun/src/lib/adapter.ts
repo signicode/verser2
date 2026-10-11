@@ -24,6 +24,8 @@ export interface NodeStyleRequest {
 
 export interface NodeStyleResponse {
   statusCode: number;
+  readonly finished?: boolean;
+  readonly destroyed?: boolean;
   writeHead(statusCode: number, headers?: ResponseHeaders): unknown;
   writeHead(statusCode: number, statusMessage?: string, headers?: ResponseHeaders): unknown;
   write(chunk: string | Buffer, encoding?: BufferEncoding): boolean;
@@ -69,6 +71,7 @@ interface VerserBunDispatchRequest {
   readonly origin: string;
   readonly headers?: Record<string, string>;
   readonly body?: BodyInit | null;
+  readonly signal?: AbortSignal;
 }
 
 interface VerserBunDispatchResponse {
@@ -117,6 +120,20 @@ export const streamRequestBody = (request: NodeStyleRequest): ReadableStream<Uin
   let dataHandler: ((chunk: unknown) => void) | undefined;
   let endHandler: (() => void) | undefined;
   let errorHandler: ((error: unknown) => void) | undefined;
+  let closeHandler: (() => void) | undefined;
+  let flowListenersRemoved = false;
+
+  const removeFlowListeners = (): void => {
+    if (flowListenersRemoved) return;
+    flowListenersRemoved = true;
+    if (dataHandler !== undefined) request.off?.('data', dataHandler);
+    if (endHandler !== undefined) request.off?.('end', endHandler);
+  };
+  const removeAllListeners = (): void => {
+    removeFlowListeners();
+    if (errorHandler !== undefined) request.off?.('error', errorHandler);
+    if (closeHandler !== undefined) request.off?.('close', closeHandler);
+  };
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -136,6 +153,7 @@ export const streamRequestBody = (request: NodeStyleRequest): ReadableStream<Uin
         }
       };
       endHandler = () => {
+        removeFlowListeners();
         try {
           controller.close();
         } catch {
@@ -143,25 +161,26 @@ export const streamRequestBody = (request: NodeStyleRequest): ReadableStream<Uin
         }
       };
       errorHandler = (error: unknown) => {
+        removeFlowListeners();
         try {
           controller.error(error);
         } catch {
           /* ignore if already errored/closed */
         }
       };
+      closeHandler = () => removeAllListeners();
       request.on('data', dataHandler);
       request.on('end', endHandler);
       request.on('error', errorHandler);
+      request.on('close', closeHandler);
     },
     pull() {
       // Consumer has consumed data; resume the Node source for more
       request.resume?.();
     },
     cancel(reason) {
+      removeFlowListeners();
       request.destroy?.(reason instanceof Error ? reason : undefined);
-      if (dataHandler !== undefined) request.off?.('data', dataHandler);
-      if (endHandler !== undefined) request.off?.('end', endHandler);
-      if (errorHandler !== undefined) request.off?.('error', errorHandler);
     },
   });
 };
@@ -178,6 +197,7 @@ const toWebRequest = (
   const requestInit: RequestInit = {
     method: request.method,
     headers: request.headers,
+    signal: request.signal,
   };
 
   if (request.body !== undefined && request.body !== null) {
@@ -571,109 +591,129 @@ const wireBunWebSocketCallbacks = (
   };
 };
 
+interface ResponseTermination {
+  readonly stopped: boolean;
+  readonly reason: unknown;
+  registerWakeup(wake: () => void): () => void;
+}
+
+interface ReadyResponse {
+  readonly response: VerserBunDispatchResponse;
+  readonly body: ReadableStream<Uint8Array> | null;
+}
+
+const readResponseChunk = (
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  termination: ResponseTermination,
+): Promise<ReadableStreamReadResult<Uint8Array> | undefined> => {
+  if (termination.stopped) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let unregister = (): void => undefined;
+    const settle = (result: ReadableStreamReadResult<Uint8Array> | undefined): void => {
+      if (settled) return;
+      settled = true;
+      unregister();
+      resolve(result);
+    };
+    unregister = termination.registerWakeup(() => settle(undefined));
+    if (termination.stopped) return;
+    try {
+      void reader.read().then(settle, (error: unknown) => {
+        if (termination.stopped) settle(undefined);
+        else {
+          if (settled) return;
+          settled = true;
+          unregister();
+          reject(error);
+        }
+      });
+    } catch (error) {
+      if (termination.stopped) settle(undefined);
+      else reject(error);
+    }
+  });
+};
+
+const waitForResponseDrain = (
+  response: NodeStyleResponse,
+  termination: ResponseTermination,
+): Promise<boolean> =>
+  new Promise((resolve) => {
+    if (termination.stopped) {
+      resolve(false);
+      return;
+    }
+    let settled = false;
+    let unregister = (): void => undefined;
+    const settle = (drained: boolean): void => {
+      if (settled) return;
+      settled = true;
+      response.off?.('drain', onDrain);
+      unregister();
+      resolve(drained);
+    };
+    const onDrain = (): void => settle(true);
+    unregister = termination.registerWakeup(() => settle(false));
+    if (settled || termination.stopped) {
+      settle(false);
+      return;
+    }
+    response.on?.('drain', onDrain);
+    if (response.on === undefined) settle(!termination.stopped);
+  });
+
+const discardResponseBody = async (
+  body: ReadableStream<Uint8Array> | null,
+  reason: unknown,
+): Promise<void> => {
+  if (body === null) return;
+  try {
+    await body.cancel(reason);
+  } catch {
+    // The handler may already own the stream; disposal remains best-effort.
+  }
+};
+
 const writeResponseBody = async (
   source: ReadableStream<Uint8Array> | null,
   response: NodeStyleResponse,
+  termination: ResponseTermination,
 ): Promise<void> => {
   if (source === null) {
-    response.end();
+    if (!termination.stopped) response.end();
     return;
   }
-
-  const reader = source.getReader();
-  let sinkTerminated = false;
-  let sourceCancellation: Promise<void> | undefined;
-  let resolveTermination!: () => void;
-  const termination = new Promise<void>((resolve) => {
-    resolveTermination = resolve;
-  });
-  let terminationSettled = false;
-  const terminate = (reason: unknown) => {
-    if (terminationSettled) return;
-    terminationSettled = true;
-    sinkTerminated = true;
-    sourceCancellation = reader.cancel(reason).then(() => undefined);
-    resolveTermination();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let cancelled = false;
+  const cancel = async (reason: unknown): Promise<void> => {
+    if (reader === undefined || cancelled) return;
+    cancelled = true;
+    try {
+      await reader.cancel(reason);
+    } catch {
+      // Own cancellation rejection without masking the original stream error.
+    }
   };
-  const onClose = () => terminate(new Error('Response sink closed'));
-  const onFinish = () => terminate(new Error('Response sink finished'));
-  const onError = (error: unknown) => terminate(error);
-  response.on?.('close', onClose);
-  response.on?.('finish', onFinish);
-  response.on?.('error', onError);
-
   try {
-    while (true) {
-      const result = await Promise.race([
-        reader.read(),
-        termination.then(() => ({ done: true, terminated: true as const })),
-      ]);
-      if ('terminated' in result) return;
-      const { done, value } = result;
-      if (done) {
-        response.end();
-        return;
+    reader = source.getReader();
+    while (!termination.stopped) {
+      const result = await readResponseChunk(reader, termination);
+      if (result === undefined || termination.stopped) break;
+      if (result.done) {
+        if (!termination.stopped) response.end();
+        break;
       }
-      const canContinue = response.write(Buffer.from(value));
-      if (!canContinue) {
-        await new Promise<void>((resolve, reject) => {
-          let settled = false;
-          const onDrain = () => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            resolve();
-          };
-          const onWaitClose = () => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            terminate(new Error('Response sink closed'));
-            resolve();
-          };
-          const onWaitFinish = () => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            terminate(new Error('Response sink finished'));
-            resolve();
-          };
-          const onWaitError = (error: unknown) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            terminate(error);
-            reject(error instanceof Error ? error : new Error(String(error)));
-          };
-          const cleanup = () => {
-            response.off?.('drain', onDrain);
-            response.off?.('close', onWaitClose);
-            response.off?.('finish', onWaitFinish);
-            response.off?.('error', onWaitError);
-          };
-          response.on?.('drain', onDrain);
-          response.on?.('close', onWaitClose);
-          response.on?.('finish', onWaitFinish);
-          response.on?.('error', onWaitError);
-          // If no event support (mock without on/off), proceed anyway
-          if (response.on === undefined) {
-            resolve();
-          }
-        });
-        // close/finish terminated the sink — stop writing
-        if (sinkTerminated) {
-          return;
-        }
-      }
+      const canContinue = response.write(Buffer.from(result.value));
+      if (termination.stopped) break;
+      if (!canContinue && !(await waitForResponseDrain(response, termination))) break;
     }
   } finally {
-    response.off?.('close', onClose);
-    response.off?.('finish', onFinish);
-    response.off?.('error', onError);
-    if (sinkTerminated) {
-      await sourceCancellation;
+    try {
+      if (termination.stopped) await cancel(termination.reason);
+    } finally {
+      reader?.releaseLock();
     }
-    reader.releaseLock();
   }
 };
 
@@ -683,6 +723,66 @@ export const createNodeStyleHandler = (
 ): ((request: NodeStyleRequest, response: NodeStyleResponse) => void) => {
   return (request, response): void => {
     void (async () => {
+      const abortController = new AbortController();
+      let requestBodyEnded = false;
+      let responseFinished = false;
+      let state: 'active' | 'finished' | 'aborted' = 'active';
+      let terminationReason: unknown;
+      let wakeup: (() => void) | undefined;
+      const termination: ResponseTermination = {
+        get stopped() {
+          return state !== 'active';
+        },
+        get reason() {
+          return terminationReason;
+        },
+        registerWakeup(wake) {
+          if (state !== 'active') {
+            wake();
+            return () => undefined;
+          }
+          wakeup = wake;
+          return () => {
+            if (wakeup === wake) wakeup = undefined;
+          };
+        },
+      };
+      const stop = (
+        nextState: 'finished' | 'aborted',
+        error?: unknown,
+        destroyRequest = true,
+      ): void => {
+        if (state !== 'active') return;
+        state = nextState;
+        terminationReason = error;
+        if (nextState === 'aborted') abortController.abort(toError(error));
+        const wake = wakeup;
+        wakeup = undefined;
+        wake?.();
+        if (nextState === 'aborted' && destroyRequest && !requestBodyEnded) {
+          request.destroy?.(toError(error));
+        }
+      };
+      const onRequestError = (error: unknown): void => stop('aborted', error, false);
+      const onResponseError = (error: unknown): void => stop('aborted', error);
+      const onResponseFinish = (): void => {
+        responseFinished = true;
+        stop('finished');
+      };
+      const onResponseClose = (): void => {
+        if (responseFinished || response.finished === true) stop('finished');
+        else stop('aborted', new Error('Response sink closed before finish'));
+      };
+      const onRequestEnd = (): void => {
+        requestBodyEnded = true;
+      };
+
+      request.on('error', onRequestError);
+      request.on('end', onRequestEnd);
+      response.on?.('error', onResponseError);
+      response.on?.('finish', onResponseFinish);
+      response.on?.('close', onResponseClose);
+
       try {
         const bunRequest: VerserBunDispatchRequest = {
           method: request.method,
@@ -690,20 +790,98 @@ export const createNodeStyleHandler = (
           origin: `http://${domain}`,
           headers: request.headers,
           body: hasRequestBody(request.method) ? streamRequestBody(request) : undefined,
+          signal: abortController.signal,
         };
 
-        const webResponse = await dispatchVerserBunRequestInternal(handler, bunRequest);
-
-        response.statusCode = webResponse.status;
-        response.writeHead(webResponse.status, webResponse.statusText, webResponse.headerPairs);
-        await writeResponseBody(webResponse.body, response);
+        let readyResponse: ReadyResponse | undefined;
+        let handlerError: unknown;
+        let handlerRejected = false;
+        let notification!: () => void;
+        const delivered = new Promise<void>((resolve) => {
+          notification = resolve;
+        });
+        const unregisterDelivery = termination.registerWakeup(notification);
+        const pendingResponse = dispatchVerserBunRequestInternal(handler, bunRequest);
+        void pendingResponse
+          .then(
+            (webResponse) => {
+              let body: ReadableStream<Uint8Array> | null;
+              try {
+                body = webResponse.body;
+              } catch (error) {
+                handlerError = error;
+                handlerRejected = true;
+                notification();
+                return;
+              }
+              if (termination.stopped) {
+                void discardResponseBody(body, termination.reason).catch(() => undefined);
+                return;
+              }
+              readyResponse = { response: webResponse, body };
+              notification();
+            },
+            (error: unknown) => {
+              if (!termination.stopped) {
+                handlerError = error;
+                handlerRejected = true;
+              }
+              notification();
+            },
+          )
+          .catch(() => undefined);
+        await delivered;
+        unregisterDelivery();
+        if (termination.stopped) {
+          const abandoned = readyResponse;
+          readyResponse = undefined;
+          if (abandoned !== undefined) {
+            await discardResponseBody(abandoned.body, termination.reason);
+          }
+          return;
+        }
+        if (handlerRejected) throw handlerError;
+        const selected = readyResponse;
+        readyResponse = undefined;
+        if (selected === undefined || termination.stopped) {
+          if (selected !== undefined) await discardResponseBody(selected.body, termination.reason);
+          return;
+        }
+        try {
+          response.statusCode = selected.response.status;
+          if (termination.stopped) {
+            await discardResponseBody(selected.body, termination.reason);
+            return;
+          }
+          response.writeHead(
+            selected.response.status,
+            selected.response.statusText,
+            selected.response.headerPairs,
+          );
+          if (termination.stopped) {
+            await discardResponseBody(selected.body, termination.reason);
+            return;
+          }
+          await writeResponseBody(selected.body, response, termination);
+        } catch (error) {
+          await discardResponseBody(selected.body, error);
+          throw error;
+        }
       } catch (error: unknown) {
+        if (abortController.signal.aborted) return;
         if (hasErrorChannel(response)) {
           response.emit('error', toError(error));
           return;
         }
         response.writeHead(500, { 'content-type': 'text/plain' });
         response.end(`Bun handler failed: ${getErrorMessage(error)}`);
+      } finally {
+        if (state === 'active' && response.finished === true) stop('finished');
+        request.off?.('error', onRequestError);
+        request.off?.('end', onRequestEnd);
+        response.off?.('error', onResponseError);
+        response.off?.('finish', onResponseFinish);
+        response.off?.('close', onResponseClose);
       }
     })();
   };

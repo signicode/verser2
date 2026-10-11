@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const { Readable, Writable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const test = require('./support/guarded-test.cjs');
 
 const { createVerserHost } = require('../packages/verser2-host/dist/index.js');
@@ -9,6 +10,7 @@ const {
   createVerserNodeGuest,
 } = require('../packages/verser2-guest-node/dist/index.js');
 const { trusted } = require('./support/tls-fixtures.cjs');
+const nodeFetchPromise = import('node-fetch');
 
 function createHost(options = {}) {
   return createVerserHost({
@@ -104,6 +106,171 @@ function createGuest(options) {
       ...options.tls,
     },
   });
+}
+
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createControlledResponseBody({ destroyError } = {}) {
+  let readCount = 0;
+  let pipeCount = 0;
+  let destroyCount = 0;
+  let closeCount = 0;
+  const closed = createDeferred();
+  const body = new Readable({
+    read() {
+      readCount++;
+    },
+    destroy(error, callback) {
+      destroyCount++;
+      queueMicrotask(() => callback(error ?? destroyError ?? null));
+    },
+  });
+  const originalPipe = body.pipe;
+  body.pipe = function (...args) {
+    pipeCount++;
+    return originalPipe.apply(this, args);
+  };
+  body.once('close', () => {
+    closeCount++;
+    closed.resolve();
+  });
+  return {
+    body,
+    closed: closed.promise,
+    releaseChunk() {
+      body.push(Buffer.from('controlled-first-chunk'));
+    },
+    end() {
+      body.push(null);
+    },
+    get readCount() {
+      return readCount;
+    },
+    get pipeCount() {
+      return pipeCount;
+    },
+    get destroyCount() {
+      return destroyCount;
+    },
+    get closeCount() {
+      return closeCount;
+    },
+  };
+}
+
+function createDeferredAgentBroker() {
+  const pendingResponse = createDeferred();
+  const admitted = createDeferred();
+  const uploads = [];
+  let requestCount = 0;
+  let firstRequest;
+  const broker = createVerserBroker({
+    hostUrl: 'https://localhost:1',
+    brokerId: 'deferred-agent-race',
+  });
+  broker.getRoutes = () => [{ targetId: 'deferred-agent-target', domain: 'agent-race.local.test' }];
+  broker.request = (request) => {
+    const upload = createDeferred();
+    uploads.push(upload.promise);
+    void pipeline(
+      request.body,
+      new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      }),
+    ).then(upload.resolve, upload.reject);
+    requestCount++;
+    if (requestCount === 1) {
+      firstRequest = request;
+      admitted.resolve();
+      return pendingResponse.promise;
+    }
+    return Promise.resolve({
+      statusCode: 200,
+      headers: {},
+      body: Readable.from([Buffer.from('same-agent-followup')]),
+    });
+  };
+  return {
+    broker,
+    agent: broker.createAgent(),
+    admitted: admitted.promise,
+    uploads,
+    pendingResponse,
+    get firstRequest() {
+      return firstRequest;
+    },
+  };
+}
+
+function startDeferredAgentRequest(agent, signal, { onResponse } = {}) {
+  const callerError = createDeferred();
+  const socketClosed = createDeferred();
+  const requestClosed = createDeferred();
+  const request = http.request('http://agent-race.local.test/cancel', {
+    agent,
+    method: 'POST',
+    signal,
+  });
+  let errorCount = 0;
+  let responseCount = 0;
+  let socket;
+  let socketCloseCount = 0;
+  let requestCloseCount = 0;
+  request.once('socket', (assignedSocket) => {
+    socket = assignedSocket;
+    socket.once('close', () => {
+      socketCloseCount++;
+      socketClosed.resolve();
+    });
+  });
+  request.once('close', () => {
+    requestCloseCount++;
+    requestClosed.resolve();
+  });
+  request.once('response', (response) => {
+    responseCount++;
+    onResponse?.(response);
+  });
+  request.on('error', (error) => {
+    errorCount++;
+    callerError.resolve(error);
+  });
+  request.end('bounded-upload');
+  return {
+    request,
+    callerError: callerError.promise,
+    socketClosed: socketClosed.promise,
+    requestClosed: requestClosed.promise,
+    get socket() {
+      return socket;
+    },
+    get errorCount() {
+      return errorCount;
+    },
+    get responseCount() {
+      return responseCount;
+    },
+    get socketCloseCount() {
+      return socketCloseCount;
+    },
+    get requestCloseCount() {
+      return requestCloseCount;
+    },
+  };
+}
+
+function deferredAgentResponse(body) {
+  return { statusCode: 200, headers: {}, body };
 }
 
 // Warm up TLS/HTTP2 infrastructure so individual tests don't pay the one-time
@@ -661,6 +828,282 @@ test('Broker Agent cleans up when client aborts during response streaming', asyn
     await withTimeout(broker.close('test-complete'), 'broker-agent-abort-response-1 close');
     await withTimeout(guest.close('test-complete'), 'guest-agent-abort-response-1 close');
     await withTimeout(host.close('test-complete'), 'host-agent-abort-response-1 close');
+  }
+});
+
+test(
+  'node-fetch Agent abort resets remote request after upload while a control request survives',
+  {
+    memoryLeakBytes: 512 * 1024,
+  },
+  async () => {
+    const host = createHost({ port: 0 });
+    await host.start();
+    const hostUrl = `https://127.0.0.1:${host.address.port}`;
+    const broker = createBroker({ hostUrl, brokerId: 'broker-agent-node-fetch-cancel' });
+    const guest = createGuest({
+      hostUrl,
+      guestId: 'guest-agent-node-fetch-cancel',
+      minWaitingStreams: 2,
+    });
+    let agent;
+    let resolveEntered;
+    let resolveUploadEnded;
+    let resolveCleanup;
+    const entered = new Promise((resolve) => {
+      resolveEntered = resolve;
+    });
+    const uploadEnded = new Promise((resolve) => {
+      resolveUploadEnded = resolve;
+    });
+    const cleaned = new Promise((resolve) => {
+      resolveCleanup = resolve;
+    });
+    let nativeEnteredResolve;
+    let nativeUploadResolve;
+    let nativeCleanupResolve;
+    const nativeEntered = new Promise((resolve) => {
+      nativeEnteredResolve = resolve;
+    });
+    const nativeUploadEnded = new Promise((resolve) => {
+      nativeUploadResolve = resolve;
+    });
+    const nativeCleaned = new Promise((resolve) => {
+      nativeCleanupResolve = resolve;
+    });
+    let controlEnteredResolve;
+    let releaseControl = () => {};
+    let controlResponsePromise;
+    const controlEntered = new Promise((resolve) => {
+      controlEnteredResolve = resolve;
+    });
+    const controlGate = new Promise((resolve) => {
+      releaseControl = resolve;
+    });
+    guest.attach(async (request, response) => {
+      if (request.url === '/cancel' || request.url === '/native') {
+        const native = request.url === '/native';
+        const markEntered = native ? nativeEnteredResolve : resolveEntered;
+        const markUploaded = native ? nativeUploadResolve : resolveUploadEnded;
+        const markCleaned = native ? nativeCleanupResolve : resolveCleanup;
+        markEntered();
+        request.resume();
+        request.once('end', markUploaded);
+        request.once('error', markCleaned);
+        return;
+      }
+      controlEnteredResolve();
+      await controlGate;
+      response.end('control-ok');
+    }, 'agent-node-fetch-cancel.local.test');
+
+    try {
+      await withTimeout(broker.connect(), 'node-fetch cancel Broker connect');
+      await withTimeout(guest.connect(), 'node-fetch cancel Guest connect');
+      await withTimeout(broker.waitForRoute('agent-node-fetch-cancel.local.test'), 'cancel route');
+      agent = broker.createAgent();
+      const { default: nodeFetch } = await nodeFetchPromise;
+      const controller = new AbortController();
+      const cancelled = nodeFetch('http://agent-node-fetch-cancel.local.test/cancel', {
+        method: 'POST',
+        body: 'completed-upload',
+        agent,
+        signal: controller.signal,
+      });
+      const cancellation = assert.rejects(cancelled, (error) => error.name === 'AbortError');
+      await withTimeout(entered, 'remote request entry');
+      await withTimeout(uploadEnded, 'remote upload completion');
+      controlResponsePromise = nodeFetch('http://agent-node-fetch-cancel.local.test/control', {
+        agent,
+      });
+      await withTimeout(controlEntered, 'concurrent control request entry');
+      controller.abort();
+      await cancellation;
+      await withTimeout(cleaned, 'remote handler cleanup');
+      releaseControl();
+      assert.equal(await (await controlResponsePromise).text(), 'control-ok');
+
+      const nativeController = new AbortController();
+      const nativeRequest = http.request('http://agent-node-fetch-cancel.local.test/native', {
+        agent,
+        method: 'POST',
+        signal: nativeController.signal,
+      });
+      const nativeFailure = new Promise((resolve, reject) => {
+        nativeRequest.once('error', resolve);
+        nativeRequest.once('response', () =>
+          reject(new Error('native request unexpectedly responded')),
+        );
+      });
+      nativeRequest.end('native-upload');
+      await withTimeout(nativeEntered, 'native remote request entry');
+      await withTimeout(nativeUploadEnded, 'native remote upload completion');
+      nativeController.abort();
+      assert.equal((await withTimeout(nativeFailure, 'native client abort')).name, 'AbortError');
+      await withTimeout(nativeCleaned, 'native remote handler cleanup');
+    } finally {
+      releaseControl();
+      await controlResponsePromise?.catch(() => {});
+      agent?.destroy();
+      await withTimeout(broker.close('test-complete'), 'node-fetch cancel Broker close');
+      await withTimeout(guest.close('test-complete'), 'node-fetch cancel Guest close');
+      await withTimeout(host.close('test-complete'), 'node-fetch cancel Host close');
+    }
+  },
+);
+
+test('Broker Agent disposes response bodies when abort wins a deferred handoff', async () => {
+  for (const ordering of ['abort-first', 'fulfill-then-abort-same-turn']) {
+    const fixture = createDeferredAgentBroker();
+    const controller = new AbortController();
+    const reason = new Error(`agent-${ordering}`);
+    const caller = startDeferredAgentRequest(fixture.agent, controller.signal);
+    const body = createControlledResponseBody({
+      destroyError: new Error(`late Agent body cleanup error: ${ordering}`),
+    });
+    try {
+      await withTimeout(fixture.admitted, `${ordering} Broker admission`);
+      await withTimeout(fixture.uploads[0], `${ordering} bounded upload consumption`);
+      if (ordering === 'fulfill-then-abort-same-turn') {
+        fixture.pendingResponse.resolve(deferredAgentResponse(body.body));
+      }
+      controller.abort(reason);
+      const callerError = await withTimeout(caller.callerError, `${ordering} caller abort`);
+      await withTimeout(caller.socketClosed, `${ordering} socket close`);
+      await withTimeout(caller.requestClosed, `${ordering} request close`);
+      if (ordering === 'abort-first') {
+        fixture.pendingResponse.resolve(deferredAgentResponse(body.body));
+      }
+      await withTimeout(body.closed, `${ordering} late body disposal`);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.equal(fixture.firstRequest.signal.aborted, true);
+      assert.equal(callerError.name, 'AbortError');
+      assert.equal(callerError.cause, reason);
+      assert.equal(caller.errorCount, 1);
+      assert.equal(caller.responseCount, 0);
+      assert.equal(caller.socketCloseCount, 1);
+      assert.equal(caller.requestCloseCount, 1);
+      assert.equal(caller.socket.destroyed, true);
+      assert.equal(body.pipeCount, 0);
+      assert.equal(body.readCount, 0);
+      assert.equal(body.destroyCount, 1);
+      assert.equal(body.closeCount, 1);
+
+      const followup = await requestWithAgent('http://agent-race.local.test/followup', {
+        agent: fixture.agent,
+      });
+      assert.deepEqual(followup.body, Buffer.from('same-agent-followup'));
+    } finally {
+      if (!body.body.destroyed) body.body.destroy();
+      fixture.agent.destroy();
+    }
+  }
+});
+
+test('Broker Agent owns a late Broker rejection after the caller has already aborted', async () => {
+  const fixture = createDeferredAgentBroker();
+  const controller = new AbortController();
+  const reason = new Error('agent-abort-before-late-rejection');
+  const caller = startDeferredAgentRequest(fixture.agent, controller.signal);
+  try {
+    await withTimeout(fixture.admitted, 'late-rejection Broker admission');
+    await withTimeout(fixture.uploads[0], 'late-rejection bounded upload consumption');
+    controller.abort(reason);
+    const callerError = await withTimeout(caller.callerError, 'late-rejection caller abort');
+    await withTimeout(caller.socketClosed, 'late-rejection socket close');
+    await withTimeout(caller.requestClosed, 'late-rejection request close');
+
+    fixture.pendingResponse.reject(new Error('Broker rejected after cancellation'));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(fixture.firstRequest.signal.aborted, true);
+    assert.equal(callerError.name, 'AbortError');
+    assert.equal(callerError.cause, reason);
+    assert.equal(caller.errorCount, 1);
+    assert.equal(caller.socketCloseCount, 1);
+    assert.equal(caller.requestCloseCount, 1);
+    assert.equal(caller.responseCount, 0);
+    const followup = await requestWithAgent('http://agent-race.local.test/followup', {
+      agent: fixture.agent,
+    });
+    assert.deepEqual(followup.body, Buffer.from('same-agent-followup'));
+  } finally {
+    fixture.agent.destroy();
+  }
+});
+
+test('Broker Agent abort after first response data fails body consumption, not headers', async () => {
+  const fixture = createDeferredAgentBroker();
+  const controller = new AbortController();
+  const reason = new Error('agent-abort-after-first-response-chunk');
+  const headers = createDeferred();
+  const firstChunk = createDeferred();
+  const bodyFailure = createDeferred();
+  const body = createControlledResponseBody();
+  let responseCount = 0;
+  let responseDataCount = 0;
+  const chunkBytes = Buffer.byteLength('controlled-first-chunk');
+  let receivedBytes = 0;
+  let incomingResponse;
+  const caller = startDeferredAgentRequest(fixture.agent, controller.signal, {
+    onResponse(response) {
+      responseCount++;
+      incomingResponse = response;
+      headers.resolve(response.statusCode);
+      response.on('data', (chunk) => {
+        responseDataCount++;
+        receivedBytes += Buffer.byteLength(chunk);
+        response.pause();
+        firstChunk.resolve();
+      });
+      response.once('aborted', () => bodyFailure.resolve({ type: 'aborted' }));
+      response.once('error', (error) => bodyFailure.resolve({ type: 'error', error }));
+      response.once('end', () => bodyFailure.resolve({ type: 'end' }));
+    },
+  });
+  try {
+    await withTimeout(fixture.admitted, 'response-first Broker admission');
+    await withTimeout(fixture.uploads[0], 'response-first bounded upload consumption');
+    fixture.pendingResponse.resolve({
+      ...deferredAgentResponse(body.body),
+      // Declare remaining bytes so socket EOF cannot masquerade as message completion.
+      headers: { 'content-length': String(chunkBytes * 2) },
+    });
+    assert.equal(await withTimeout(headers.promise, 'Agent response headers'), 200);
+    body.releaseChunk();
+    await withTimeout(firstChunk.promise, 'Agent first response chunk');
+    assert.equal(receivedBytes, chunkBytes);
+    assert.equal(incomingResponse.complete, false);
+    assert.equal(body.body.readableEnded, false);
+    controller.abort(reason);
+
+    const callerError = await withTimeout(caller.callerError, 'response-first caller abort');
+    const bodyOutcome = await withTimeout(bodyFailure.promise, 'Agent response body failure');
+    assert.ok(
+      bodyOutcome.type === 'error' || bodyOutcome.type === 'aborted',
+      'response consumption must fail on abort, not finish with normal EOF',
+    );
+    assert.equal(incomingResponse.complete, false);
+    await withTimeout(caller.socketClosed, 'response-first socket close');
+    await withTimeout(caller.requestClosed, 'response-first request close');
+    await withTimeout(body.closed, 'response-first producer close');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(fixture.firstRequest.signal.aborted, true);
+    assert.equal(callerError.name, 'AbortError');
+    assert.equal(callerError.cause, reason);
+    assert.equal(caller.errorCount, 1);
+    assert.equal(caller.responseCount, 1);
+    assert.equal(caller.socketCloseCount, 1);
+    assert.equal(caller.requestCloseCount, 1);
+    assert.equal(responseCount, 1);
+    assert.equal(responseDataCount, 1);
+    assert.equal(body.destroyCount, 1);
+    assert.equal(body.closeCount, 1);
+  } finally {
+    if (!body.body.destroyed) body.body.destroy();
+    fixture.agent.destroy();
   }
 });
 

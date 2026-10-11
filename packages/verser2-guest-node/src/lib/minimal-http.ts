@@ -93,6 +93,12 @@ export class MinimalServerResponse extends EventEmitter {
    */
   public finished = false;
 
+  private destroyedState = false;
+
+  public get destroyed(): boolean {
+    return this.destroyedState;
+  }
+
   private readonly headers = new Map<string, string | string[]>();
 
   /** Exact response-header emission order, including interleaved duplicate names. */
@@ -112,6 +118,8 @@ export class MinimalServerResponse extends EventEmitter {
 
   private commitFailed = false;
 
+  private outputErrorEmitted = false;
+
   /**
    * @param requestId - The request ID for envelope metadata.
    * @param output - Optional lease stream for direct HTTP/2 response writing.
@@ -127,10 +135,14 @@ export class MinimalServerResponse extends EventEmitter {
     this.output = output;
     this.maxResponseBytes = maxResponseBytes;
     output?.on('drain', () => this.emit('drain'));
-    output?.on('error', (error) => this.emit('error', error));
+    output?.on('error', (error) => this.emitOutputError(error));
     // If the output stream closes (remote RST) before response ends, emit
     // an error so handlers can detect premature stream closure.
     output?.once('close', () => {
+      if (!this.destroyedState) {
+        this.destroyedState = true;
+        this.emit('close');
+      }
       if (
         !this.finished &&
         output.rstCode !== undefined &&
@@ -144,7 +156,7 @@ export class MinimalServerResponse extends EventEmitter {
             rstCode: String(output.rstCode),
           },
         );
-        this.emit('error', closeError);
+        this.emitOutputError(closeError);
       }
     });
   }
@@ -268,6 +280,7 @@ export class MinimalServerResponse extends EventEmitter {
    * @returns `true` if the data was accepted, `false` if backpressure applies.
    */
   public write(chunk: string | Buffer, encoding: BufferEncoding = 'utf8'): boolean {
+    if (this.destroyedState || this.finished) return false;
     if (!this.commitResponse()) return false;
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
     if (this.output === undefined) {
@@ -318,6 +331,7 @@ export class MinimalServerResponse extends EventEmitter {
    * @returns `this` for chaining.
    */
   public end(chunk?: string | Buffer, encoding: BufferEncoding = 'utf8'): this {
+    if (this.finished || this.destroyedState) return this;
     if (this.commitFailed) return this;
     if (chunk !== undefined) {
       this.write(chunk, encoding);
@@ -328,6 +342,10 @@ export class MinimalServerResponse extends EventEmitter {
     this.finished = true;
     this.output?.end();
     this.emit('finish');
+    if (this.output === undefined) {
+      this.destroyedState = true;
+      this.emit('close');
+    }
     return this;
   }
 
@@ -408,6 +426,12 @@ export class MinimalServerResponse extends EventEmitter {
         this.headerPairs.splice(index, 1);
       }
     }
+  }
+
+  private emitOutputError(error: Error): void {
+    if (this.outputErrorEmitted) return;
+    this.outputErrorEmitted = true;
+    this.emit('error', error);
   }
 }
 

@@ -38,7 +38,7 @@ export class VerserBrokerDispatcher extends Dispatcher {
 
     if (options.upgrade !== undefined && options.upgrade !== null && options.upgrade !== false) {
       process.nextTick(() => {
-        controller.fail(new Error('Verser Dispatcher does not support upgrade requests'));
+        controller.abort(new Error('Verser Dispatcher does not support upgrade requests'));
       });
       return true;
     }
@@ -54,6 +54,7 @@ export class VerserBrokerDispatcher extends Dispatcher {
     handler: Dispatcher.DispatchHandler,
     controller: VerserDispatchController,
   ): Promise<void> {
+    if (controller.aborted) return;
     const origin = new URL(String(options.origin ?? 'http://localhost'));
     const requestPath = appendQueryString(options.path, options.query);
     const requestUrl = new URL(requestPath, origin);
@@ -63,6 +64,7 @@ export class VerserBrokerDispatcher extends Dispatcher {
     }
 
     const body = toBrokerRequestBody(options.body ?? null, controller);
+    if (controller.aborted) return;
     if (body instanceof Readable) {
       controller.attachRequestBody(body);
     }
@@ -77,9 +79,10 @@ export class VerserBrokerDispatcher extends Dispatcher {
       path: `${requestUrl.pathname}${requestUrl.search}`,
       headers: requestHeaders,
       body,
+      signal: controller.signal,
     });
     if (controller.aborted) {
-      response.body.destroy(controller.reason ?? undefined);
+      response.body.destroy();
       return;
     }
 
@@ -87,9 +90,10 @@ export class VerserBrokerDispatcher extends Dispatcher {
     controller.rawHeaders = toRawHeaderList(response.headers, response.headerPairs);
     response.body.pause();
     if (!controller.invoke(() => handler.onResponseStarted?.())) {
-      response.body.destroy(controller.reason ?? undefined);
+      response.body.destroy();
       return;
     }
+    if (controller.aborted) return;
     if (
       !controller.invoke(() => {
         if (handler.onResponseStart !== undefined) {
@@ -112,9 +116,10 @@ export class VerserBrokerDispatcher extends Dispatcher {
         }
       })
     ) {
-      response.body.destroy(controller.reason ?? undefined);
+      response.body.destroy();
       return;
     }
+    if (controller.aborted) return;
     response.body.on('data', (chunk: Buffer | string) => {
       if (controller.aborted) {
         return;
@@ -137,16 +142,29 @@ export class VerserBrokerDispatcher extends Dispatcher {
     response.body.once('end', () => {
       if (!controller.aborted) {
         controller.rawTrailers = [];
-        controller.invoke(() => {
+        // Commit success before invoking a user terminal callback. The callback
+        // may reentrantly invoke the abort function; terminal completion wins.
+        controller.complete();
+        try {
           if (handler.onResponseEnd !== undefined) {
             handler.onResponseEnd(controller, {});
-            return;
+          } else {
+            handler.onComplete?.([]);
           }
-          handler.onComplete?.([]);
-        });
+        } catch (error) {
+          const callbackError = error instanceof Error ? error : new Error(String(error));
+          if (handler.onResponseError !== undefined) {
+            handler.onResponseError(controller, callbackError);
+          } else {
+            handler.onError?.(callbackError);
+          }
+        }
       }
       response.body.destroy();
     });
-    response.body.once('error', (error) => controller.fail(error));
+    response.body.once('error', (error) => {
+      if (!controller.aborted) controller.abort(error);
+    });
+    if (!controller.paused) controller.resume();
   }
 }

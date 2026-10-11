@@ -187,6 +187,49 @@ test('shared broker request normalization normalizes method, path, headers, and 
   );
 });
 
+test('shared broker request preserves signal identity and checks pre-abort before touching body', () => {
+  const controller = new AbortController();
+  const reason = new Error('cancel before normalization');
+  controller.abort(reason);
+  let iteratorRequested = false;
+  const body = {
+    [Symbol.iterator]() {
+      iteratorRequested = true;
+      return [][Symbol.iterator]();
+    },
+  };
+
+  assert.throws(
+    () =>
+      common.createCommonBrokerRequest({
+        targetId: 'guest-alpha',
+        method: 'POST',
+        path: '/',
+        body,
+        signal: controller.signal,
+      }),
+    (error) => error === reason,
+  );
+  assert.equal(iteratorRequested, false);
+
+  const signal = new AbortController().signal;
+  const normalized = common.createCommonBrokerRequest({
+    targetId: 'guest-alpha',
+    method: 'GET',
+    path: '/',
+    signal,
+  });
+  assert.equal(normalized.signal, signal);
+  assert.equal(Object.hasOwn(normalized, 'signal'), true);
+  assert.equal(
+    Object.hasOwn(
+      common.createCommonBrokerRequest({ targetId: 'guest-alpha', method: 'GET', path: '/' }),
+      'signal',
+    ),
+    false,
+  );
+});
+
 test('shared registration protocol helpers parse registration requests and responses', () => {
   assert.deepEqual(
     common.parseRegistrationRequest(

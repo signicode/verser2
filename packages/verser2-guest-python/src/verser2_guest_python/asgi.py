@@ -81,6 +81,7 @@ ASGIApp = Callable[
 Signature: ``async def app(scope, receive, send)``.
 """
 DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS = 0.25
 VWS_MAX_FRAME_BYTES = 1 * 1024 * 1024
 VWS_MAX_QUEUE_MESSAGES = 64
 """Default maximum response body buffer (10 MiB)."""

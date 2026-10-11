@@ -275,6 +275,96 @@ try {
 }
 ```
 
+## Request cancellation and handler cleanup
+
+Cancellation is scoped to one routed request. For Node and the shared
+runtime-neutral Broker request shape, pass an optional `AbortSignal` to
+`broker.request()`; the Node Agent and Broker `createFetch()` accept the
+standard request `signal` option. Fetch calls using `broker.createDispatcher()`
+also accept Fetch's `signal` option. Normalization and internal
+redirect/replay preserve the signal. A signal already aborted at call time
+rejects before a native request stream is allocated or a streamed request body
+is consumed.
+After dispatch, cancellation ends that request's native stream, including while
+waiting for headers or transferring a response body. It does not reset the
+Broker session or affect unrelated requests. Upload EOF is normal half-close,
+not cancellation. See [Making requests](./making-requests.md#cancelling-a-node-broker-request).
+
+The low-level Undici `dispatcher.dispatch(options, handler)` API does not take
+Fetch's `signal` option. Cancel through the controller passed to
+`handler.onRequestStart(controller, origin)` with `controller.abort(error)`, or
+through the abort callback supplied to legacy `handler.onConnect(abort)`.
+
+Cancellation does not replace application cleanup. In particular, handlers
+must stop any work that can continue producing data after their caller has
+gone away:
+
+```ts
+// Bun Guest
+guest.attach({
+  async fetch(request) {
+    const result = await produceResponse({ signal: request.signal });
+    return new Response(result);
+  },
+});
+```
+
+The Bun Guest passes its routed request signal through to the handler's Fetch
+`Request`. Transport loss aborts that signal; normal request upload EOF does
+not. The handler remains responsible for propagating it to cooperative work or
+otherwise stopping its producer.
+
+On the receiving Python Guest, ASGI `receive()` reports `http.disconnect` after
+transport loss, or after a successful response when the app receives again.
+`send()` after the response transport closes raises `OSError` or
+`ConnectionError`. For transport loss Verser2 uses a private 250 ms opportunity
+for the app to observe disconnect, then requests cancellation only if it has
+not observed it. If observed, the app task is awaited cooperatively; cleanup
+such as `finally` blocks is awaited. The grace period and fallback are
+implementation policy, not an ASGI timing guarantee or public option. An app
+that blocks or ignores cancellation cannot be forcibly cleaned up.
+
+Node Guest request/response objects are minimal HTTP shims, not full Node HTTP
+objects. The response emits `close` once and exposes `destroyed`; handler and
+output errors remain observable, and cleanup is idempotent. Do not infer full
+`IncomingMessage`/`ServerResponse` behavior, real socket lifecycle,
+`req.aborted`, or `writableFinished` from these limited facilities.
+
+Attach error and close cleanup before starting a response producer. A response
+`close` can follow normal completion as well as a premature transport close, so
+make cleanup safe to call once or more than once:
+
+```ts
+const producer = new PassThrough();
+let cleaned = false;
+const cleanup = () => {
+  if (cleaned) return;
+  cleaned = true;
+  producer.destroy();
+};
+
+res.once('error', cleanup);
+// `close` may follow normal finish or premature transport loss.
+res.once('close', cleanup);
+producer.once('error', (error) => {
+  cleanup();
+  console.error('Response producer failed:', error);
+});
+startProducer(producer); // Attach listeners before application work can emit.
+producer.pipe(res);
+```
+
+Here `PassThrough`, `res`, and `startProducer` come from the surrounding Node
+handler/application. `finished` and `destroyed` are local shim state; the shim
+does not provide a real socket or all Node request/response lifecycle
+properties.
+
+These receiving-Guest behaviors do not promise Python Broker cancellation or
+cancellation support in the Bun Broker's outgoing fetch wrapper. A cancelled
+Host lease-queue waiter is also not guaranteed immediate removal; normal
+allocation or timeout handling may remove it later. Blocking or
+non-cooperative application code remains outside transport control.
+
 ## Common error scenarios
 
 | Scenario                   | Behavior                                                     |

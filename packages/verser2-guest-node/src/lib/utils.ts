@@ -8,6 +8,7 @@ export function toBrokerRequestBody(
   body: unknown,
   controller: VerserDispatchController,
 ): readonly Buffer[] | Readable | undefined {
+  if (controller.aborted) return undefined;
   if (body === null) {
     return undefined;
   }
@@ -29,18 +30,30 @@ export function toBrokerRequestBody(
     return [buffer];
   }
   if (body instanceof Readable) {
-    body.on('data', (chunk: Buffer | string) => {
+    const onData = (chunk: Buffer | string): void => {
       controller.emitBodySent(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    };
+    const onEnd = (): void => controller.emitRequestSent();
+    body.on('data', onData);
+    body.once('end', onEnd);
+    controller.onTerminal(() => {
+      body.off('data', onData);
+      body.off('end', onEnd);
     });
-    body.once('end', () => controller.emitRequestSent());
     return body;
   }
   if (isIterableBody(body) || isAsyncIterableBody(body)) {
     const stream = Readable.from(body);
-    stream.on('data', (chunk: Buffer | string | Uint8Array) => {
+    const onData = (chunk: Buffer | string | Uint8Array): void => {
       controller.emitBodySent(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    };
+    const onEnd = (): void => controller.emitRequestSent();
+    stream.on('data', onData);
+    stream.once('end', onEnd);
+    controller.onTerminal(() => {
+      stream.off('data', onData);
+      stream.off('end', onEnd);
     });
-    stream.once('end', () => controller.emitRequestSent());
     return stream;
   }
   throw new Error('Verser Dispatcher does not support this request body type');

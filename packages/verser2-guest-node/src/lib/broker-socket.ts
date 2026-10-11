@@ -54,6 +54,10 @@ export class VerserBrokerSocket extends Duplex {
   /** The response body stream from the Broker request, tracked for cleanup on socket destroy. */
   private responseBody?: Readable;
 
+  private responseFinished = false;
+
+  private readonly abortController = new AbortController();
+
   public constructor(
     broker: BrokerRequestRouter,
     targetId: string,
@@ -115,6 +119,9 @@ export class VerserBrokerSocket extends Duplex {
   }
 
   public override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    if (!this.responseFinished && !this.abortController.signal.aborted) {
+      this.abortController.abort(error ?? new Error('Broker socket was destroyed'));
+    }
     if (error !== null) {
       this.bodyStream?.destroy(error);
       this.responseBody?.destroy(error);
@@ -167,6 +174,7 @@ export class VerserBrokerSocket extends Duplex {
           : (requestHeaders as http.OutgoingHttpHeaders | undefined),
       ),
       body: bodyStream,
+      signal: this.abortController.signal,
     })) as unknown as {
       statusCode: number;
       headers: Record<string, string>;
@@ -175,8 +183,14 @@ export class VerserBrokerSocket extends Duplex {
       body: {
         pipe(destination: NodeJS.WritableStream): void;
         on(event: 'error', handler: (error: Error) => void): void;
+        destroy(error?: Error): void;
       };
     };
+    if (this.destroyed || this.abortController.signal.aborted) {
+      response.body.on('error', () => {});
+      response.body.destroy();
+      return;
+    }
     this.responseBody = response.body as unknown as Readable;
     this.push(
       serializeHttpResponseHead({
@@ -186,8 +200,10 @@ export class VerserBrokerSocket extends Duplex {
         ...(response.headerPairs === undefined ? {} : { headerPairs: response.headerPairs }),
       }),
     );
+    response.body.on('error', (error) => {
+      if (!this.destroyed) this.destroy(error);
+    });
     response.body.pipe(this.createResponseSink());
-    response.body.on('error', (error) => this.destroy(error));
   }
 
   private createResponseSink(): Writable {
@@ -206,6 +222,7 @@ export class VerserBrokerSocket extends Duplex {
       final: (callback): void => {
         this.bodyStream?.end();
         this.push(null);
+        this.responseFinished = true;
         process.nextTick(() => this.destroy());
         callback();
       },

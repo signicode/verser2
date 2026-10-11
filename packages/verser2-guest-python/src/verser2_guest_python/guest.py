@@ -12,10 +12,12 @@ from urllib.parse import urlsplit
 import h2.connection
 import h2.config
 import h2.events
+import h2.exceptions
 
 from ._tls import create_client_ssl_context, load_pfx_client_identity, validate_h2_alpn
 from .asgi import (
     DEFAULT_MAX_RESPONSE_BYTES,
+    _DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS,
     VWS_MAX_FRAME_BYTES,
     ASGIApp,
     DispatchResponse,
@@ -35,6 +37,10 @@ from .protocol import (
     validate_remote_request_metadata,
     validate_final_response_status,
 )
+
+
+class _HTTP2StreamResetError(ConnectionError):
+    """Request-scoped failure for writes blocked by a reset stream."""
 
 
 class VerserGuest:
@@ -156,6 +162,7 @@ class VerserGuest:
         self._ws_active_stream_ids: set[int] = set()
         self._closed = False
         self._window_waiters: dict[int, list[asyncio.Future[None]]] = {}
+        self._http_lease_stream_ids: set[int] = set()
 
     def attach(self, app: ASGIApp, domain: str | None = None) -> "VerserGuest":
         """Attach an ASGI app to this Guest.
@@ -602,6 +609,7 @@ class VerserGuest:
                 ("x-verser-lease-id", lease_id),
             ],
             end_stream=False,
+            http_lease=True,
         )
         try:
             await self._wait_for_success_response(stream_id)
@@ -612,6 +620,7 @@ class VerserGuest:
                 return
         finally:
             self._events.pop(stream_id, None)
+            self._http_lease_stream_ids.discard(stream_id)
 
     async def _dispatch_leased_request_stream(self, stream_id: int) -> None:
         if self.app is None:
@@ -633,89 +642,257 @@ class VerserGuest:
         buffer = b""
         metadata: dict[str, Any] | None = None
         pending_metadata_flow_controlled_length = 0
+        next_credit_id = 0
+        owned_credits: dict[int, int] = {}
+        credit_ack_tasks: dict[int, asyncio.Task[None]] = {}
         request_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        request_wakeup = asyncio.Event()
+        transport_terminal = asyncio.Event()
+        disconnect_observed = asyncio.Event()
         app_task: asyncio.Task[None] | None = None
+        app_cancel_requested = False
+        event_task: asyncio.Task[Any] | None = None
+        fetched_event: Any | None = None
+        fetched_event_credit = 0
         response_started = False
-        response_ended = False
-        stream_reset = False
-        connection_error: Exception | None = None
+        response_completed = False
+        upload_eof = False
+        terminal_kind: str | None = None
+        terminal_error: Exception | None = None
+
+        def mark_transport_terminal(kind: str, error: Exception | None = None) -> None:
+            nonlocal terminal_kind, terminal_error
+            if terminal_kind is not None:
+                return
+            terminal_kind = kind
+            terminal_error = error
+            transport_terminal.set()
+            request_wakeup.set()
+
+        def request_disconnect() -> dict[str, Any]:
+            disconnect_observed.set()
+            return {"type": "http.disconnect"}
+
+        def mark_response_completed() -> None:
+            nonlocal response_completed
+            response_completed = True
+            request_wakeup.set()
+
+        def own_credit(amount: int) -> int | None:
+            nonlocal next_credit_id
+            if amount <= 0:
+                return None
+            next_credit_id += 1
+            owned_credits[next_credit_id] = amount
+            return next_credit_id
+
+        def observe_credit_ack(task: asyncio.Task[None]) -> None:
+            if not task.cancelled():
+                task.exception()
+
+        async def return_owned_credit(credit_id: int) -> bool:
+            task = credit_ack_tasks.get(credit_id)
+            if task is None:
+                amount = owned_credits.pop(credit_id, None)
+                if amount is None:
+                    return True
+                task = asyncio.create_task(
+                    self._acknowledge_received_data(stream_id, amount),
+                    name=f"verser-http-credit-{stream_id}-{credit_id}",
+                )
+                credit_ack_tasks[credit_id] = task
+                task.add_done_callback(observe_credit_ack)
+            caller_cancelled = False
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                caller_cancelled = True
+                raise
+            except h2.exceptions.StreamClosedError:
+                mark_transport_terminal("reset")
+                return False
+            except Exception as error:
+                mark_transport_terminal("connection", error)
+                return False
+            finally:
+                # A cancelled caller leaves the shared ack registered for the
+                # terminal/administrative owner to join. Never retry it.
+                if (
+                    not caller_cancelled
+                    and task.done()
+                    and credit_ack_tasks.get(credit_id) is task
+                ):
+                    credit_ack_tasks.pop(credit_id, None)
+            return True
+
+        async def settle_inflight_credit_acks() -> bool:
+            cancellation_interrupted_join = False
+            for credit_id, task in tuple(credit_ack_tasks.items()):
+                while not task.done():
+                    try:
+                        await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        cancellation_interrupted_join = True
+                    except Exception:
+                        break
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    pass
+                except h2.exceptions.StreamClosedError:
+                    mark_transport_terminal("reset")
+                except Exception as error:
+                    mark_transport_terminal("connection", error)
+                finally:
+                    if credit_ack_tasks.get(credit_id) is task:
+                        credit_ack_tasks.pop(credit_id, None)
+            return cancellation_interrupted_join
+
+        def mark_send_failure(error: Exception) -> None:
+            if isinstance(error, (_HTTP2StreamResetError, h2.exceptions.StreamClosedError)):
+                mark_transport_terminal("reset")
+            else:
+                mark_transport_terminal("connection", error)
 
         async def receive() -> dict[str, Any]:
-            event = await request_events.get()
-            flow_controlled_length = int(event.pop("_flow_controlled_length", 0) or 0)
-            if flow_controlled_length > 0:
-                await self._acknowledge_received_data(stream_id, flow_controlled_length)
-            return event
+            while True:
+                if terminal_kind is not None or response_completed:
+                    return request_disconnect()
+                try:
+                    event = request_events.get_nowait()
+                except asyncio.QueueEmpty:
+                    request_wakeup.clear()
+                    if (
+                        terminal_kind is not None
+                        or response_completed
+                        or not request_events.empty()
+                    ):
+                        continue
+                    await request_wakeup.wait()
+                    continue
+
+                flow_controlled_length = int(
+                    event.pop("_flow_controlled_length", 0) or 0
+                )
+                if flow_controlled_length > 0:
+                    credit_id = own_credit(flow_controlled_length)
+                    assert credit_id is not None
+                    await return_owned_credit(credit_id)
+                    # A reset may have arrived while flow-control credit was
+                    # being returned. Terminal state always outranks body data.
+                    if terminal_kind is not None or response_completed:
+                        return request_disconnect()
+                return event
 
         async def send(event: dict[str, Any]) -> None:
-            nonlocal response_started, response_ended
+            nonlocal response_started, response_completed
             event_type = event.get("type")
             if event_type == "http.response.start":
                 status_code = validate_final_response_status(event.get("status", 200))
                 header_pairs = sanitize_http2_response_header_pairs(
                     asgi_response_header_pairs(event.get("headers", []))
                 )
+                if terminal_kind is not None or response_completed:
+                    raise ConnectionError("HTTP response transport is closed")
+                if response_started:
+                    raise ValueError("HTTP response has already started")
                 response_started = True
-                await self._send_data(
-                    stream_id,
-                    encode_envelope(
-                        "response",
-                        {
-                            "requestId": str((metadata or {}).get("requestId") or ""),
-                            "statusCode": status_code,
-                            "headers": flatten_response_header_pairs(header_pairs),
-                            "headerPairs": header_pairs,
-                        },
-                    ),
-                    False,
-                )
+                try:
+                    await self._send_data(
+                        stream_id,
+                        encode_envelope(
+                            "response",
+                            {
+                                "requestId": str((metadata or {}).get("requestId") or ""),
+                                "statusCode": status_code,
+                                "headers": flatten_response_header_pairs(header_pairs),
+                                "headerPairs": header_pairs,
+                            },
+                        ),
+                        False,
+                    )
+                except h2.exceptions.StreamClosedError as error:
+                    mark_send_failure(error)
+                    raise ConnectionError("HTTP response stream is closed") from error
+                except ConnectionError as error:
+                    mark_send_failure(error)
+                    raise
                 return
             if event_type == "http.response.body":
+                body = event.get("body", b"")
+                if not isinstance(body, (bytes, bytearray, memoryview)):
+                    raise TypeError("http.response.body body must be bytes")
+                if terminal_kind is not None or response_completed:
+                    raise ConnectionError("HTTP response transport is closed")
                 more_body = bool(event.get("more_body", False))
-                response_ended = not more_body
-                await self._send_data(
-                    stream_id, bytes(event.get("body") or b""), not more_body
-                )
+                try:
+                    await self._send_data(stream_id, bytes(body), not more_body)
+                except h2.exceptions.StreamClosedError as error:
+                    mark_send_failure(error)
+                    raise ConnectionError("HTTP response stream is closed") from error
+                except ConnectionError as error:
+                    mark_send_failure(error)
+                    raise
+                if not more_body:
+                    response_completed = True
+                    request_wakeup.set()
+                return
+            raise ValueError(f"Unsupported ASGI event type: {event_type!r}")
 
         async def run_app() -> None:
-            nonlocal response_ended
             assert metadata is not None
             try:
                 await self.app(build_http_scope(metadata), receive, send)
             except asyncio.CancelledError:
-                # Stream reset cancelled dispatch — clean exit, no further sends.
-                return
+                raise
             except Exception as error:  # noqa: BLE001 - app exceptions become protocol errors.
-                if response_started:
-                    if not response_ended:
-                        await self._send_data(stream_id, b"", True)
+                if terminal_kind is not None or response_completed:
                     return
-                await self._send_data(
-                    stream_id,
-                    encode_envelope(
-                        "error",
-                        {
-                            "requestId": str(metadata.get("requestId") or ""),
-                            "code": "local-handler-failure",
-                            "message": str(error),
-                            "context": {
-                                "guestId": self.guest_id,
+                if response_started:
+                    if not response_completed:
+                        try:
+                            await self._send_data(stream_id, b"", True)
+                        except (ConnectionError, h2.exceptions.StreamClosedError) as error:
+                            mark_send_failure(error)
+                            return
+                        mark_response_completed()
+                    return
+                try:
+                    await self._send_data(
+                        stream_id,
+                        encode_envelope(
+                            "error",
+                            {
                                 "requestId": str(metadata.get("requestId") or ""),
-                                "path": str(metadata.get("path") or ""),
+                                "code": "local-handler-failure",
+                                "message": str(error),
+                                "context": {
+                                    "guestId": self.guest_id,
+                                    "requestId": str(metadata.get("requestId") or ""),
+                                    "path": str(metadata.get("path") or ""),
+                                },
                             },
-                        },
-                    ),
-                    True,
-                )
-                response_ended = True
+                        ),
+                        True,
+                    )
+                except (ConnectionError, h2.exceptions.StreamClosedError) as error:
+                    mark_send_failure(error)
+                    return
+                # Error envelopes are terminal responses, but do not turn a
+                # healthy request into a transport disconnect.
+                mark_response_completed()
                 return
-            if not response_ended:
+            if not response_completed and terminal_kind is None:
                 if not response_started:
                     await send(
                         {"type": "http.response.start", "status": 200, "headers": []}
                     )
-                await self._send_data(stream_id, b"", True)
-                response_ended = True
+                try:
+                    await self._send_data(stream_id, b"", True)
+                except (ConnectionError, h2.exceptions.StreamClosedError) as error:
+                    mark_send_failure(error)
+                    return
+                mark_response_completed()
 
         async def reject_invalid_request_metadata(error: RemoteRequestMetadataError) -> None:
             await self._send_data(
@@ -732,7 +909,7 @@ class VerserGuest:
                 True,
             )
 
-        def try_start_app() -> None:
+        async def try_start_app() -> None:
             nonlocal app_task, buffer, metadata, pending_metadata_flow_controlled_length
             if metadata is not None or len(buffer) < VERSER_ENVELOPE_PREFIX_BYTES:
                 return
@@ -754,107 +931,268 @@ class VerserGuest:
                         "_flow_controlled_length": pending_metadata_flow_controlled_length,
                     }
                 )
+                pending_metadata_flow_controlled_length = 0
             elif pending_metadata_flow_controlled_length:
-                task = asyncio.create_task(
-                    self._acknowledge_received_data(
-                        stream_id, pending_metadata_flow_controlled_length
-                    )
-                )
-                task.add_done_callback(
-                    lambda t: t.exception() if not t.cancelled() else None
-                )
-            pending_metadata_flow_controlled_length = 0
+                credit_id = own_credit(pending_metadata_flow_controlled_length)
+                pending_metadata_flow_controlled_length = 0
+                assert credit_id is not None
+                await return_owned_credit(credit_id)
+            else:
+                pending_metadata_flow_controlled_length = 0
             app_task = asyncio.create_task(run_app())
 
-        while True:
-            event = await self._events[stream_id].get()
-            # Connection-level errors from _fail_pending_streams — cancel
-            # the app task and propagate after cleanup.
-            if isinstance(event, Exception):
-                connection_error = event
-                request_events.put_nowait(
-                    {"type": "http.request", "body": b"", "more_body": False}
-                )
-                if app_task is not None and not app_task.done():
-                    app_task.cancel()
-                break
-            # Stream reset (e.g. remote cancellation) — unblock receive()
-            # and cancel the app dispatch cleanly rather than hanging.
-            if isinstance(event, h2.events.StreamReset):
-                stream_reset = True
-                request_events.put_nowait(
-                    {"type": "http.request", "body": b"", "more_body": False}
-                )
-                if app_task is not None and not app_task.done():
-                    app_task.cancel()
-                break
-            if isinstance(event, h2.events.DataReceived):
-                if metadata is None:
-                    pending_metadata_flow_controlled_length += int(
-                        event.flow_controlled_length
-                    )
-                    buffer += event.data
+        async def acknowledge_queued_data() -> None:
+            nonlocal pending_metadata_flow_controlled_length
+            while not request_events.empty():
+                queued = request_events.get_nowait()
+                credit = int(queued.pop("_flow_controlled_length", 0) or 0)
+                credit_id = own_credit(credit)
+                if credit_id is not None:
+                    if (
+                        self._conn is not None
+                        and terminal_kind in (None, "reset")
+                    ):
+                        await return_owned_credit(credit_id)
+                    else:
+                        owned_credits.pop(credit_id, None)
+            if pending_metadata_flow_controlled_length:
+                credit_id = own_credit(pending_metadata_flow_controlled_length)
+                pending_metadata_flow_controlled_length = 0
+                if credit_id is not None:
+                    if (
+                        self._conn is not None
+                        and terminal_kind in (None, "reset")
+                    ):
+                        await return_owned_credit(credit_id)
+                    else:
+                        owned_credits.pop(credit_id, None)
+            if await settle_inflight_credit_acks():
+                raise asyncio.CancelledError
+
+        async def collect_transport_credits() -> None:
+            nonlocal event_task, fetched_event, fetched_event_credit
+            if event_task is not None:
+                if event_task.done():
                     try:
-                        try_start_app()
-                    except RemoteRequestMetadataError as error:
-                        await reject_invalid_request_metadata(error)
-                        return
+                        native_event = event_task.result()
+                    except asyncio.CancelledError:
+                        native_event = None
                 else:
-                    # Guard: don't queue body data if app already finished
-                    if app_task is None or not app_task.done():
+                    event_task.cancel()
+                    result = await asyncio.gather(event_task, return_exceptions=True)
+                    native_event = result[0] if result else None
+                event_task = None
+                if isinstance(native_event, h2.events.DataReceived):
+                    own_credit(int(native_event.flow_controlled_length))
+
+            native_events = self._events.get(stream_id)
+            if native_events is not None:
+                while not native_events.empty():
+                    native_event = native_events.get_nowait()
+                    if isinstance(native_event, h2.events.DataReceived):
+                        own_credit(int(native_event.flow_controlled_length))
+
+            if fetched_event_credit:
+                own_credit(fetched_event_credit)
+                fetched_event_credit = 0
+            fetched_event = None
+            await acknowledge_queued_data()
+
+            if terminal_kind == "reset" and self._conn is not None:
+                for credit_id in tuple(owned_credits):
+                    await return_owned_credit(credit_id)
+                    if terminal_kind == "connection":
+                        break
+            else:
+                owned_credits.clear()
+            if await settle_inflight_credit_acks():
+                raise asyncio.CancelledError
+
+        async def join_app_shielded(task: asyncio.Task[None]) -> bool:
+            join = asyncio.gather(task, return_exceptions=True)
+            cancellation_interrupted_join = False
+            while not join.done():
+                try:
+                    await asyncio.shield(join)
+                except asyncio.CancelledError:
+                    # Administrative cancellation must not interrupt app finally.
+                    cancellation_interrupted_join = True
+            await join
+            return cancellation_interrupted_join
+
+        async def await_app_cleanup(task: asyncio.Task[None]) -> None:
+            if await join_app_shielded(task):
+                raise asyncio.CancelledError
+
+        async def cancel_and_join_app(task: asyncio.Task[None]) -> None:
+            nonlocal app_cancel_requested
+            if not task.done() and not app_cancel_requested:
+                app_cancel_requested = True
+                task.cancel()
+            await await_app_cleanup(task)
+
+        terminal_wait_task = asyncio.create_task(transport_terminal.wait())
+        try:
+            while True:
+                if terminal_kind is not None:
+                    break
+                if upload_eof and app_task is None:
+                    raise RuntimeError("Lease stream ended before request metadata arrived")
+                if (
+                    app_task is not None
+                    and app_task.done()
+                    and (event_task is None or not event_task.done())
+                ):
+                    await app_task
+                    await acknowledge_queued_data()
+                    if terminal_kind is not None or upload_eof:
+                        break
+
+                if event_task is None:
+                    event_task = asyncio.create_task(self._events[stream_id].get())
+                wait_set: set[asyncio.Task[Any]] = {event_task, terminal_wait_task}
+                if app_task is not None and not app_task.done():
+                    wait_set.add(app_task)
+                done, _pending = await asyncio.wait(
+                    wait_set, return_when=asyncio.FIRST_COMPLETED
+                )
+
+                if terminal_wait_task in done:
+                    continue
+
+                if event_task in done:
+                    fetched_event = event_task.result()
+                    event_task = None
+                    if isinstance(fetched_event, h2.events.DataReceived):
+                        fetched_event_credit = int(
+                            fetched_event.flow_controlled_length
+                        )
+
+                app_finished = app_task is not None and app_task in done
+                if app_finished:
+                    await app_task
+                    # Release already queued body credit immediately when the
+                    # app exits, rather than waiting for upload EOF.
+                    await acknowledge_queued_data()
+
+                if terminal_kind is not None:
+                    continue
+                if fetched_event is None:
+                    if upload_eof and app_task is not None and app_task.done():
+                        break
+                    continue
+                event = fetched_event
+                fetched_event = None
+
+                if isinstance(event, Exception):
+                    mark_transport_terminal("connection", event)
+                    continue
+                if isinstance(event, h2.events.StreamReset):
+                    mark_transport_terminal("reset")
+                    continue
+                if isinstance(event, h2.events.DataReceived):
+                    if metadata is None:
+                        pending_metadata_flow_controlled_length += int(
+                            fetched_event_credit
+                        )
+                        fetched_event_credit = 0
+                        buffer += event.data
+                        try:
+                            await try_start_app()
+                        except RemoteRequestMetadataError as error:
+                            await reject_invalid_request_metadata(error)
+                            return
+                    elif app_task is None or not app_task.done():
                         request_events.put_nowait(
                             {
                                 "type": "http.request",
                                 "body": event.data,
                                 "more_body": True,
-                                "_flow_controlled_length": event.flow_controlled_length,
+                                "_flow_controlled_length": fetched_event_credit,
                             }
                         )
+                        fetched_event_credit = 0
+                        request_wakeup.set()
                     else:
-                        # App already finished — discard body but ack flow
-                        # control credit so the sender does not stall.
-                        # Await inline to avoid unobserved fire-and-forget tasks.
-                        await self._acknowledge_received_data(
-                            stream_id, int(event.flow_controlled_length)
+                        credit_id = own_credit(fetched_event_credit)
+                        fetched_event_credit = 0
+                        try:
+                            if credit_id is not None:
+                                await return_owned_credit(credit_id)
+                        except Exception as error:
+                            mark_transport_terminal("connection", error)
+                elif isinstance(event, h2.events.StreamEnded):
+                    if upload_eof:
+                        continue
+                    try:
+                        await try_start_app()
+                    except RemoteRequestMetadataError as error:
+                        await reject_invalid_request_metadata(error)
+                        return
+                    if app_task is None:
+                        raise RuntimeError(
+                            "Lease stream ended before request metadata arrived"
                         )
-            if isinstance(event, h2.events.StreamEnded):
-                try:
-                    try_start_app()
-                except RemoteRequestMetadataError as error:
-                    await reject_invalid_request_metadata(error)
-                    return
-                # Guard: don't queue final event if app already done/cancelled
-                if app_task is None or not app_task.done():
-                    request_events.put_nowait(
-                        {"type": "http.request", "body": b"", "more_body": False}
-                    )
-                break
+                    upload_eof = True
+                    if not app_task.done():
+                        request_events.put_nowait(
+                            {"type": "http.request", "body": b"", "more_body": False}
+                        )
+                        request_wakeup.set()
 
-        if connection_error is not None:
-            # Connection/read-loop failure — cancel and clean up app task,
-            # then propagate the error so the lease stream is torn down.
+            if terminal_kind is not None:
+                request_wakeup.set()
+                await collect_transport_credits()
+
+                if app_task is not None and not app_task.done():
+                    observation = asyncio.create_task(disconnect_observed.wait())
+                    try:
+                        done, _pending = await asyncio.wait(
+                            {app_task, observation},
+                            timeout=_DEFAULT_HTTP_DISCONNECT_GRACE_SECONDS,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        # A receive that observed disconnect wins even if the
+                        # grace timer expires in the same loop turn.
+                        if app_task.done():
+                            await await_app_cleanup(app_task)
+                        elif disconnect_observed.is_set() or observation in done:
+                            await await_app_cleanup(app_task)
+                        else:
+                            await cancel_and_join_app(app_task)
+                    finally:
+                        if not observation.done():
+                            observation.cancel()
+                        await asyncio.gather(observation, return_exceptions=True)
+                elif app_task is not None:
+                    await await_app_cleanup(app_task)
+
+                if terminal_kind == "connection" and terminal_error is not None:
+                    raise terminal_error
+                return
+
             if app_task is not None:
-                try:
-                    await app_task
-                except asyncio.CancelledError:
-                    pass
-            raise connection_error
-
-        if app_task is None:
-            if stream_reset:
-                return  # Stream reset before app started — clean exit
-            raise RuntimeError("Lease stream ended before request metadata arrived")
-
-        try:
-            await app_task
+                await app_task
         except asyncio.CancelledError:
-            # App was cancelled due to stream reset — clean exit.
-            return
-
-        # Stream was reset but app finished before the cancellation took effect
-        # (or app_task was already done when StreamReset arrived).
-        if stream_reset:
-            return
+            mark_transport_terminal("shutdown", ConnectionError("Guest dispatch stopped"))
+            request_wakeup.set()
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+            if app_task is not None and not app_task.done():
+                await cancel_and_join_app(app_task)
+            if await settle_inflight_credit_acks():
+                raise asyncio.CancelledError
+            raise
+        finally:
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+            if event_task is not None:
+                await asyncio.gather(event_task, return_exceptions=True)
+            if not terminal_wait_task.done():
+                terminal_wait_task.cancel()
+            await asyncio.gather(terminal_wait_task, return_exceptions=True)
+            if await settle_inflight_credit_acks():
+                raise asyncio.CancelledError
 
     async def _dispatch_leased_websocket_stream(
         self, stream_id: int, initial: bytes
@@ -1079,14 +1417,23 @@ class VerserGuest:
         headers: list[tuple[str, str]],
         end_stream: bool,
         create_queue: bool = True,
+        *,
+        http_lease: bool = False,
     ) -> int:
         conn = self._require_conn()
         async with self._io_lock:
             stream_id = conn.get_next_available_stream_id()
             if create_queue:
                 self._events[stream_id] = asyncio.Queue()
-            conn.send_headers(stream_id, headers, end_stream=end_stream)
-            await self._flush_unlocked()
+            if http_lease:
+                self._http_lease_stream_ids.add(stream_id)
+            try:
+                conn.send_headers(stream_id, headers, end_stream=end_stream)
+                await self._flush_unlocked()
+            except BaseException:
+                if http_lease:
+                    self._http_lease_stream_ids.discard(stream_id)
+                raise
             return stream_id
 
     async def _send_data(self, stream_id: int, data: bytes, end_stream: bool) -> None:
@@ -1136,13 +1483,18 @@ class VerserGuest:
                 waiter.set_result(None)
 
     def _fail_window_waiters(self, error: Exception) -> None:
-        waiters = [
-            waiter for group in self._window_waiters.values() for waiter in group
-        ]
+        waiters: list[tuple[asyncio.Future[None], Exception]] = []
+        for stream_id, group in self._window_waiters.items():
+            stream_error = (
+                ConnectionError(str(error))
+                if stream_id in self._http_lease_stream_ids
+                else error
+            )
+            waiters.extend((waiter, stream_error) for waiter in group)
         self._window_waiters.clear()
-        for waiter in waiters:
+        for waiter, stream_error in waiters:
             if not waiter.done():
-                waiter.set_exception(error)
+                waiter.set_exception(stream_error)
 
     def _fail_window_waiters_for_stream(self, stream_id: int, error: Exception) -> None:
         for waiter in self._window_waiters.pop(stream_id, []):
@@ -1197,11 +1549,23 @@ class VerserGuest:
                         if isinstance(event, h2.events.WindowUpdated):
                             self._notify_window_waiters(getattr(event, "stream_id", 0))
                         if isinstance(event, h2.events.StreamReset):
-                            self._fail_window_waiters_for_stream(
-                                getattr(event, "stream_id", 0),
-                                RuntimeError("VWS stream reset while sending"),
+                            stream_id = getattr(event, "stream_id", 0)
+                            reset_error: Exception = RuntimeError(
+                                "VWS stream reset while sending"
                             )
-                        elif isinstance(event, h2.events.StreamEnded):
+                            if stream_id in self._http_lease_stream_ids:
+                                reset_error = _HTTP2StreamResetError(
+                                    "HTTP/2 stream reset while sending"
+                                )
+                            self._fail_window_waiters_for_stream(
+                                stream_id,
+                                reset_error,
+                            )
+                        elif (
+                            isinstance(event, h2.events.StreamEnded)
+                            and getattr(event, "stream_id", 0)
+                            not in self._http_lease_stream_ids
+                        ):
                             self._fail_window_waiters_for_stream(
                                 getattr(event, "stream_id", 0),
                                 RuntimeError("VWS stream ended while sending"),
